@@ -1,0 +1,61 @@
+# FORGE Design Agent — Stack Preferences
+# This file is the primary input for the Design Agent. It declares the technology
+# choices this team has made so the Design Agent can generate architecture decisions,
+# component designs, and ADO work items that are aligned with the actual stack.
+#
+# IMPORTANT — CORE-LAYER MANDATES:
+#   - frontend.language: TypeScript is mandated at the core layer and CANNOT be changed.
+#     All frontend code generated or scaffolded by FORGE will use TypeScript.
+#
+# TEAM-LAYER PLACEHOLDERS:
+#   Fields marked "(team choice)" are intentionally left as placeholders.
+#   The Orchestration Manager must fill these in before first use.
+#   Once set, they are treated as fixed constraints by all FORGE agents.
+
+frontend:
+  # UI framework — mandated at the core layer: React with the Next.js app framework
+  framework: next.js
+
+  # Programming language — MANDATED, not optional. All frontend code must be TypeScript.
+  language: typescript
+
+  # CSS strategy used across the project (team choice — e.g. tailwind, css-modules, styled-components)
+  css_approach: your-css-approach
+
+  # Shared UI component library (team choice — e.g. shadcn/ui, mui, chakra-ui, radix-ui)
+  component_library: your-component-library
+
+  # Client-side state management solution (team choice — e.g. zustand, redux-toolkit, jotai, context-api)
+  state_management: your-state-management
+
+backend:
+  # Server-side framework — mandated at the core layer: .NET
+  framework: dotnet
+
+  # Programming language — mandated at the core layer: C#
+  language: csharp
+
+  # Database ORM / data-access library (team choice — e.g. entity-framework-core, dapper)
+  orm: your-orm
+
+  # API style — defaults to REST with a required OpenAPI specification.
+  # Teams may adopt GraphQL or gRPC, but an API contract file (OpenAPI or
+  # equivalent) is mandatory regardless — the Design Agent requires it.
+  api_style: rest-openapi
+
+infrastructure:
+  # Container runtime — mandated at the core layer: Docker
+  containerization: docker
+
+  # Cloud hosting platform — mandated at the core layer: Azure Container Apps
+  hosting: azure-container-apps
+
+  # CI/CD platform — mandated at the core layer: GitHub Actions
+  ci_cd: github-actions
+
+observability:
+  # Structured logging library or service (team choice — e.g. application-insights, serilog, opentelemetry)
+  logging: your-logging-solution
+
+  # Infrastructure and application monitoring platform (team choice — e.g. azure-monitor, datadog, grafana)
+  monitoring: your-monitoring-platform
