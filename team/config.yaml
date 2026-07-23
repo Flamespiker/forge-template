@@ -1,0 +1,55 @@
+# FORGE Team-Layer Configuration
+# This file defines team-specific settings for the FORGE automation harness.
+# Replace all placeholder values with your project's actual configuration.
+
+# The base URL of your Azure DevOps organization
+ado_org: https://dev.azure.com/your-org
+
+# The name of the ADO project that contains your boards and pipelines
+ado_project: your-project-name
+
+# The name of the application monorepo repository in ADO
+monorepo_name: your-monorepo-name
+
+# The ADO area path used to scope work items to the correct team/product area
+area_path: your-project-name\your-area-path
+
+# Default tags applied to every ADO work item created by FORGE.
+# "forge-managed" must remain as a fixed entry for traceability and filtering.
+tags:
+  - forge-managed
+
+# Azure Container Apps environment configuration for each deployment stage.
+container_apps:
+
+  staging:
+    # The name of the Azure Container Apps environment for staging
+    environment: your-staging-environment-name
+    # Maximum number of replicas; limits cost during low-traffic periods
+    max_replicas: 2
+    # Minimum replicas set to 0 to allow scale-to-zero when idle
+    min_replicas: 0
+    # vCPU allocated per replica
+    cpu: 0.25
+    # Memory allocated per replica
+    memory: 0.5Gi
+
+  production:
+    # The name of the Azure Container Apps environment for production
+    environment: your-production-environment-name
+    # Maximum number of replicas to handle peak load
+    max_replicas: 5
+    # Minimum replicas kept warm to avoid cold-start latency in production
+    min_replicas: 1
+    # vCPU allocated per replica
+    cpu: 0.5
+    # Memory allocated per replica
+    memory: 1.0Gi
+
+# How FORGE receives intake documents from stakeholders.
+# "issue-attachment" — document is attached to a GitHub Issue
+# "repo-path"        — document is committed to a known path in the repo
+intake_method: issue-attachment
+
+# The Slack channel or email address where FORGE pipeline alerts are sent
+notification_channel: your-channel-or-email
