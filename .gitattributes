@@ -1,0 +1,24 @@
+# Enforce Unix line endings (LF) for all text files across all platforms.
+# This prevents Windows (CRLF) and macOS (CR) line ending conflicts in diffs,
+# commits, and editor output. All contributors will check out and commit LF
+# regardless of their local git core.autocrlf setting.
+
+# Default: normalize all text files to LF
+* text=auto eol=lf
+
+# Explicitly force LF for source and config file types
+*.yaml    text eol=lf
+*.yml     text eol=lf
+*.json    text eol=lf
+*.py      text eol=lf
+*.ts      text eol=lf
+*.tsx     text eol=lf
+*.cs      text eol=lf
+*.md      text eol=lf
+
+# Binary files — do not apply line ending conversion or diff normalization
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.ico     binary
+*.pdf     binary
