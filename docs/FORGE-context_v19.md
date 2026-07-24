@@ -2,7 +2,7 @@
 
 **Project:** FORGE — Full-SDLC Orchestration with Review Gates for Engineers  
 **Owner:** Mike Faulkner (mfaulkner@legalaid.ab.ca) — Legal Aid Alberta  
-**Last Updated:** 2026-07-23 (Document 1 — FORGE Product Specification — corrected for ADR-0010 — chat 18)  
+**Last Updated:** 2026-07-23 (Phase 1 build complete — chat 19)  
 **Purpose:** Living reference document. Read this at the start of every new chat to restore full project context without re-explanation.
 
 ---
@@ -276,7 +276,7 @@ Consequences:
 |---|----------|--------|-------------------------------|
 | 0 | FORGE Introduction | ✅ Complete | No |
 | 1 | FORGE Product Specification | ✅ Complete — **updated (chat 18, `01-forge-product-specification_v2.md`)** | Yes — Section 3.3 Implementation Coordinator correction (originally mis-scoped as "No" — see chat 18) |
-| 2 | FORGE Architecture Document | ✅ Complete — **needs update** | Yes — Sections 2.2, 3, 4.5; ADR-0002 clarification note |
+| 2 | FORGE Architecture Document | ✅ Complete — **updated (chat 12, `02-forge-architecture-document-v2.md`)** | Done |
 | 3 | Tool & Licensing Inventory | ✅ Complete — **updated (chat 14, `03_Tooling_v2.md`)** | Done |
 | 4 | FORGE Governance Model | ✅ Complete — **needs update** | Yes — ADR-0010 added to seed ADR list |
 | 5 | AI Foundations Guide | ✅ Complete — **updated (chat 15, `05_AI_Foundation_v2.md`)** | Done |
@@ -284,7 +284,7 @@ Consequences:
 | 7 | Customization Reference | ✅ Complete — **updated (chat 16, `07_Customization_Ref_v2.md`)** | Done |
 | 8 | Excel Intake Template | ✅ Complete | No |
 | 9 | FORGE README | ✅ Complete — **updated (chat 17, `09-forge-readme_v2.md`)** | Done |
-| — | FORGE Build Plan | ✅ Complete — **needs update** | Yes — Phase 3 steps 3.4a, 3.5–3.7; Phase 4 step 4.4 |
+| — | FORGE Build Plan | ✅ Complete — **updated (chat 13, `FORGE_Build_Plan_v2.md`)** | Done |
 
 **Update priority order for new chats:**
 1. ~~Document 2 (Architecture) — highest priority, other docs reference it~~ — done, chat 12
@@ -295,7 +295,7 @@ Consequences:
 6. ~~Document 6 (Orchestration Manager Guide) — failure handling~~ — done, chat 16
 7. ~~Document 7 (Customization Reference) — Agent Configuration + Pipeline & Orchestration sections~~ — done, chat 16 (turned out to be more than "minor" — see session note)
 8. ~~Document 9 (README) — minor update~~ — done, chat 17
-9. **Document 4 (Governance) — ADR-0010 seed ADR list — still outstanding; now the only document remaining from the original priority list, deferred three times in favour of other documents**
+9. **Document 4 (Governance) — ADR-0010 seed ADR list — still outstanding; now the only document remaining from the original priority list, deferred four times in favour of other documents**
 
 ---
 
@@ -400,10 +400,18 @@ Before Phase 3 (Agent Implementation), every developer working on the agent laye
   - **Changes applied:** Pipeline diagram Implementation-stage line rewritten from "backend + frontend + tests run in parallel" to "Implementation Coordinator runs Backend, Frontend, Test Writer subagents in parallel." Prerequisites section's Anthropic API line updated to note Managed Agents beta access (`managed-agents-2026-04-01` header) and the Opus-for-coordinator/Sonnet-elsewhere tier split (previously just said "Sonnet tier recommended"). Cost reference table gained a dedicated Managed Agents runtime row (~$0.08–0.32 USD, session-hour billing) and relabeled the Anthropic API row as token costs specifically. Repository layout's `core/agents/` line updated to note it includes the coordinator + subagent definitions. No other sections changed — Approving-a-gate table and reference documentation links were checked and found still accurate.
   - File is in `/mnt/user-data/outputs/` awaiting upload to the project — the user will upload it and remove the old `09-forge-readme.md`.
   - **Document 4 (Governance) is now the only document remaining from the original ADR-0010 update list** — outstanding since chat 12, deferred in favour of other documents three times.
-- **2026-07-23 (chat 18 — this chat):** User asked whether Documents 0 and 1 needed ADR-0010 updates. Document 0 (Introduction) confirmed accurate as-is — its Implementation-stage line ("implements the backend, frontend, and tests in parallel") stays true at its level of abstraction and doesn't claim the old three-independent-jobs model. **Document 1 (Product Specification) was found to need a correction**, despite being marked "No" in the document list — Section 3.3 omitted the Implementation Coordinator entirely and incorrectly attributed the feature-branch commit and draft-PR-open action to the three subagents rather than the Coordinator. Produced `01-forge-product-specification_v2.md`, intended to replace `01-forge-product-specification.md` in the project.
+- **2026-07-23 (chat 18):** User asked whether Documents 0 and 1 needed ADR-0010 updates. Document 0 (Introduction) confirmed accurate as-is — its Implementation-stage line ("implements the backend, frontend, and tests in parallel") stays true at its level of abstraction and doesn't claim the old three-independent-jobs model. **Document 1 (Product Specification) was found to need a correction**, despite being marked "No" in the document list — Section 3.3 omitted the Implementation Coordinator entirely and incorrectly attributed the feature-branch commit and draft-PR-open action to the three subagents rather than the Coordinator. Produced `01-forge-product-specification_v2.md`, intended to replace `01-forge-product-specification.md` in the project.
   - **Change applied:** Section 3.3 rewritten — the Implementation Coordinator now explicitly orchestrates Backend/Frontend/Test Writer in parallel on a shared sandbox, synthesizes their output, and is the one that commits the implementation and opens the draft PR. No other sections changed.
   - File is in `/mnt/user-data/outputs/` awaiting upload to the project — the user will upload it and remove the old `01-forge-product-specification.md`.
   - **Document 4 (Governance) remains the only document from the original ADR-0010 priority list still outstanding** — now deferred four times in favour of other work.
+- **2026-07-23 (chat 19):** Phase 1 build complete. `forge-template` GitHub repository created (template flag enabled, public). All 10 Phase 1 steps completed and pushed.
+  - **Steps completed:** 1.1 repo created on GitHub; 1.2 full folder structure with `.gitkeep` files; 1.3 `team/config.yaml` with Container Apps values from architecture decisions; 1.4 `team/stack-preferences.yaml` with core-layer mandates vs team-layer placeholders clearly distinguished; 1.5 GitHub issue form template (`forge-request.yml`) with all pipeline stage checkboxes; 1.6 `.gitignore` (Python + Node + .NET + FORGE-specific) and `.gitattributes` (LF line endings enforced); 1.7 README.md populated from Document 9; 1.8 10 seed ADR stubs in `core/decisions/`; 1.9 7 GitHub Actions workflow stubs in `.github/workflows/`; 1.10 repo verified clean on GitHub.
+  - **Additional:** `/docs` folder added to the repo containing all FORGE documents (all v2 files). Duplicate of Document 9 removed from `/docs` after being promoted to `README.md`.
+  - **Two-machine workflow established:** Code stays in local folders on each machine (not OneDrive). Git push/pull via GitHub is the sync mechanism between machines.
+  - **Build session structure agreed:** Roughly one phase per chat thread. Start a new chat at phase boundaries or when context feels stale. Paste the phase and last completed step at the start of each new build chat.
+  - **Learning approach:** Just-in-time — concepts introduced immediately before the phase that needs them. Claude Code CLI handles file writing; this chat handles strategy, explanation, and review.
+  - **Document 4 (Governance) — ADR-0010** is the only outstanding document update. Handle in a dedicated doc-update chat before or during Phase 2 — not blocking Phase 2 infrastructure work but should be done before Phase 3.
+  - Next: Phase 2 — Infrastructure Setup. Start a fresh chat.
 
 ---
 
