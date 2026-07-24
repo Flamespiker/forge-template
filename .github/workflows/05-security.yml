@@ -1,0 +1,15 @@
+# Stub workflow — trigger and steps will be replaced when the Stage 5 agent is built.
+
+name: FORGE Stage 5 — Security
+
+on:
+  workflow_dispatch:  # manual trigger for now — real triggers added later
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard clause
+        run: |
+          echo "Workflow stub only — agent logic not yet implemented"
+          exit 0
