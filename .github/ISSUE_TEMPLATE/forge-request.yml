@@ -1,0 +1,61 @@
+# FORGE Pipeline Request — Issue Form Template
+# CORE-LAYER LOCKED: This file is part of the FORGE core layer and must not be
+# modified by Orchestration Managers or team-layer configuration. Changes here
+# affect pipeline tracking across all FORGE-managed projects.
+
+name: FORGE Pipeline Request
+description: Submit a new FORGE pipeline request
+title: "[FORGE] "
+labels:
+  - forge-managed
+
+body:
+  - type: input
+    id: request_id
+    attributes:
+      label: Request ID
+      placeholder: REQ-YYYY-##
+    validations:
+      required: true
+
+  - type: dropdown
+    id: request_type
+    attributes:
+      label: Request Type
+      options:
+        - Greenfield
+        - Enhancement
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Request Description
+      placeholder: Brief description of what is being built or changed
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: "**Intake Spreadsheet** — Attach the completed FORGE intake spreadsheet below this line. Do not submit without attaching the spreadsheet."
+
+  - type: checkboxes
+    id: status
+    attributes:
+      label: Pipeline Status
+      options:
+        - label: Stage 0 — Intake & Clarification
+          required: false
+        - label: Stage 1 — Requirements (human gate)
+          required: false
+        - label: Stage 2 — Spec & Design (human gate)
+          required: false
+        - label: Stage 3 — Implementation (human gate)
+          required: false
+        - label: Stage 4 — QA (human gate)
+          required: false
+        - label: Stage 5 — Security (human gate)
+          required: false
+        - label: Stage 6 — Deploy (human gate)
+          required: false
