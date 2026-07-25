@@ -74,8 +74,9 @@ In your organization's GitHub settings:
    - Checks: Read and write
    - Metadata: Read (required by GitHub)
 4. Under **Where can this GitHub App be installed?**, select **Only on this account**
-5. Create the app, generate a private key, and download it
-6. Install the app on the custom-apps monorepo (not org-wide)
+5. Under **Webhook**, uncheck **Active** — FORGE's workflows call the GitHub and Anthropic APIs directly using a generated token; no inbound webhook is needed
+6. Create the app, generate a private key, and download it
+7. Install the app on the custom-apps monorepo (not org-wide)
 
 Store the credentials as repo-level secrets in your FORGE repo:
 
@@ -84,7 +85,15 @@ Store the credentials as repo-level secrets in your FORGE repo:
 | `FORGE_APP_ID` | The App ID shown on the app's settings page |
 | `FORGE_APP_PRIVATE_KEY` | The contents of the `.pem` private key file |
 
-These secrets are used by every workflow job to generate a short-lived installation token (via `actions/create-github-app-token`). The token expires after one hour and is never stored.
+Also store the App's **Client ID** (a separate value from the App ID, shown on the same settings page) as a repository **variable** — not a secret, since it isn't sensitive:
+
+| Variable name | Value |
+|---|---|
+| `FORGE_APP_CLIENT_ID` | The Client ID shown on the app's settings page |
+
+**Note on `actions/create-github-app-token`:** as of mid-2026, the current major version of this action is `@v3`, which uses the `client-id` input above rather than the older `app-id` input (older major versions relied on a Node.js runtime GitHub has since deprecated). Confirm any workflow using this action pins `@v3` or later and reads `client-id` from `vars.FORGE_APP_CLIENT_ID` — using an older version with only `app-id`/`FORGE_APP_ID` set will fail once GitHub fully retires the deprecated runtime.
+
+These secrets/variables are used by every workflow job to generate a short-lived installation token. The token expires after one hour and is never stored.
 
 ### Step 3 — Configure the Team Layer
 
@@ -137,9 +146,13 @@ In your FORGE repo's settings under **Secrets and variables → Actions**, add:
 |---|---|
 | `ANTHROPIC_API_KEY` | Your Anthropic API key |
 | `ADO_PAT` | An Azure DevOps Personal Access Token with work item read/write scope |
-| `AZURE_CREDENTIALS` | Service principal credentials JSON for your Azure subscription |
+| `ACR_LOGIN_SERVER` | Your Azure Container Registry's login server (e.g., `yourregistry.azurecr.io`) |
+| `ACR_USERNAME` | Registry admin username (Azure Portal → your ACR → Settings → Access keys) |
+| `ACR_PASSWORD` | Registry admin password (same location) |
 
-For build phase, a PAT is acceptable for ADO. Before going to production, evaluate replacing the PAT with an ADO service principal — see the moving-to-production checklist.
+For build phase, a PAT is acceptable for ADO, and ACR admin-user credentials are acceptable for registry push access. Before going to production, evaluate replacing the ADO PAT with a service principal, and the ACR admin user with a scoped service principal holding the `AcrPush` role — see the moving-to-production checklist.
+
+**Note on Container Apps deployment credentials:** the secrets above cover pushing images to the registry. Authenticating the Deploy Agent to actually push new revisions into the Container Apps environments themselves is a separate, later concern (Phase 3 of the Build Plan) and isn't finalized as of this writing — it will likely need its own service principal or managed identity with Contributor access on the Container Apps resource group. Don't assume a secret named `AZURE_CREDENTIALS` (or similar) exists until that work defines it; check the Build Plan and this guide's Step 4 for the current, authoritative list.
 
 ### Step 5 — Create the Azure Container Apps Environments
 
@@ -148,11 +161,12 @@ In your Azure subscription, create two Container Apps environments. Use the name
 - `forge-staging` — in its own resource group
 - `forge-production` — in its own resource group
 
-For the production environment only, add a GitHub Environment in your FORGE repo under **Settings → Environments**:
+**Note on the Azure portal:** as of mid-2026, the portal only lets you create a Container Apps environment as a byproduct of creating an actual Container App — there's no standalone "create environment" option. A simple workaround: create a throwaway Container App using Azure's built-in "quickstart image," pick **Create new** under Container Apps Environment during that flow, then delete just the placeholder Container App afterward — the environment itself persists independently once created. **This is a Portal-specific limitation** — the Azure CLI (`az containerapp env create`) creates an environment directly with no placeholder needed, so prefer the CLI (or the repo's `scripts/bootstrap-azure.sh`, if it wraps the CLI) over the Portal when you have the option.
 
-- Name it `forge-production`
-- Add yourself (or the designated Release Approver) as a required reviewer
-- Enable **Required reviewers** — this is the gate that makes the production deploy require explicit approval
+Also create two corresponding **GitHub Environments** in your FORGE repo under **Settings → Environments** — note these are named plainly (`staging` / `production`), distinct from the Azure Container Apps environment names above (`forge-staging` / `forge-production`) — don't conflate the two when naming things:
+
+- **`staging`** — no required reviewers; this is what makes staging deploy automatically
+- **`production`** — add yourself (or the designated Release Approver) as a required reviewer, and enable **Required reviewers** — this is the gate that makes the production deploy require explicit approval
 
 Staging deploys automatically. Production deploys never do.
 
@@ -162,11 +176,13 @@ Confirm everything is wired up before your first pipeline run:
 
 - [ ] FORGE repo created from template, visibility set to private
 - [ ] `forge-pipeline` GitHub App installed on the monorepo only
-- [ ] `FORGE_APP_ID` and `FORGE_APP_PRIVATE_KEY` secrets set in FORGE repo
+- [ ] `FORGE_APP_ID` and `FORGE_APP_PRIVATE_KEY` secrets, and `FORGE_APP_CLIENT_ID` variable, set in FORGE repo
 - [ ] `team/config.yaml` updated with your ADO org, project, area path, monorepo details, and Azure environment names
-- [ ] `ANTHROPIC_API_KEY`, `ADO_PAT`, and `AZURE_CREDENTIALS` secrets set
-- [ ] `forge-staging` and `forge-production` Container Apps environments created
-- [ ] `forge-production` GitHub Environment configured with a required reviewer
+- [ ] `ANTHROPIC_API_KEY`, `ADO_PAT`, `ACR_LOGIN_SERVER`, `ACR_USERNAME`, and `ACR_PASSWORD` secrets set
+- [ ] `forge-staging` and `forge-production` Container Apps environments created in Azure
+- [ ] `staging` and `production` GitHub Environments created in the FORGE repo, with `production` configured with a required reviewer
+
+Consider also running the setup verification workflow described in Build Plan step 2.8 (a GitHub Actions workflow that pings the GitHub App token generation, ADO, and Anthropic API in one run) and the Managed Agents access check in step 2.9 before your first real pipeline request — catching a misconfigured secret this way is much faster than discovering it mid-pipeline.
 
 ---
 
@@ -212,7 +228,7 @@ The QA Agent has posted a test report as a PR comment. If all tests pass, apply 
 The Security Agent has posted severity-tagged findings as inline PR comments. A Critical finding has already set a failing check that blocks merge. If there are no Criticals, or after Criticals are resolved, the Technical Approver applies `security-approved`.
 
 **Gate 6 — Production deployment:**
-Staging deploys automatically once all prior gates pass. To approve production, open the GitHub Environment approval request and click **Approve**. The Deploy Agent runs the production deployment.
+Staging deploys automatically once all prior gates pass. To approve production, open the **`production`** GitHub Environment approval request and click **Approve**. The Deploy Agent runs the production deployment.
 
 ---
 
@@ -270,13 +286,16 @@ This applies to all stages except Stage 3 (see the Managed Agents entry below fo
 **The Implementation Coordinator session failed (Stage 3).**
 Stage 3 runs as a Managed Agents session rather than a standalone SDK call, so failures here look different. Start with the Claude Console — it provides a per-subagent audit trail (Backend, Frontend, Test Writer) in addition to the GitHub Actions log, and will usually show which subagent failed or where the coordinator's synthesis step broke down. Common causes: a session-level error (the coordinator agent session itself failed to start or was terminated — check for a beta-header or quota issue), a single subagent failure that the coordinator could not work around (check that subagent's portion of the Console trail), or a sandbox filesystem conflict during synthesis. For a session-level error, confirm the Managed Agents beta header and API access are still valid before retrying. For a subagent-specific failure, the coordinator's PR description (if one was opened) or the Console trail will usually identify which subagent and why. As with other agent failures, do not attempt to resume a failed session mid-stage — a re-run starts a fresh Stage 3 session from the approved design.
 
+**A Managed Agents session archive call failed with a "cannot be archived while running" error.**
+This can happen even when a session was just observed to be idle — the session can transiently flip back to `running` right after going idle (for example, during trailing extended-thinking wrap-up). This is not a real failure; retry the archive call after a few seconds. Any tooling that archives sessions programmatically (including the Phase 3 Managed Agents wrapper) should build in a short retry-with-backoff around this call rather than treating it as fatal.
+
 ### Infrastructure Failures
 
 **The GitHub App token failed to generate.**
-The `FORGE_APP_ID` or `FORGE_APP_PRIVATE_KEY` secret is wrong, or the app's private key has been rotated. Verify the secrets match the current key shown in the GitHub App settings. If the key was rotated, generate a new one and update the secret.
+The `FORGE_APP_ID`, `FORGE_APP_CLIENT_ID`, or `FORGE_APP_PRIVATE_KEY` value is wrong or missing, or the app's private key has been rotated. Verify these match the current values shown in the GitHub App settings — note that `FORGE_APP_ID`/`FORGE_APP_PRIVATE_KEY` are repo secrets while `FORGE_APP_CLIENT_ID` is a repo *variable*; a value saved in the wrong one of these two places will fail silently rather than error clearly. If the key was rotated, generate a new one and update the secret. Also confirm the workflow is pinned to `actions/create-github-app-token@v3` (or later) — older major versions expect `app-id` instead of `client-id` and will fail if only the newer variable is set.
 
 **The Azure Container Apps deployment failed.**
-Check the deployment logs in Azure. Common causes: the Docker image failed to build (check the build step in the Actions log), the image was pushed to a registry the Container Apps environment cannot reach (check managed identity or registry access), or the `team/config.yaml` environment names don't match the actual Container Apps environment names in Azure.
+Check the deployment logs in Azure. Common causes: the Docker image failed to build (check the build step in the Actions log), the image was pushed to a registry the Container Apps environment cannot reach (check the ACR credentials or managed identity), or the `team/config.yaml` environment names don't match the actual Container Apps environment names in Azure.
 
 **The ADO work item creation failed.**
 The `ADO_PAT` may be expired or may have insufficient scope. Regenerate the PAT with work items read/write scope and update the secret. Confirm the area path in `team/config.yaml` exists in the ADO project — a missing area path causes a silent 400 from the ADO API.
@@ -307,7 +326,8 @@ This checklist is for when a FORGE instance is ready to move from build-phase wo
 - [ ] FORGE repo transferred to the organization's GitHub account (if built under a personal account)
 - [ ] `forge-pipeline` GitHub App re-created or transferred under the organization account
 - [ ] Azure Container Apps environments provisioned in the organization's Azure subscription under the correct subscription and resource group naming conventions
-- [ ] Azure Container Registry provisioned in the organization's Azure subscription; `AZURE_CREDENTIALS` secret updated to a service principal with the correct role assignments (AcrPush on the registry, Contributor on the Container Apps resource group)
+- [ ] Azure Container Registry provisioned in the organization's Azure subscription; `ACR_LOGIN_SERVER`/`ACR_USERNAME`/`ACR_PASSWORD` updated to the org registry, or replaced with a scoped service principal holding `AcrPush`
+- [ ] Container Apps deployment credentials (whatever the Phase 3 Deploy Agent design settles on — likely a service principal or managed identity with Contributor on the Container Apps resource group) established for the organization's subscription
 - [ ] Staging and production environments connected to the organization's Azure Container Apps environments in `team/config.yaml`
 
 ### Credentials and Access
@@ -321,7 +341,7 @@ This checklist is for when a FORGE instance is ready to move from build-phase wo
 
 - [ ] At least one BA has completed intake training and successfully submitted a test request through the pipeline
 - [ ] At least one Technical Approver has been identified for each gate that requires technical review (Gate 2 — Design, Gate 5 — Security)
-- [ ] The Release Approver for the `forge-production` GitHub Environment has been confirmed and has accepted the responsibility
+- [ ] The Release Approver for the `production` GitHub Environment has been confirmed and has accepted the responsibility
 - [ ] All six gates have been exercised at least once on a non-trivial request (the three-app demo plan satisfies this requirement)
 - [ ] The QA retry limit has been tested at least once (trigger a deliberately failing test to confirm the loop-back and escalation behaviour)
 - [ ] Orchestration Manager has read and understands the failure handling section of this guide; at least one escalation path has been tested end-to-end

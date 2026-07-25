@@ -63,7 +63,7 @@ FORGE authenticates into your target monorepo through a GitHub App — never a p
 
 1. Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**
 2. Name it `forge-pipeline`
-3. Set the Webhook URL to your repo's Actions URL (or disable webhooks for now)
+3. Uncheck **Active** under Webhook — FORGE's workflows call APIs directly, no webhook is needed
 4. Set these **Repository permissions** (select the target monorepo only):
 
 | Permission | Access |
@@ -77,19 +77,26 @@ FORGE authenticates into your target monorepo through a GitHub App — never a p
 5. Install the app on your target monorepo (not org-wide)
 6. Generate a private key and download it
 
-Save the App ID and private key — you'll need them in the next step.
+Save the App Client ID and private key — you'll need them in the next step.
 
 ### 3. Configure secrets (5 min)
 
 In your FORGE repository, go to **Settings → Secrets and variables → Actions** and add:
 
+**Secrets**
+
 | Secret | Value |
 |---|---|
-| `FORGE_APP_ID` | Your GitHub App ID |
 | `FORGE_APP_PRIVATE_KEY` | Contents of the downloaded `.pem` file |
 | `ADO_PAT` | Your Azure DevOps Personal Access Token |
 | `ANTHROPIC_API_KEY` | Your Anthropic API key |
 | `AZURE_CREDENTIALS` | Azure service principal credentials (JSON) |
+
+**Variables** (Settings → Secrets and variables → Actions → Variables tab)
+
+| Variable | Value |
+|---|---|
+| `FORGE_APP_CLIENT_ID` | Your GitHub App Client ID |
 
 ### 4. Edit `team/config.yaml` (5 min)
 

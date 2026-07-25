@@ -38,7 +38,7 @@ Where two tools serve the same role (e.g., two SAST options), both are listed. F
 | **GitHub Actions** | Runs all workflow stages; the orchestration engine (Document 2 §2.1) | Required | Included with repo | Included with GitHub plan (usage limits apply) | Free tier: 2,000 min/month (personal); minutes consumed per pipeline run | GitHub Teams: 3,000 min/month included; ~$0.008/min (Linux) beyond that |
 | **GitHub Environments** | Enforces the Deploy gate (production Environment with required reviewers) | Required | Orchestration Manager | Included with GitHub Teams and above | Free | Included |
 | **CODEOWNERS** | Enforces core-layer protection — core/ paths require Orchestration Manager approval | Required | Orchestration Manager | Included with GitHub | Free | Included |
-| **GitHub App installation** | Cross-repo authentication: FORGE repo workflows → monorepo operations (branches, commits, PRs, check runs) — see §6 | Required | Orchestration Manager + org admin | Included with GitHub | Free | Free |
+| **GitHub App installation** | Cross-repo authentication: FORGE repo workflows → monorepo operations (branches, commits, PRs, check runs) — see §7 | Required | Orchestration Manager + org admin | Included with GitHub | Free | Free |
 | **Branch protection rules** | Prevents direct commits to `main`; enforces required-reviewer approvals and required-check passes before merge | Required | Orchestration Manager (FORGE repo) + org admin (monorepo) | Included with GitHub | Free | Included |
 
 **GitHub plan note:** GitHub Actions minutes and Environments with required reviewers are available on the GitHub Teams plan ($4 USD/user/month for private repos as of this writing). If LAA is already on GitHub Enterprise, all of the above is included. Verify the current org plan before provisioning — the Orchestration Manager may not need to do anything for GitHub itself beyond creating the FORGE repo.
@@ -67,6 +67,8 @@ Where two tools serve the same role (e.g., two SAST options), both are listed. F
 
 **Cost estimation note:** Exact token costs per pipeline run depend on codebase size, requirements complexity, and agent prompt lengths — these can only be measured during the build-phase runs. After App 1 and App 2 runs are complete, a per-pipeline cost estimate should be recorded here. As a rough planning figure: Sonnet-tier models at typical requirements-to-deployment run volumes (10–50k tokens per stage, 10 stages) are likely to run in the $1–5 USD range per complete pipeline execution for token costs alone, plus an estimated $0.08–0.32 USD per run for Managed Agents session-hour billing on Stage 3 (1–4 hours active runtime), though both figures will vary significantly. Track actuals.
 
+**Managed Agents build-phase verification note (Phase 2.9, confirmed 2026-07-25):** the beta header and full agent/environment/session lifecycle were verified working end-to-end using model `claude-sonnet-4-6` for the connectivity test itself (not necessarily the production coordinator model — apply the Opus/Sonnet split above when Phase 3 builds the real Implementation Coordinator). Two implementation details worth carrying into the Phase 3 Managed Agents API wrapper: the session events endpoint requires a nested `{"events": [{"type": "user.message", "content": [...]}]}` body rather than a flat `content` field, and a session can transiently report `running` again immediately after appearing `idle`, so archive calls should retry briefly rather than treat this as a hard failure.
+
 ---
 
 ### 3.4 Cloud Infrastructure — Azure
@@ -79,6 +81,8 @@ Where two tools serve the same role (e.g., two SAST options), both are listed. F
 | **Azure subscription** | The billing and resource boundary for all Azure services above | Required | Mike (build: personal); org IT (production) | Pay-as-you-go or Enterprise Agreement | Personal PAYG | Org EA or PAYG |
 
 **Azure Container Apps environment specifics** are resolved in §6 of this document.
+
+**ACR provisioning note (confirmed Phase 2.2):** the build-phase default is **admin-user credentials** (registry Access Keys → enable Admin user → store username + one of the two generated passwords), not a service principal — this matches the flexibility already implied by the provisioning checklist in §4 below. A scoped service principal with the `AcrPush` role is the recommended upgrade before production cutover (see §9 Open Items and the Orchestration Manager Guide's moving-to-production checklist). Also confirmed: ACR has no pause/deallocate state — only deleting and recreating the registry stops the daily charge, so leaving it provisioned through the build phase (rather than tearing it down between work sessions) is the practical choice given the low daily cost.
 
 ---
 
@@ -122,10 +126,10 @@ The order matters — some credentials can't be created until the preceding serv
 
 1. **Confirm org GitHub plan** — verify GitHub Teams or Enterprise is active; confirm Actions minutes allocation and Environments availability.
 2. **Create FORGE template repo** — Orchestration Manager creates the repo from the FORGE template; sets up `CODEOWNERS` on `core/` and `.github/workflows/`.
-3. **Create GitHub App** (§6) — Orchestration Manager creates the App, installs it on the monorepo, stores the App ID and private key as GitHub Actions secrets in the FORGE repo.
+3. **Create GitHub App** (§7) — Orchestration Manager creates the App, installs it on the monorepo, stores the App ID and private key as GitHub Actions secrets in the FORGE repo, and stores the App's Client ID as a repository **variable** (needed by `actions/create-github-app-token@v3` and later — see §7).
 4. **Confirm ADO access** — org admin confirms ADO Boards is available; Orchestration Manager creates a PAT (or service principal) with work item read/write scope; stores as a GitHub Actions secret.
 5. **Set up Anthropic API** — Mike configures the API key as a GitHub Actions secret; org admin sets up the org API account before production cutover.
-6. **Provision Azure Container Registry** — Mike creates ACR in the personal Azure subscription (build phase); creates a service principal with `acrpush` role; stores credentials as GitHub Actions secrets.
+6. **Provision Azure Container Registry** — Mike creates ACR in the personal Azure subscription (build phase); creates admin-user credentials (or a service principal with the `AcrPush` role, if provisioning for production) for GitHub Actions push access; stores credentials as GitHub Actions secrets. Build phase confirmed default: admin-user credentials — see §3.4 note above.
 7. **Provision Azure Container Apps** (§6) — Mike creates staging and production Container Apps Environments; stores environment names and resource group references in `team/config.yaml`.
 8. **Configure security tools** — Orchestration Manager adds Semgrep, Gitleaks, and OWASP Dependency-Check GitHub Actions steps to the Security workflow; no external accounts required for the defaults.
 9. **Configure branch protection** on the monorepo — org admin applies: require PR, require status checks (QA + Security), require reviews (Technical Approver, QA Reviewer, Security Reviewer), no direct push to `main`.
@@ -202,6 +206,10 @@ This resolves the open item from Document 2 §8 and §10.
 
 Two Container Apps Environments: `forge-staging` and `forge-production`. Both live in the same Azure resource group and region per application. Separate environments (rather than separate revisions in one environment) enforce the physical separation between staging and production traffic — there is no path by which a staging deployment can accidentally affect production.
 
+**Provisioning note (confirmed Phase 2.3/2.4):** as of mid-2026, the Azure portal only creates a Container Apps environment as a byproduct of creating an actual Container App — there's no standalone "new environment" option. The practical workaround is to create a throwaway Container App using Azure's built-in quickstart/sample image, select "Create new" for the environment during that flow, then delete just the placeholder Container App afterward — the environment persists independently once created.
+
+**Naming note:** `forge-staging`/`forge-production` here refer specifically to the *Azure Container Apps environment* names. The corresponding **GitHub Environments** (Settings → Environments in the FORGE repo, used for the approval-gate feature) are named plainly `staging`/`production` — a different, same-purpose-but-different-system pair of names. Keep the two straight; see the Orchestration Manager Guide (Document 6), Part 1, Step 5.
+
 ### Revision strategy
 
 - **Staging:** Single active revision, replaced on each deploy. No traffic-splitting; staging is for validation, not canary testing.
@@ -275,7 +283,12 @@ After installation, generate a private key for the App (PEM file). Store two val
 - `FORGE_APP_ID` — the App's numeric ID (visible on the App settings page)
 - `FORGE_APP_PRIVATE_KEY` — the PEM file contents
 
-Workflows use these two values with the `actions/create-github-app-token` Action to generate a short-lived installation token at the start of any job that touches the monorepo. The token expires after one hour — appropriate for a single job run.
+Also store one value as a **repository-level variable** (not a secret — it isn't sensitive, it's visible on the App's public settings page):
+- `FORGE_APP_CLIENT_ID` — the App's Client ID (a separate value from the App ID, shown on the same settings page)
+
+**Action version note (confirmed Phase 2.8):** as of mid-2026, `actions/create-github-app-token@v3` is the current major version and uses the `client-id` input above rather than the older `app-id` input. Older major versions (`@v1`, `@v2`) rely on a Node.js runtime GitHub has deprecated and will not be updated to accept `client-id` — pin workflows to `@v3` or later and reference `vars.FORGE_APP_CLIENT_ID` accordingly.
+
+Workflows use these values with the `actions/create-github-app-token` Action to generate a short-lived installation token at the start of any job that touches the monorepo. The token expires after one hour — appropriate for a single job run.
 
 ### Operational note for the Orchestration Manager
 
@@ -292,7 +305,7 @@ If the GitHub App's private key needs to be rotated (security event, key expiry 
 | Azure DevOps Boards | — | Already paid (org) |
 | Anthropic API (token costs) | Personal API account; ~$1–5 USD per full pipeline run (estimate — track actuals) | Org API account; same per-run cost, multiplied by run volume |
 | Managed Agents runtime (Stage 3 coordinator + subagents) | ~$0.08–0.32 USD per pipeline run (estimate: 1–4 hours active runtime — track actuals during App 1) | Same billing model; org API account, multiplied by run volume |
-| Azure Container Registry | ~$0.17/day + minimal storage | Same; charged to org Azure subscription |
+| Azure Container Registry | ~$0.17/day + minimal storage (no pause option — only delete/recreate stops the charge) | Same; charged to org Azure subscription |
 | Azure Container Apps | ~$0 at rest (scale to zero in staging); low single-digit USD/month in production per app | Same; org subscription |
 | Security tools (Semgrep, Gitleaks, OWASP Dependency-Check) | Free | Free |
 | Development stack (.NET, React, Jest, xUnit) | Free | Free |
@@ -313,6 +326,8 @@ The following remain unresolved after this document and are carried forward:
 - **Managed Agents beta stability** — `managed-agents-2026-04-01` is a public beta header; monitor for breaking changes during the build phase and flag any disruptions as RFC candidates (see Document 2 §10, §11).
 - **Docker Desktop licensing for local developer use** — verify whether LAA qualifies for Docker's free tier for non-profits, or whether Rancher Desktop should be the standard recommendation for local development. Not blocking for build phase (CI uses Docker CLI).
 - **ADO service principal vs. PAT** — a service principal (Azure AD app registration with ADO permissions) is more robust than a PAT for production use (no expiry tied to an individual). Evaluate before production cutover; interim: PAT is acceptable for build phase.
+- **ACR service principal vs. admin-user credentials** — a scoped service principal with the `AcrPush` role is more robust than the registry's built-in admin account for production use (narrower blast radius if a credential leaks, no shared account to rotate). Evaluate before production cutover; interim: admin-user credentials are acceptable for build phase (confirmed Phase 2.2).
+- **Container Apps deployment credentials (Deploy Agent)** — separate from the ACR push credentials above; how the Deploy Agent authenticates to push new revisions into the Container Apps environments themselves is not yet finalized. Resolve during Phase 3 (Deploy Agent implementation) — likely a service principal or managed identity with Contributor access on the Container Apps resource group.
 - **RFC process details** (Document 4) — how core platform changes are proposed and approved, including what tooling hosts RFC discussion (GitHub Discussions, ADO Wiki, etc.).
 - **External training / certification recommendations** — Track 1 AI Foundations external resources and certifications (Document 5).
 

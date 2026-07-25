@@ -2,7 +2,7 @@
 
 **Purpose:** Step-by-step checklist for building FORGE from scratch. Work through one item at a time. Each step is a discrete unit — complete it, confirm it, move on.
 
-**Version:** v2 — updated for ADR-0010 (Managed Agents adoption for Stage 3). Replaces the original Build Plan. Changes are confined to Phase 2 (one new step), Phase 3 (steps 3.1, 3.4a new, 3.5–3.7 reframed as subagent definitions), Phase 4 (step 4.4 rewritten, step 4.8 updated), and the Stage 3 review language in Phases 5–7. All other phases are unchanged from v1.
+**Version:** v3 — minor Phase 2 correction following the Phase 2 build (chat 20): step 2.1 now notes the GitHub App Client ID / `create-github-app-token@v3` requirement discovered during that build. No other phases changed from v2.
 
 ---
 
@@ -44,9 +44,11 @@
 - [ ] 2.1 **GitHub App — `forge-pipeline`**
   - Create the GitHub App in your personal/org GitHub account
   - Set permissions: Contents (R/W), Pull requests (R/W), Issues (R/W), Checks (R/W), Metadata (R)
+  - Leave Webhook → Active unchecked (not needed — workflows call the GitHub/Anthropic APIs directly using a generated token)
   - Generate and download the private key (.pem)
   - Install the app on the monorepo (not org-wide)
   - Store `FORGE_APP_ID` and `FORGE_APP_PRIVATE_KEY` as repo-level secrets in the FORGE repo
+  - Also store the App's **Client ID** (a separate value from the App ID, shown on the same settings page) as a repo-level **variable** named `FORGE_APP_CLIENT_ID` — required because `actions/create-github-app-token@v3` (the current major version as of mid-2026) reads `client-id` rather than the older `app-id` input; older action versions rely on a Node.js runtime GitHub has deprecated and won't be updated
 - [ ] 2.2 **Azure Container Registry**
   - Create an ACR instance (Basic tier, ~$0.17/day)
   - Note the login server URL
@@ -55,12 +57,14 @@
 - [ ] 2.3 **Azure Container Apps — staging environment**
   - Create `forge-staging` Container Apps environment
   - Settings: min 0 replicas, max 2, 0.25 vCPU / 0.5 Gi, single active revision
+  - Note: the Azure Portal only creates an environment as a byproduct of creating a Container App (no standalone option) — the CLI (`az containerapp env create`) doesn't have this restriction, if scripting this step
 - [ ] 2.4 **Azure Container Apps — production environment**
   - Create `forge-production` Container Apps environment
   - Settings: min 1 replica, max 5, 0.5 vCPU / 1.0 Gi, single active revision
 - [ ] 2.5 **GitHub Environments**
   - Create `staging` environment in the FORGE repo (no required reviewers — auto-deploy)
   - Create `production` environment in the FORGE repo (required reviewer: you)
+  - Note: these GitHub Environment names (`staging`/`production`) are distinct from the Azure Container Apps environment names above (`forge-staging`/`forge-production`) — don't conflate the two
 - [ ] 2.6 **ADO connection**
   - Generate a PAT in Azure DevOps (scopes: Work Items R/W, Project R)
   - Store as FORGE repo secret: `ADO_PAT`
@@ -76,6 +80,7 @@
   - Confirm the `ANTHROPIC_API_KEY` has access to the Managed Agents beta (`managed-agents-2026-04-01` header)
   - Create a throwaway single-coordinator, zero-subagent test session via the API to confirm the header, environment, and session lifecycle work end-to-end before Phase 3 agent work begins
   - Note the beta status in the tracking log — this is a candidate for an RFC if the API changes materially during the build phase
+  - Note: the session events endpoint expects a nested `{"events": [{"type": "user.message", "content": [...]}]}` body, not a flat `content` field; and a session can transiently report `running` again immediately after appearing `idle` — build a short retry around archive calls rather than treating this as fatal
 
 ---
 
@@ -90,7 +95,7 @@
   - ADO API helper (create Epic, Feature, User Story, Bug)
   - File I/O helpers (read XLSX, read/write Markdown, read/write YAML)
   - Claude Agent SDK wrapper (standard invocation pattern, logging) — used by all stages except Stage 3
-  - **Managed Agents API wrapper** *(new — ADR-0010)* — standard invocation pattern for starting a coordinator agent session, declaring subagents, polling/streaming the session event stream to completion, and retrieving the per-subagent audit trail. Used only by Stage 3.
+  - **Managed Agents API wrapper** *(new — ADR-0010)* — standard invocation pattern for starting a coordinator agent session, declaring subagents, polling/streaming the session event stream to completion, and retrieving the per-subagent audit trail. Used only by Stage 3. Build in the correct events-endpoint request shape and archive retry behavior noted in step 2.9 above.
 - [ ] 3.2 **Intake Agent** (`core/agents/intake_agent.py`)
   - Reads the BA's Excel spreadsheet (Overview + Requirements tabs)
   - Produces 5–7 clarifying questions
@@ -212,7 +217,7 @@
 - [ ] 7.3 Write the BA intake spreadsheet for the enhancement (Request Type = Enhancement)
 - [ ] 7.4 Stage 0a — confirm ingestion agent reads the target service folder and produces an architecture summary
 - [ ] 7.5 Run all pipeline stages (same sequence, plus ingestion summary fed into Requirements Agent)
-- [ ] 7.6 Confirm the enhancement lands on the correct existing `services/<name>/` folder, not a new one
+- [ ] 7.6 Confirm the enhancement lands on the correct existing `services/<n>/` folder, not a new one
 - [ ] 7.7 Confirm ADO bug parent links correctly to the original User Story (or a new one under the existing Epic)
 - [ ] 7.8 Record actuals
 

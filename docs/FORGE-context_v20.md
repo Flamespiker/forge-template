@@ -2,7 +2,7 @@
 
 **Project:** FORGE — Full-SDLC Orchestration with Review Gates for Engineers  
 **Owner:** Mike Faulkner (mfaulkner@legalaid.ab.ca) — Legal Aid Alberta  
-**Last Updated:** 2026-07-23 (Phase 1 build complete — chat 19)  
+**Last Updated:** 2026-07-25 (Phase 2 build complete — chat 20)  
 **Purpose:** Living reference document. Read this at the start of every new chat to restore full project context without re-explanation.
 
 ---
@@ -53,6 +53,8 @@ The core pattern: **deterministic orchestration** (Git operations, state transit
 - **Containerization:** Docker, targeting **Azure Container Apps** (migration path from Azure App Service)
 - **Current hosting:** Azure App Service (org), personal Azure account (build phase)
 - **Anthropic API:** Mike's personal developer API account (build phase), org API account (production)
+- **GitHub account (personal, build phase):** `Flamespiker` — owns both `forge-template` and `forge-demo-apps`
+- **ADO org (build phase):** `spike99` (`https://dev.azure.com/spike99`) — **note:** this is a different identity than the GitHub account; the two got confused once during Phase 2 build (see chat 20 session note) and are worth keeping straight going forward
 
 ### Platform Model
 - FORGE is a **two-layer platform:**
@@ -195,13 +197,33 @@ Consequences:
   breaking changes during build phase
 ```
 
+### Managed Agents API — build-phase notes (confirmed Phase 2.9, 2026-07-25)
+
+These are hands-on findings from the Phase 2.9 access check, worth building correctly into the Phase 3 Managed Agents API wrapper (step 3.1) rather than rediscovering them then:
+
+- Beta header `managed-agents-2026-04-01` confirmed accepted on the personal developer API key used for build phase.
+- Full lifecycle verified end-to-end: agent create → environment create → session create → send message via events endpoint → poll to idle → archive (session → agent → environment).
+- Test model used: `claude-sonnet-4-6` (confirmed compatible with Managed Agents beta as of this date). This was only a connectivity test model choice — not necessarily the production model for the Stage 3 coordinator (ADR-0010 specifies Opus for the coordinator, Sonnet for subagents — apply that split when Phase 3 builds the real Implementation Coordinator).
+- **Events endpoint body shape:** sending a message requires
+  ```json
+  {
+    "events": [
+      {"type": "user.message", "content": [{"type": "text", "text": "..."}]}
+    ]
+  }
+  ```
+  A flat `content` field at the top level is rejected with a 400 (`unknown field "content"`).
+- **Archive race condition observed:** a session can flip briefly back to `running` immediately after reaching `idle` (e.g., trailing extended-thinking wrap-up), causing an archive call to fail with a 400 ("cannot be archived while its status is running") even though the poller had just seen it idle. Build a short retry-with-backoff around session archival in the real wrapper rather than treating this as a hard failure.
+- Two throwaway local diagnostic scripts (`managed_agents_check.py`, `archive_retry.py`) were created for this check — gitignored, not committed to `forge-template`, not intended for reuse beyond this one verification.
+
 ### Repository model — two repos, not one
 - **Existing platform reality:** LAA's custom applications live in a single existing **monorepo** (all microservices, one repo). A separate, existing **Dynamics 365 repo** holds D365 development — out of scope for FORGE v1, flagged as a real future goal.
 - **FORGE is a separate repo from the code it acts on.** FORGE's own template repo (workflows, agents, core/team config, the per-request tracking issue) never holds application source. It orchestrates *into* the custom-apps monorepo by opening branches/commits/PRs there.
+- **Build/demo phase stand-in:** since there is no existing LAA monorepo available during the personal-account build phase, a new repo **`forge-demo-apps`** (private, under the `Flamespiker` GitHub account) was created in Phase 2 to play this role for App 1, App 2, and the enhancement demo. In a real team rollout, this would be the team's actual existing applications monorepo instead.
 - **Cross-repo mechanics:** FORGE workflows authenticate into the monorepo via a **GitHub App installation** (scoped, revocable, attributable to "FORGE" rather than a personal token) with permissions limited to branch/commit/PR/comment/check-run operations. Triggering webhooks come from the monorepo; the tracking issue and orchestration state live in the FORGE repo.
 - **Structural repo layout:**
   - FORGE repo: `.github/workflows/`, `core/` (agents, schemas — locked), `team/` (personas, config — customizable), `tracking/`
-  - Monorepo: `services/<name>/` per microservice (new folder = greenfield, existing folder = enhancement), `docs/<request-id>/` for requirements.md/design.md/tasks.md
+  - Monorepo: `services/<n>/` per microservice (new folder = greenfield, existing folder = enhancement), `docs/<request-id>/` for requirements.md/design.md/tasks.md
 - **Branching (in the monorepo):** `main` (always deployable) ← `feature/<request-id>` ← `design/<request-id>`. FORGE's GitHub App creates/pushes these branches on the agents' behalf.
 - **Traceability now crosses a repo boundary** (FORGE repo ↔ monorepo) partway through the chain. Full traceability depends on both sides writing the reciprocal link.
 
@@ -257,16 +279,18 @@ Consequences:
 - Staging: scale to zero, max 2 replicas, 0.25 vCPU / 0.5 Gi
 - Production: min 1 replica, max 5, 0.5 vCPU / 1.0 Gi
 - Rollback = redeploy prior image tag; previous revision retained 48h
+- **Build-phase note:** in the current Azure portal, a Container Apps environment can only be created as a byproduct of creating an actual Container App (not as a standalone resource). Both `forge-staging` and `forge-production` were provisioned in Phase 2 using Azure's built-in "quickstart image" as a disposable placeholder app, then deleting just the placeholder app afterward while keeping the environment.
 
 ### GitHub App permission scoping (resolved)
-- App named `forge-pipeline`; installed on the monorepo only
+- App named `forge-pipeline` (App ID `4388813`); installed on `forge-demo-apps` only, not org-wide
 - Permissions: Contents (R/W), Pull requests (R/W), Issues (R/W), Checks (R/W), Metadata (R)
-- Credentials stored as repo-level secrets: `FORGE_APP_ID` and `FORGE_APP_PRIVATE_KEY`
-- Short-lived installation token generated per job via `actions/create-github-app-token`
+- Credentials stored as repo-level secrets: `FORGE_APP_ID` and `FORGE_APP_PRIVATE_KEY`; Client ID stored as repo-level **variable** `FORGE_APP_CLIENT_ID` (not a secret — Client ID is publicly visible on the App's settings page)
+- Short-lived installation token generated per job via `actions/create-github-app-token@v3` (bumped from the deprecated Node-20-only `@v1` during Phase 2; `@v3` also renamed the `app-id` input to `client-id`)
 
 ### Cost summary (updated)
 - Build phase incremental cost: Anthropic API tokens (~$1–5 USD per full pipeline run for token costs, plus ~$0.08–0.32 for Managed Agents runtime — track actuals) + Azure Container Registry (~$0.17/day)
 - No net-new SaaS contracts required with default tool choices
+- ACR has no pause/deallocate option — only delete/recreate stops the daily charge. Accepted as a small ongoing build-phase cost rather than torn down between work sessions.
 
 ---
 
@@ -295,7 +319,7 @@ Consequences:
 6. ~~Document 6 (Orchestration Manager Guide) — failure handling~~ — done, chat 16
 7. ~~Document 7 (Customization Reference) — Agent Configuration + Pipeline & Orchestration sections~~ — done, chat 16 (turned out to be more than "minor" — see session note)
 8. ~~Document 9 (README) — minor update~~ — done, chat 17
-9. **Document 4 (Governance) — ADR-0010 seed ADR list — still outstanding; now the only document remaining from the original priority list, deferred four times in favour of other documents**
+9. **Document 4 (Governance) — ADR-0010 seed ADR list — still outstanding; now the only document remaining from the original priority list, deferred five times in favour of other work (four document chats, plus the full Phase 2 build)**
 
 ---
 
@@ -340,6 +364,7 @@ Consequences:
 - Docker Desktop licensing for local developer use — verify LAA non-profit eligibility or standardize on Rancher Desktop
 - ADO service principal vs. PAT — PAT acceptable for build phase; evaluate service principal before production cutover
 - **Managed Agents beta stability** — monitor for breaking changes to `managed-agents-2026-04-01` header behaviour during build phase; flag any disruptions as candidates for RFC
+- **Managed Agents archive race condition** (see build-phase notes under ADR-0010 above) — build retry-with-backoff into the Phase 3 wrapper (step 3.1) rather than treating a transient archive failure as a hard error
 
 ---
 
@@ -355,8 +380,8 @@ Before Phase 3 (Agent Implementation), every developer working on the agent laye
 | [Claude Cookbooks — managed_agents folder](https://github.com/anthropics/claude-cookbooks/tree/main/managed_agents) | **Before Phase 3** | Coordinator running three specialists in parallel — near-exact pattern of Backend/Frontend/Test Writer |
 | [Claude Agent SDK docs](https://docs.anthropic.com/en/docs/claude-code/sdk) | **Before Phase 3** | All stages except Stage 3 use this directly |
 | [Tool Use overview](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview) | Before Phase 3 | How tool calling works — every agent uses tools |
-| GitHub Actions cross-repo auth with GitHub Apps | Before Phase 2 | `actions/create-github-app-token` pattern |
-| Azure Container Apps quickstart (Microsoft Learn) | Before Phase 2 | Infrastructure provisioning |
+| GitHub Actions cross-repo auth with GitHub Apps | Before Phase 2 | `actions/create-github-app-token` pattern — ✅ used in Phase 2, note the `@v3`/`client-id` update above |
+| Azure Container Apps quickstart (Microsoft Learn) | Before Phase 2 | Infrastructure provisioning — ✅ done in Phase 2 |
 | CCA-F certification | After App 1 | Better understood after real agent work |
 
 ---
@@ -374,7 +399,7 @@ Before Phase 3 (Agent Implementation), every developer working on the agent laye
 - **2026-07-21 (chat 8):** Document 6 — Orchestration Manager Guide — drafted and completed. Five parts: setup, running, customization, failure handling, production checklist.
 - **2026-07-21 (chat 9):** Document 7 — Customization Reference — drafted and completed. ~65 items explicitly categorized Locked/Flexible/Fully Open.
 - **2026-07-21 (chat 10):** Document 8 — Excel Intake Template — created as formatted .xlsx workbook.
-- **2026-07-22 (chat 11 — this chat):** Pre-build architectural review. Two decisions made:
+- **2026-07-22 (chat 11):** Pre-build architectural review. Two decisions made:
   1. **Rejected CrewAI** as the multi-agent framework — conflicts with GitHub Actions as orchestrator, stateless-per-stage design, and human gate architecture. No third-party agent framework adopted.
   2. **Adopted Anthropic Managed Agents for Stage 3** (ADR-0010) — Implementation Coordinator agent runs Backend, Frontend, Test Writer subagents in parallel on a shared sandbox filesystem via Managed Agents multi-agent orchestration. All other stages remain standalone Claude Agent SDK calls. Billing: $0.08/agent session-hour active runtime in addition to token costs.
   - **Terminology note established:** "chat/chat thread" = project writing sessions; "agent session" = Managed Agents API runtime instance.
@@ -396,7 +421,7 @@ Before Phase 3 (Agent Implementation), every developer working on the agent laye
   - **Document 6 changes:** Part 2, Gate 3 description rewritten — now describes the Implementation Coordinator running Backend/Frontend/Test Writer subagents on a shared sandbox filesystem rather than three independent jobs. Part 4 Agent Failures gained a new entry ("The Implementation Coordinator session failed (Stage 3)") plus a clarifying note that the existing silent-failure entry applies to non-Stage-3 stages only. Part 4 Infrastructure Failures gained a new entry for Managed Agents beta-header/access issues. Reference → File Reference table updated to attribute `services/<service-name>/` to Backend/Frontend subagents via the coordinator. No other sections changed.
   - **Document 7 changes:** review surfaced more drift than the "minor clarification" flagged in the prior session note — several rows stated things that ADR-0010 had actually made incorrect, not just outdated. Pipeline & Orchestration section: agent invocation model row gained the ADR-0002/Stage-3 exception note. Agent Configuration section: agent roster row corrected from ten to eleven agents (added Implementation Coordinator); agent execution model row gained the Managed Agents exception for Stage 3; parallel execution row reworded around subagents/coordinator; **the "Integration check job... cannot be removed or bypassed" row was factually wrong post-ADR-0010 and was replaced** with an "Integration handling in Stage 3" row describing the coordinator's native integration handling; agent model tier row corrected from "Sonnet (all agents)" to the Opus-for-coordinator/Sonnet-elsewhere split. Quick-Reference Summary counts checked and left unchanged — no row moved between Locked/Flexible/Fully Open categories, so the approximate counts still hold.
   - Next: Document 4 (Governance) — add ADR-0010 to the seed ADR list — still the only document remaining from the original ADR-0010 priority list. Document 9 (README) also still outstanding (minor note on Stage 3).
-- **2026-07-23 (chat 17 — this chat):** Document 9 (README) reviewed and updated for ADR-0010. Review surfaced three factual corrections, not just the "minor note" flagged in prior session notes. Produced `09-forge-readme_v2.md`, intended to replace `09-forge-readme.md` in the project.
+- **2026-07-23 (chat 17):** Document 9 (README) reviewed and updated for ADR-0010. Review surfaced three factual corrections, not just the "minor note" flagged in prior session notes. Produced `09-forge-readme_v2.md`, intended to replace `09-forge-readme.md` in the project.
   - **Changes applied:** Pipeline diagram Implementation-stage line rewritten from "backend + frontend + tests run in parallel" to "Implementation Coordinator runs Backend, Frontend, Test Writer subagents in parallel." Prerequisites section's Anthropic API line updated to note Managed Agents beta access (`managed-agents-2026-04-01` header) and the Opus-for-coordinator/Sonnet-elsewhere tier split (previously just said "Sonnet tier recommended"). Cost reference table gained a dedicated Managed Agents runtime row (~$0.08–0.32 USD, session-hour billing) and relabeled the Anthropic API row as token costs specifically. Repository layout's `core/agents/` line updated to note it includes the coordinator + subagent definitions. No other sections changed — Approving-a-gate table and reference documentation links were checked and found still accurate.
   - File is in `/mnt/user-data/outputs/` awaiting upload to the project — the user will upload it and remove the old `09-forge-readme.md`.
   - **Document 4 (Governance) is now the only document remaining from the original ADR-0010 update list** — outstanding since chat 12, deferred in favour of other documents three times.
@@ -412,6 +437,20 @@ Before Phase 3 (Agent Implementation), every developer working on the agent laye
   - **Learning approach:** Just-in-time — concepts introduced immediately before the phase that needs them. Claude Code CLI handles file writing; this chat handles strategy, explanation, and review.
   - **Document 4 (Governance) — ADR-0010** is the only outstanding document update. Handle in a dedicated doc-update chat before or during Phase 2 — not blocking Phase 2 infrastructure work but should be done before Phase 3.
   - Next: Phase 2 — Infrastructure Setup. Start a fresh chat.
+- **2026-07-25 (chat 20 — this chat):** Phase 2 (Infrastructure Setup) complete — all nine steps (2.1–2.9) verified working end-to-end.
+  - **2.1 GitHub App:** Created `forge-pipeline` (App ID `4388813`), installed on `forge-demo-apps` only (not org-wide). Permissions: Contents R/W, Pull requests R/W, Issues R/W, Checks R/W, Metadata R. Credentials stored as `FORGE_APP_ID`, `FORGE_APP_PRIVATE_KEY` secrets, and `FORGE_APP_CLIENT_ID` as a repo **variable** in `forge-template` (Client ID needed because the current `create-github-app-token@v3` action deprecates the old `app-id` input in favour of `client-id`).
+  - **New repo created:** `forge-demo-apps` (private, under personal GitHub account **`Flamespiker`**) — stands in for LAA's real application monorepo during the build/demo phase, since no such repo exists yet in this personal-account context. This is the repo FORGE actually builds into; distinct from `forge-template`, which holds only FORGE's own orchestration machinery.
+  - **2.2 Azure Container Registry:** Created (Basic tier), admin-user credentials stored as `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD` secrets. Confirmed ACR has no pause/deallocate option — only delete/recreate stops the daily charge — accepted as a small ongoing build-phase cost rather than torn down between sessions.
+  - **2.3 / 2.4 Container Apps environments:** `forge-staging` and `forge-production` environments created (Consumption plan). Portal note: environments can currently only be created as a byproduct of creating a Container App — used Azure's "quickstart image" placeholder trick to provision each environment, then deleted the placeholder container app afterward, keeping the environment itself.
+  - **2.5 GitHub Environments:** `staging` (no required reviewers, auto-deploy) and `production` (required reviewer: Mike) configured in `forge-template`.
+  - **2.6 ADO connection:** New ADO project **`FORGE-Build`** created under org **`https://dev.azure.com/spike99`** (Agile process) to act as the one tracking project for all build-phase apps (App 1, App 2, enhancement all show up as separate Epics inside it, mirroring the `services/<n>/` folder split in the monorepo). PAT generated (scoped to `spike99` only, not all orgs), verified via a real test Epic created through the ADO REST API and then deleted, stored as `ADO_PAT` secret.
+  - **2.7 Anthropic API key:** Personal developer key confirmed active, stored as `ANTHROPIC_API_KEY` secret.
+  - **2.8 End-to-end connectivity check:** Built `.github/workflows/verify-setup.yml` (permanent — reused in Phase 8.4 to verify a fresh clone), verifying GitHub App token generation + repo access, ADO connectivity, and Anthropic API access in one workflow. Notable debugging along the way, worth remembering for Phase 3: `actions/create-github-app-token` needed bumping from the deprecated `@v1` (Node 20, being forced onto Node 24 with warnings) to `@v3` (Node 24-native, and renames `app-id` to `client-id`); several secrets/variables assumed stored earlier in the session (`FORGE_APP_ID`, `FORGE_APP_PRIVATE_KEY`, `FORGE_APP_CLIENT_ID`) turned out not to have actually been saved and had to be added properly on a second pass; and a copy-paste mix-up briefly had a verification step's GitHub API call pointed at the ADO org name (`spike99`) instead of the actual GitHub owner (`Flamespiker`) — two similarly-shaped "org" identifiers that are easy to cross. All resolved; workflow now passes cleanly with three green checks.
+  - **2.9 Managed Agents access check:** Verified via two throwaway local scripts (`managed_agents_check.py`, `archive_retry.py` — gitignored, not committed). Full lifecycle confirmed: beta header accepted, agent/environment/session creation, message send, idle state reached, and cleanup archival all worked (with one transient archive-timing hiccup, resolved by retry — see "Managed Agents API — build-phase notes" under ADR-0010 above for the exact schema/behavior details to carry into Phase 3).
+  - **Process lesson for future phases:** several credential-storage steps this session were verbally confirmed "done" but had not actually been saved in GitHub's UI, causing repeated debugging loops before the real problem (a missing secret/variable) was found. Worth explicitly confirming (screenshot or listing) that secrets/variables actually appear in GitHub's UI before moving to the next step, rather than treating a verbal "done" as sufficient for credential-storage steps specifically.
+  - **Formatting preference established:** anything meant to be handed to Claude Code, and all git commands, should be given in fenced code blocks so the copy button is available — apply this from now on in all future chats, not just this one.
+  - **Document 4 (Governance) — ADR-0010 seed ADR list is still the only outstanding document update**, now deferred five times (four document-update chats, plus the entire Phase 2 build) in favour of other work. Per the chat 19 note, this should land before Phase 3 begins.
+  - Next: Phase 3 — Agent Implementation. Start a fresh chat.
 
 ---
 

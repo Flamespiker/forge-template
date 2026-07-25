@@ -53,3 +53,7 @@ Thumbs.db
 # =============================================================================
 tracking/scratch/
 .forge-temp
+
+# Throwaway diagnostics
+managed_agents_check.py
+archive_retry.py
