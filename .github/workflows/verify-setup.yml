@@ -12,7 +12,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.FORGE_APP_ID }}
+          client-id: ${{ vars.FORGE_APP_CLIENT_ID }}
           private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
           repositories: forge-demo-apps
 
