@@ -1,0 +1,51 @@
+name: Verify Setup
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      # ── 1. GitHub App token ───────────────────────────────────────────────
+      - name: Generate GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.FORGE_APP_ID }}
+          private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+          repositories: forge-demo-apps
+
+      - name: Confirm GitHub App can read forge-demo-apps
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          response=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/spike99/forge-demo-apps)
+          full_name=$(echo "$response" | jq -r '.full_name')
+          echo "SUCCESS: GitHub App token is valid — repo visible: $full_name"
+
+      # ── 2. Azure DevOps connectivity ──────────────────────────────────────
+      - name: Confirm ADO connectivity
+        env:
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+        run: |
+          response=$(curl -sf \
+            -u ":$ADO_PAT" \
+            -H "Accept: application/json" \
+            "https://dev.azure.com/spike99/_apis/projects?api-version=7.1")
+          count=$(echo "$response" | jq '.count')
+          echo "SUCCESS: ADO connection verified — $count project(s) visible in spike99 org"
+
+      # ── 3. Anthropic API connectivity ─────────────────────────────────────
+      - name: Confirm Anthropic API connectivity
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          response=$(curl -sf \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            https://api.anthropic.com/v1/models)
+          count=$(echo "$response" | jq '.data | length')
+          echo "SUCCESS: Anthropic API key is valid — $count model(s) returned"
