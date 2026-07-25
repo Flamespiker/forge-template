@@ -53,3 +53,10 @@ intake_method: issue-attachment
 
 # The Slack channel or email address where FORGE pipeline alerts are sent
 notification_channel: your-channel-or-email
+
+ado:
+  org_url: "https://dev.azure.com/spike99"
+  project: "FORGE-Build"
+  area_path: "FORGE-Build"          # default area path — using project root for now, refine later if you add team areas
+  default_tags:
+    - "forge-managed"
