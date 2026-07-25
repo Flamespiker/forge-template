@@ -10,9 +10,9 @@ jobs:
       # ── 1. GitHub App token ───────────────────────────────────────────────
       - name: Generate GitHub App installation token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.FORGE_APP_ID }}
+          client-id: ${{ secrets.FORGE_APP_ID }}
           private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
           repositories: forge-demo-apps
 
