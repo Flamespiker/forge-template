@@ -19,13 +19,8 @@ PyYAML>=6.0.1
 # Environment variable loading for local dev
 python-dotenv>=1.0.0
 
-# Claude Agent SDK — drives the agent loop for all stages except Stage 3.
-# Stage 3 (Implementation) uses managed_agents_wrapper.py with raw requests instead;
-# those beta Managed Agents endpoints are not exposed through this package.
-# Pinned to exact version — this SDK is Alpha-classified and has already had one breaking
-# rename (ClaudeCodeOptions -> ClaudeAgentOptions). An open floor risks a silent breaking
-# upgrade on a future rebuild. Update the pin deliberately after testing the new version.
-claude-agent-sdk==0.2.128
-
-# Note: the base `anthropic` package is NOT listed here. claude-agent-sdk depends on it
-# internally, but FORGE code does not import anthropic directly in any module.
+# Anthropic Python client — direct Messages API calls for all stages except Stage 3.
+# Stage 3 (Implementation) uses managed_agents_wrapper.py with raw requests for the
+# Managed Agents beta endpoints, which are separate from the Messages API.
+# ADR-0011: switched from claude-agent-sdk to this package; see that ADR for rationale.
+anthropic>=0.120.2

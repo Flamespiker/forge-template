@@ -1,7 +1,7 @@
 """
 Smoke test — claude_agent_wrapper.py
 
-Makes a real call via claude-agent-sdk query() and verifies the result.
+Makes a real call via the Anthropic Messages API and verifies the result.
 Run manually from the repo root:
     python -m core.agents.utils.smoke_tests.smoke_claude_agent
 
@@ -40,14 +40,14 @@ def run(label: str, fn):
 
 def main():
     print("=== Claude Agent Wrapper Smoke Test ===\n")
-    print("  Uses claude-agent-sdk query() — makes a real Anthropic API call.\n")
+    print("  Uses anthropic Messages API — makes a real Anthropic API call.\n")
 
     result = run(
-        "invoke_agent(system, user, allowed_tools=[], stage_name='smoke-test')",
+        "invoke_agent(system, user, max_tokens=256, stage_name='smoke-test')",
         lambda: invoke_agent(
             system_prompt="You are a helpful assistant. Reply concisely.",
             user_prompt="Say exactly: 'FORGE smoke test OK'",
-            allowed_tools=[],  # text-only — no tools needed for this check
+            max_tokens=256,
             stage_name="smoke-test",
             request_id="smoke-001",
         ),
@@ -78,18 +78,18 @@ def main():
             ),
         )
         run(
-            "cache_creation_tokens or cache_read_tokens is non-zero",
-            lambda: None if (result.cache_creation_tokens > 0 or result.cache_read_tokens > 0) else (_ for _ in ()).throw(
+            "input_tokens and output_tokens are positive",
+            lambda: None if (result.input_tokens > 0 and result.output_tokens > 0) else (_ for _ in ()).throw(
                 AssertionError(
-                    f"Both cache fields are zero — cache_creation={result.cache_creation_tokens}, "
-                    f"cache_read={result.cache_read_tokens}. SDK may not be returning usage."
+                    f"Token counts not reported — input={result.input_tokens}, "
+                    f"output={result.output_tokens}"
                 )
             ),
         )
         run(
             "total_cost_usd is not None and positive",
             lambda: None if (result.total_cost_usd is not None and result.total_cost_usd > 0) else (_ for _ in ()).throw(
-                AssertionError(f"total_cost_usd not recorded: {result.total_cost_usd!r}")
+                AssertionError(f"total_cost_usd not computed: {result.total_cost_usd!r}")
             ),
         )
 

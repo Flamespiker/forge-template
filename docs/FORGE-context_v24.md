@@ -2,7 +2,7 @@
 
 **Project:** FORGE — Full-SDLC Orchestration with Review Gates for Engineers  
 **Owner:** Mike Faulkner (mfaulkner@legalaid.ab.ca) — Legal Aid Alberta  
-**Last Updated:** 2026-07-29 (Document 4 drift corrected, ADR-0011 code rewrite sent back to Claude Code — chat 22)  
+**Last Updated:** 2026-07-29 (Document 9 refined post-Claude-Code review; Document 3 aligned on cost figure — chat 24)  
 **Purpose:** Living reference document. Read this at the start of every new chat to restore full project context without re-explanation.
 
 ---
@@ -237,11 +237,11 @@ These are hands-on findings from the Phase 2.9 access check, worth building corr
 **ADR-0011 code rewrite — VERIFIED, chat 22.** Real `git diff` reviewed across `claude_agent_wrapper.py`, `requirements.txt`, `smoke_claude_agent.py`, and `CLAUDE.md`. Real smoke test output reviewed verbatim (5/5 passed: output_text, latency, token counts, total_cost_usd all real and positive; `total_cost_usd: 0.00021` on 30 input / 8 output tokens against Sonnet 4.6 — arithmetic confirmed: 30×$3.00 + 8×$15.00 = $0.00021, matches the response exactly). `_MODEL_RATES` table independently checked against Anthropic's live pricing page (2026-07-29) — Sonnet 4.6, Opus 4.6, and Haiku 4.5 rates all match published pricing exactly, nothing fabricated. Error-handling design confirmed honest: `invoke_agent()` has no try/except around `client.messages.create()`; `is_error=False` is a compile-time constant, not a runtime check; API failures propagate as exceptions. This is documented accurately in both the function docstring and CLAUDE.md — not glossed over.
 
 **Affected documents requiring update — gate cleared, ready to action:**
-- Document 2 (Architecture) — agent invocation section currently states Claude Agent SDK for all non-Stage-3 stages
-- Document 3 (Tool Inventory) — §3.3 Claude Agent SDK row and cost summary; this would be v6. Also add an open item: Claude Sonnet 5 introductory pricing ($2/$10/MTok through 2026-08-31) is currently cheaper than the Sonnet 4.6 tier FORGE uses — flag as a future cost-optimization candidate, not an action item
-- Document 9 (README) — Prerequisites and cost-reference sections reference the Agent SDK
-- FORGE Build Plan — step 3.1's SDK-wrapper line; Phase 8.3's "ten seed ADRs" count needs to become eleven, and a step should track ADR-0011's actual commit to `core/decisions/`; this would be v4
-- **Document 6 (Orchestration Manager Guide) — added chat 22, not in the original ADR-0011 list.** Needs a new, explicit requirement: every stage-agent script from 3.2 onward MUST wrap `invoke_agent()` in try/except at the call site. The wrapper will never set `is_error=True` itself — an uncaught API failure (rate limit, auth, overload, etc.) aborts the calling script with no structured `forge_event` log line and no chance to post a failure comment on the tracking issue. This needs to be a hard requirement for every stage script, not a suggestion.
+- ~~Document 2 (Architecture) — agent invocation section currently states Claude Agent SDK for all non-Stage-3 stages~~ — **done**, produced `02-forge-architecture-document-v3.md` (see Document List; exact changes not re-summarized here — see the file's own diff from v2)
+- ~~Document 3 (Tool Inventory) — §3.3 Claude Agent SDK row and cost summary~~ — **done**, produced `03_FORGE_Tooling_v6.md`, plus the flagged open item (Sonnet 5 introductory pricing as a future cost-optimization candidate) added. **Follow-up, chat 24:** the dollar estimate itself (~$1–5) had been left unrevised despite the invocation-mechanism fix — caught during the Document 9 refinement pass and corrected to ~$0.50–3 in `03_FORGE_Tooling_v7.md` (see chat 24 note below).
+- ~~Document 9 (README) — Prerequisites and cost-reference sections reference the Agent SDK~~ — **done, chat 23 (this chat).** Actual review found the flagged assumption didn't hold: Document 9's Prerequisites bullet (`Anthropic API — an API key with Managed Agents beta access...`) never named the Claude Agent SDK, and the Cost reference table was already split by ADR-0010 mechanism (API tokens vs. Managed Agents runtime) rather than by invocation library — so neither section was actually factually wrong, unlike Docs 2 and 3, which did name the SDK explicitly and required real corrections. The one genuine gap: the reader-relevant *consequence* of ADR-0011 (elimination of the ~$0.10 cold-call cost + ~10s launch latency the Agent SDK's bundled CLI added per invocation) wasn't mentioned anywhere. Added a single footnote under the Cost reference table stating this, worded to match Document 3's ADR-0011 note. No other section changed. Also investigated whether the Prerequisites' "Node.js 20+ installed locally" line was Agent-SDK-driven (it would have been a genuine correction if so) — confirmed via Documents 2/3/6 that Node.js only appears in this document set in connection with `actions/create-github-app-token`'s own GitHub-hosted-runner requirement (not a local prerequisite) and with the target application's own TypeScript/Next.js stack — unrelated to the Agent SDK, so left unchanged. Produced `09-forge-readme_v4.md` (project file was already at v3 for reasons not reflected in this context doc's session log — treated v3 as the correct current baseline and incremented from there).
+- FORGE Build Plan — step 3.1's SDK-wrapper line; Phase 8.3's "ten seed ADRs" count needs to become eleven, and a step should track ADR-0011's actual commit to `core/decisions/`; this would be v4 — **still outstanding, next in queue**
+- ~~Document 6 (Orchestration Manager Guide) — added chat 22, not in the original ADR-0011 list.~~ Needs a new, explicit requirement: every stage-agent script from 3.2 onward MUST wrap `invoke_agent()` in try/except at the call site. — **done**, produced `06_Orchestration_v3.md`
 
 **ADR-0011 full text:** see `ADR-0011.md`, generated chat 21, awaiting commit to `core/decisions/` in `forge-template` (an organic addition beyond the original ten-seed-ADR list from Phase 1 — the governance model supports ADRs being added over time, per Document 4's not-yet-written RFC process).
 
@@ -297,7 +297,7 @@ These are hands-on findings from the Phase 2.9 access check, worth building corr
 ### Anthropic API billing (updated for Managed Agents)
 - **Standard API (all stages except Stage 3):** Per-token, Sonnet tier
 - **Managed Agents (Stage 3 coordinator + subagents):** Standard token rates **plus $0.08 per agent session-hour** of active runtime
-- Per-pipeline cost estimate: ~$1–5 USD for token costs (Sonnet tier) + $0.08–0.32 for Managed Agents runtime (estimate 1–4 hours per implementation run). Track actuals during App 1.
+- Per-pipeline cost estimate: ~$0.50–3 USD for token costs (Sonnet tier, revised down from $1–5 per ADR-0011's SDK-overhead removal) + $0.08–0.32 for Managed Agents runtime (estimate 1–4 hours per implementation run). Track actuals during App 1.
 
 ### ADO field mapping (resolved)
 - **FORGE writes automatically:** Title, Description, Acceptance Criteria (User Stories), Parent links, State (Active), Area Path (from team config default), Tags (`forge-managed`, `<request-id>`), traceability links
@@ -317,7 +317,7 @@ These are hands-on findings from the Phase 2.9 access check, worth building corr
 - Short-lived installation token generated per job via `actions/create-github-app-token@v3` (bumped from the deprecated Node-20-only `@v1` during Phase 2; `@v3` also renamed the `app-id` input to `client-id`)
 
 ### Cost summary (updated)
-- Build phase incremental cost: Anthropic API tokens (~$1–5 USD per full pipeline run for token costs, plus ~$0.08–0.32 for Managed Agents runtime — track actuals) + Azure Container Registry (~$0.17/day)
+- Build phase incremental cost: Anthropic API tokens (~$0.50–3 USD per full pipeline run for token costs, revised down from $1–5 per ADR-0011's SDK-overhead removal, plus ~$0.08–0.32 for Managed Agents runtime — track actuals) + Azure Container Registry (~$0.17/day)
 - No net-new SaaS contracts required with default tool choices
 - ACR has no pause/deallocate option — only delete/recreate stops the daily charge. Accepted as a small ongoing build-phase cost rather than torn down between work sessions.
 
@@ -330,13 +330,13 @@ These are hands-on findings from the Phase 2.9 access check, worth building corr
 | 0 | FORGE Introduction | ✅ Complete | No |
 | 1 | FORGE Product Specification | ✅ Complete — **updated (chat 18, `01-forge-product-specification_v2.md`)** | Yes — Section 3.3 Implementation Coordinator correction (originally mis-scoped as "No" — see chat 18) |
 | 2 | FORGE Architecture Document | ✅ Complete — **updated (chat 12, `02-forge-architecture-document-v2.md`)** | Done |
-| 3 | Tool & Licensing Inventory | ✅ Complete — **updated (chat 14, `03_Tooling_v2.md`)** | Done |
+| 3 | Tool & Licensing Inventory | ✅ Complete — **updated for ADR-0011 cost-estimate alignment (chat 24, `03_FORGE_Tooling_v7.md`)** | Done (Managed Agents, chat 14); Done (ADR-0011, chat 24) |
 | 4 | FORGE Governance Model | ✅ Complete — **needs update** | Yes — ADR-0010 added to seed ADR list |
 | 5 | AI Foundations Guide | ✅ Complete — **updated (chat 15, `05_AI_Foundation_v2.md`)** | Done |
 | 6 | Orchestration Manager Guide | ✅ Complete — **updated (chat 16, `06_Orchestration_v2.md`)** | Done |
 | 7 | Customization Reference | ✅ Complete — **updated (chat 16, `07_Customization_Ref_v2.md`)** | Done |
 | 8 | Excel Intake Template | ✅ Complete | No |
-| 9 | FORGE README | ✅ Complete — **updated (chat 17, `09-forge-readme_v2.md`)** | Done |
+| 9 | FORGE README | ✅ Complete — **refined post-Claude-Code review (chat 24, `09-forge-readme_v5.md`)** | Done (ADR-0010, chat 17); Done (ADR-0011, chat 23–24) |
 | — | FORGE Build Plan | ✅ Complete — **updated (chat 13, `FORGE_Build_Plan_v2.md`)** | Done |
 
 **Update priority order for new chats:**
@@ -347,8 +347,10 @@ These are hands-on findings from the Phase 2.9 access check, worth building corr
 5. ~~Document 5 (AI Foundations) — training materials + orchestration concepts~~ — done, chat 15
 6. ~~Document 6 (Orchestration Manager Guide) — failure handling~~ — done, chat 16
 7. ~~Document 7 (Customization Reference) — Agent Configuration + Pipeline & Orchestration sections~~ — done, chat 16 (turned out to be more than "minor" — see session note)
-8. ~~Document 9 (README) — minor update~~ — done, chat 17
+8. ~~Document 9 (README) — minor update~~ — done, chat 17 (ADR-0010); done again, chat 23 (ADR-0011)
 9. ~~Document 4 (Governance) — ADR-0010 seed ADR list~~ — **done**, not actually outstanding (see chat 22 drift-correction note)
+
+**ADR-0011 update queue (post chat-22 code verification):** ~~Document 2~~ → ~~Document 3 (v6)~~ → ~~Document 9 (v4)~~ → **Build Plan (v4) — next** → ~~Document 6 (try/except requirement)~~
 
 ---
 
@@ -501,6 +503,22 @@ Before Phase 3 (Agent Implementation), every developer working on the agent laye
   - **Build Plan reviewed for accuracy while user ran Claude Code.** Confirmed accurate throughout for ADR-0010 (Phases 3.1, 3.4a, 3.5–3.7, 4.4, 4.8, 4.9/4.10, 5.6, 5.10 all consistent). **Found it was missed from the ADR-0011 affected-documents list** — step 3.1's SDK-wrapper line is stale, and Phase 8.3's "ten seed ADRs" count doesn't account for ADR-0011, which also has no checklist step tracking its commit to `core/decisions/`. Added to the outstanding list above (would become Build Plan v4). Not edited this chat — same code-verification gate applies.
   - **ADR-0011 code verified this chat** — real diff, real smoke test output, independently-checked pricing table, and an honest error-handling design all reviewed and confirmed. See the verification note above. The gate is clear.
   - Next: per standing process (one document per chat thread), the ADR-0011 corrections should each get their own fresh chat, pasting in this context doc. Suggested order, following the existing priority convention (Document 2 first since other docs reference it): **Document 2 → Document 3 (v6) → Document 9 → Build Plan (v4) → Document 6 (new try/except requirement)**. Once those land, Phase 3 can continue at step 3.2 (Intake Agent) against a confirmed-final `invoke_agent()` signature.
+- **2026-07-29 (chat 23 — this chat):** Document 9 (README) reviewed and updated for ADR-0011, per queue order. (Documents 2, 3, and 6 were evidently completed in intervening chats not individually logged here — found already at v3, v6, and v3 respectively in the project at the start of this chat; content spot-checked and consistent with the ADR-0011 gate-cleared plan from chat 22, so treated as done rather than re-litigated. This context doc's own session log had fallen a step behind the actual project state — same category of drift as the chat-22 Document-4 correction, just less consequential since no incorrect "still outstanding" claim was actively being repeated.)
+  - **Genuine finding:** the chat-22 assumption that Document 9's "Prerequisites and cost-reference sections reference the Agent SDK" did not hold up — neither section actually named the Claude Agent SDK, so there was no factual error to correct there (unlike Documents 2 and 3, which did). Also checked whether the Prerequisites' "Node.js 20+ installed locally" line was Agent-SDK-driven — confirmed it isn't (Node.js appears elsewhere in the doc set only in connection with `create-github-app-token`'s GitHub-hosted-runner requirement and the target app's own TypeScript/Next.js stack) — left unchanged.
+  - **Actual change applied:** one footnote added under the Cost reference table noting ADR-0011's consequence for readers — elimination of the ~$0.10 cold-call cost and ~10-second launch latency the Agent SDK's bundled CLI added per invocation on the six non-Stage-3 stages — worded to match Document 3's ADR-0011 note. No other section changed.
+  - Produced `09-forge-readme_v4.md` (project file was already at v3, for reasons not reflected in this context doc — incremented from that actual baseline rather than the v2 the session log implied).
+  - File is in `/mnt/user-data/outputs/` awaiting upload to the project — the user will upload it and remove the old `09-forge-readme_v3.md`.
+  - **ADR-0011 update queue: only the Build Plan (v4) remains** — step 3.1's SDK-wrapper line, Phase 8.3's "ten seed ADRs" → eleven, and a new checklist step tracking ADR-0011's commit to `core/decisions/`.
+  - Next: Build Plan (v4) in a fresh chat. Once that lands, Phase 3 can continue at step 3.2 (Intake Agent) against the confirmed-final `invoke_agent()` signature.
+- **2026-07-29 (chat 24 — this chat):** User ran the chat-23 draft of Document 9 (`09-forge-readme_v4.md`) past Claude Code, which suggested two further refinements beyond what this chat had caught:
+  1. **Prerequisites / Anthropic API bullet rewritten** — the prior wording ("an API key with Managed Agents beta access... for Stage 3") could read as if beta access were a blanket requirement. Reworded to state plainly that a standard key covers Intake, Requirements, Design, QA, Security, and Deploy, and that Managed Agents beta access is an *additional* requirement specific to Stage 3. Accepted without reservation — genuine clarity improvement, no downstream conflict.
+  2. **Cost reference token-cost estimate revised from ~$1–5 USD to ~$0.50–3 USD**, reasoning that the lower floor reflects removal of the Agent SDK's ~$0.10 cold-call overhead per invocation across the six non-Stage-3 stages (ADR-0011). Also relabeled the Managed Agents cost row "(Stage 3 only)" for clarity.
+  - **Caught before applying:** this second change would have put Document 9 out of sync with Document 3 v6, which still stated ~$1–5 for the same figure (Document 3's own ADR-0011 pass, done in an intervening untracked chat, updated the invocation-mechanism rows but never revisited the dollar estimate). Flagged this to the user rather than applying Document 9's number in isolation.
+  - **User decision: align both documents on ~$0.50–3 now.** Updated Document 3 (`03_FORGE_Tooling_v6.md` → `03_FORGE_Tooling_v7.md`): the Cost Summary table row and the §3.3 cost-estimation note both revised to ~$0.50–3 USD, with an inline note explaining the figure was revised down from $1–5 to reflect ADR-0011's overhead removal. Also swept this context document itself for the same stale figure — both instances under "Anthropic API billing" and "Cost summary" (Key Decisions section) updated to match, since this document is meant to be the authoritative living reference and would otherwise itself be a third inconsistent source.
+  - **Produced `09-forge-readme_v5.md`** (supersedes the chat-23 `09-forge-readme_v4.md` — that file should NOT be uploaded; use v5) and **`03_FORGE_Tooling_v7.md`**. Both are in `/mnt/user-data/outputs/`.
+  - **Note for future sessions:** this is the second time in two chats that a "gate cleared, done" document turned out to need a follow-up pass (Document 3 here; the Document-9-assumption-didn't-hold finding in chat 23). Worth treating "done" status on ADR-0011 documents as provisional until Phase 3 actually exercises `invoke_agent()` against real stage scripts — a live run may well surface further drift the same way Phase 3.1 did originally.
+  - **ADR-0011 update queue: only the Build Plan (v4) remains outstanding** (step 3.1's SDK-wrapper line, "ten seed ADRs" → eleven, new checklist step for ADR-0011's commit to `core/decisions/`). Document 3 is now fully current at v7 — no further ADR-0011 work expected there barring new findings.
+  - Next: Build Plan (v4) in a fresh chat, pasting in this context doc.
 
 ---
 

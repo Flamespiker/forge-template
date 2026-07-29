@@ -39,7 +39,7 @@ Before you start, make sure you have:
 - **GitHub** — a repository for your application code (the "target" monorepo) and permissions to create a GitHub App
 - **Azure** — an active subscription with permissions to create Container Apps environments and a Container Registry
 - **Azure DevOps** — a project with Boards enabled; a Personal Access Token with Work Items (Read & Write) scope
-- **Anthropic API** — an API key with **Managed Agents beta access** (`managed-agents-2026-04-01` header) for Stage 3; Opus tier for the Implementation Coordinator, Sonnet tier for all other stages
+- **Anthropic API** — an API key at Sonnet tier or higher. Stage 3 (Implementation) additionally requires **Managed Agents beta access** (`managed-agents-2026-04-01` header) — request this from Anthropic if your account doesn't already have it. All other stages call the standard Messages API and need no beta flags. Opus tier is used for the Stage 3 coordinator; Sonnet tier for everything else.
 - **Node.js 20+** and **Docker** installed locally
 
 > **Build phase note:** A personal Anthropic API account and personal Azure subscription are fine for initial setup. Before going to production, plan to migrate to your organisation's accounts.
@@ -240,8 +240,8 @@ Per full pipeline run (estimate — measure your actuals during App 1):
 
 | Item | Cost |
 |---|---|
-| Anthropic API (token costs) | ~$1–5 USD (Sonnet tier) |
-| Managed Agents runtime (Stage 3 coordinator + subagents) | ~$0.08–0.32 USD (session-hour billing, in addition to token costs — estimate 1–4 hours per implementation run) |
+| Anthropic API (token costs, all stages) | ~$0.50–3 USD per run (Sonnet tier for stages 0–2, 4–6; Opus tier for Stage 3 coordinator) |
+| Managed Agents runtime (Stage 3 only) | ~$0.08–0.32 USD (session-hour billing, in addition to token costs — estimate 1–4 hours per implementation run) |
 | Azure Container Registry | ~$0.17/day |
 | GitHub Actions minutes | Included in most plans |
 | Security tooling (Semgrep, Gitleaks, OWASP Dependency-Check) | Free (open source) |

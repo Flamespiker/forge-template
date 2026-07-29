@@ -61,41 +61,29 @@ Individual installs done during this session (all now in requirements.txt):
 pip install openpyxl
 pip install PyYAML
 pip install python-dotenv
-pip install claude-agent-sdk==0.2.128
+pip install anthropic
 ```
-
-### Version pin rationale
-
-`claude-agent-sdk` is pinned to an **exact version** (`==0.2.128`), not a floor.
-The SDK is Alpha-classified and has already had one breaking rename (`ClaudeCodeOptions` →
-`ClaudeAgentOptions`). Update the pin deliberately after testing each new version.
 
 ---
 
 ## Key Decisions Made This Session
 
-### claude-agent-sdk vs anthropic package
+### Agent invocation — anthropic Messages API (ADR-0011)
 
-- All non-Stage-3 agents use **`claude-agent-sdk`** (`from claude_agent_sdk import query, ClaudeAgentOptions`)
-- `query()` is the async one-shot call that drives the full Claude Code agent loop
-- The base `anthropic` pip package is NOT imported directly anywhere in FORGE code
-  (it is a transitive dependency of claude-agent-sdk)
+- All non-Stage-3 agents use the **`anthropic`** Python package directly
+  (`import anthropic` → `anthropic.Anthropic().messages.create(...)`)
+- Each call is a single-turn Messages API request — system prompt + user prompt → text response.
+  There is no tool-use loop; FORGE's Python layer handles all file I/O for these stages.
+- `invoke_agent()` signature: `system_prompt`, `user_prompt`, `max_tokens` (required),
+  `model`, `stage_name`, `request_id`. The `allowed_tools` parameter is gone.
 - Stage 3 (Implementation) uses **raw `requests`** for the Managed Agents beta REST endpoints
-  because those endpoints are not exposed through claude-agent-sdk
+  (separate mechanism entirely — see managed_agents_wrapper.py and ADR-0010).
 
-### Tool scoping (allowed_tools)
-
-`invoke_agent()` accepts `allowed_tools: list[str]`. Each agent script MUST pass only what
-that stage needs — the SDK default gives Claude the full toolset (Read, Write, Edit, Bash, etc.):
-
-| Stage | allowed_tools |
-|-------|--------------|
-| Intake | `["Read"]` |
-| Requirements | `["Read"]` |
-| Design | `["Read", "Write"]` |
-| QA | `["Read", "Bash"]` |
-| Security | `["Read", "Bash"]` |
-| Deploy | `["Read", "Bash"]` |
+**Why not claude-agent-sdk?** ADR-0011: the SDK bundled the Claude Code CLI subprocess,
+imposing ~25,700 tokens of fixed overhead (~$0.10 cold-call cost) and a ~10-second launch
+latency floor on every call, even though all six stages were already passing `allowed_tools=[]`
+— the tool-use capability was provisioned but never exercised. The switch eliminates that
+overhead with no loss of capability for these stages.
 
 ### AgentResult — token/cost fields (IMPORTANT: read before using for cost tracking)
 
@@ -105,29 +93,24 @@ that stage needs — the SDK default gives Claude the full toolset (Read, Write,
 
 Grep for `"forge_event": "agent_invocation"` in Actions logs to find all invocations.
 
-**CRITICAL — use `total_cost_usd` as ground truth, NOT `input_tokens`:**
+**total_cost_usd is computed from a rate table in the wrapper — not supplied by the API:**
 
-The SDK wraps the Claude Code CLI as a subprocess. On every call, the CLI sends its full
-system prompt + all built-in tool definitions to the API (~25,693 tokens), regardless of
-`allowed_tools`. The `allowed_tools` parameter becomes `--allowedTools` on the CLI — a
-runtime execution permission filter, NOT an API token filter. The full tool payload is
-prompt-cached after the first call per session:
+The Messages API returns token counts only. `claude_agent_wrapper.py` maintains `_MODEL_RATES`,
+a per-model USD-per-MTok table, and computes `total_cost_usd` from the response usage object.
+If the model is not in the table, `total_cost_usd` is `None` and a warning is logged.
 
-| Call | cache_creation_tokens | cache_read_tokens | approx cost |
-|------|----------------------|-------------------|-------------|
-| First (cold) | ~25,693 | 0 | ~$0.096 |
-| Subsequent (warm) | 0 | ~25,693 | ~$0.008 |
+Current rates in `_MODEL_RATES` (source: `platform.claude.com/docs/en/about-claude/pricing`, 2026-07-29):
 
-`input_tokens` reflects only the user message (typically 3–50 tokens) — useless as a cost
-proxy. The CLI also makes an internal Haiku call (~500 tokens, ~$0.0005) included in
-`total_cost_usd` automatically.
+| Model | input | output | cache_write (5-min) | cache_read |
+|-------|-------|--------|---------------------|------------|
+| claude-sonnet-4-6 | $3.00/MTok | $15.00/MTok | $3.75/MTok | $0.30/MTok |
+| claude-opus-4-6   | $5.00/MTok | $25.00/MTok | $6.25/MTok | $0.50/MTok |
+| claude-haiku-4-5  | $1.00/MTok |  $5.00/MTok | $1.25/MTok | $0.10/MTok |
 
-**Document 3 cost tables must key off `total_cost_usd`, not token counts.**
+**Document 3 cost tables must key off `total_cost_usd`, not raw token counts.**
 
-This was verified against real API output during smoke testing:
-- `total_cost_usd: 0.09652` (first call) = cache creation of ~25,693 tokens at $3.75/MTok
-- `total_cost_usd: 0.00843` (second call) = cache read of ~25,693 tokens at $0.30/MTok
-- Arithmetic closes to within rounding on both runs.
+For plain Messages API calls (no `cache_control`), `cache_creation_tokens` and
+`cache_read_tokens` will both be zero; cost = `(input × input_rate + output × output_rate) / 1M`.
 
 ### GitHub App token generation
 
@@ -252,7 +235,7 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 | Test | Status | Notes |
 |------|--------|-------|
 | `smoke_file_io` | **PASSED 7/7** | Path bug fixed (`parents[5]` → `parents[4]`); xlsx + markdown + yaml all passing |
-| `smoke_claude_agent` | **PASSED 5/5** | cache_creation_tokens / cache_read_tokens now verified in AgentResult and JSON log |
+| `smoke_claude_agent` | **PASSED 5/5** | Rewritten for anthropic Messages API (ADR-0011); rate-table cost verified ($0.00021 for 30in/8out tokens on Sonnet 4.6) |
 | `smoke_ado` | **PASSED 4/4** | Fixed: drop `System.State` from all four `_make_patch` calls — only `"New"` is valid as initial state in FORGE-Build |
 | `smoke_github` | **PASSED 7/7** | post_comment/add_label retargeted to forge-template; commit_files + open_pr verified against forge-demo-apps |
 | `smoke_managed_agents` | **PASSED 6/6** | Multi-agent path verified: coordinator + smoke-specialist subagent, 2-thread audit trail, specialist received delegation and replied DONE, archive of both agent resources, session.error scan clean |
