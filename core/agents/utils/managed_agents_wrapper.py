@@ -14,31 +14,56 @@ Why this module uses raw requests instead of claude-agent-sdk:
     the requests library for all calls and sets the beta header manually on every
     request. The anthropic pip package is not used here either — requests is sufficient.
 
-Key implementation notes (from Phase 2.9 hands-on verification — do not change without
-re-testing against the live API):
+Key implementation notes (verified against Anthropic reference docs — do not change
+without re-testing against the live API):
 
   1. The beta header "managed-agents-2026-04-01" is required on every request.
-     Without it, the API returns a 404 or behaves as the standard messages API.
 
-  2. Event body shape — the events endpoint requires a NESTED structure:
+  2. Agent creation flow — subagents cannot be declared inline. The correct sequence:
+       a. POST /v1/agents for each subagent (name + model + system + tools).
+          "name" is required on every agent creation call.
+       b. POST /v1/agents for the coordinator, declaring the subagent roster in:
+              "multiagent": {"type": "coordinator", "agents": ["<subagent_id>", ...]}
+          The coordinator also needs tools: [{"type": "agent_toolset_20260401"}] so it
+          can delegate. Omit multiagent entirely when there are no subagents.
+       c. POST /v1/environments  (top-level resource — NOT nested under an agent)
+       d. POST /v1/sessions      (top-level resource)
+              body: {"agent": {"type": "agent", "id": ..., "version": ...},
+                     "environment_id": ...}
+     The old shape — POST /v1/agents with "subagents": [...], then nested
+     /agents/{id}/environments and /agents/{id}/environments/{eid}/sessions —
+     is rejected with HTTP 400 ("unknown field subagents").
+
+  3. Event body shape — the events endpoint requires a NESTED structure:
          {"events": [{"type": "user.message", "content": [{"type": "text", "text": "..."}]}]}
-     DO NOT flatten this to a top-level "content" field — the API rejects that with
-     a 400 ("unknown field 'content'"). The nesting is intentional and non-obvious.
+     DO NOT flatten to a top-level "content" field — the API rejects that with 400.
 
-  3. Archive order — always archive in this sequence: session → agent → environment.
-     Reversing the order causes 400 errors because environments cannot be destroyed
-     while sessions still reference them.
+  4. Error detection — errors surface as session.error events in the event stream, NOT as
+     a distinct session status value. poll_until_idle() scans GET /v1/sessions/{sid}/events
+     after reaching idle status and raises if any session.error events are found.
+     "idle" status alone does NOT mean the run succeeded.
 
-  4. Archive race condition — a session can flip from "idle" back to "running" briefly
-     (trailing extended-thinking wrap-up) immediately after the poller sees it idle.
-     The archive_session() function wraps the session archive call in a retry loop.
-     Do NOT treat a transient "cannot be archived while status is running" as fatal.
+  5. stop_reason on session.status_idle events:
+     - "end_turn" → completed normally, safe to archive.
+     - "requires_action" → session is blocked waiting for a tool confirmation. FORGE agents
+       use agent_toolset_20260401 without always_ask permission policies, so this should
+       never occur in normal operation. poll_until_idle() raises if it does, rather than
+       hanging indefinitely.
 
-  5. Model split per ADR-0010:
+  6. "terminated" status means an unrecoverable orchestration-layer error — it should not
+     appear during a normal poll-for-idle loop and is treated as a fatal error.
+     The old states (failed, cancelled) no longer exist in the API.
+
+  7. Archive order: session → environment → coordinator agent → each subagent agent.
+     archive_session() accepts a coordinator_id and an optional subagent_ids list.
+
+  8. Archive race condition — a session can flip from "idle" back to "running" briefly.
+     archive_session() wraps the session archive call in a retry-with-backoff loop.
+
+  9. Model split per ADR-0010:
      - Coordinator: Opus tier (higher reasoning for synthesis and integration)
      - Subagents: Sonnet tier (sufficient for bounded specialist tasks)
-     Both are configurable via the COORDINATOR_MODEL / SUBAGENT_MODEL env vars
-     (or passed as arguments) because exact model strings may shift during the beta.
+     Both are configurable via the COORDINATOR_MODEL / SUBAGENT_MODEL env vars.
 
 Required environment variables (see .env.example):
     ANTHROPIC_API_KEY — must have Managed Agents beta access.
@@ -115,18 +140,21 @@ def create_agent_session(
     subagent_configs: list[dict],
     coordinator_model: str | None = None,
     subagent_model: str | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """
     Create a Managed Agents coordinator session with the given subagents.
 
-    Lifecycle created here: agent → environment → session.
+    Lifecycle created here: subagent agents → coordinator agent → environment → session.
+    Each subagent must be created as a separate agent resource before the coordinator
+    can reference it — inline subagent declarations do not exist in the current API.
+
     Call archive_session() when the session has run to completion.
 
     Args:
         coordinator_system_prompt: System prompt for the coordinator agent.
         subagent_configs: List of subagent definition dicts, each with keys:
             {
-                "name": str,              # e.g. "backend_agent"
+                "name": str,              # e.g. "backend_agent" — required by the API
                 "system_prompt": str,     # specialist agent instructions
                 "scoped_tools": list,     # tool definitions available to this subagent
             }
@@ -136,41 +164,64 @@ def create_agent_session(
             env var, or claude-sonnet-4-6.
 
     Returns:
-        Dict with keys: "agent_id", "environment_id", "session_id".
+        Dict with keys: "coordinator_id", "coordinator_version", "subagent_ids",
+        "environment_id", "session_id".
     """
     c_model = coordinator_model or os.environ.get("FORGE_COORDINATOR_MODEL", _DEFAULT_COORDINATOR_MODEL)
     s_model = subagent_model or os.environ.get("FORGE_SUBAGENT_MODEL", _DEFAULT_SUBAGENT_MODEL)
 
-    # 1. Create the coordinator agent
-    agent_body: dict[str, Any] = {
+    # 1. Create each subagent as a separate agent resource.
+    #    These must exist before the coordinator can reference them.
+    subagent_ids: list[str] = []
+    for cfg in subagent_configs:
+        subagent = _post("agents", {
+            "name": cfg["name"],
+            "model": s_model,
+            "system": cfg["system_prompt"],
+            "tools": cfg.get("scoped_tools", []),
+        })
+        subagent_ids.append(subagent["id"])
+        logger.info("Created subagent '%s': %s (model: %s)", cfg["name"], subagent["id"], s_model)
+
+    # 2. Create the coordinator agent, referencing subagent IDs in the multiagent roster.
+    #    agent_toolset_20260401 enables the coordinator to delegate to the roster agents.
+    #    Omit multiagent and agent_toolset entirely when there are no subagents (e.g. smoke test).
+    coordinator_body: dict[str, Any] = {
+        "name": "forge-coordinator",
         "model": c_model,
         "system": coordinator_system_prompt,
-        "subagents": [
-            {
-                "name": cfg["name"],
-                "model": s_model,
-                "system": cfg["system_prompt"],
-                "tools": cfg.get("scoped_tools", []),
-            }
-            for cfg in subagent_configs
-        ],
     }
-    agent = _post("agents", agent_body)
-    agent_id: str = agent["id"]
-    logger.info("Created coordinator agent: %s (model: %s)", agent_id, c_model)
+    if subagent_ids:
+        coordinator_body["tools"] = [{"type": "agent_toolset_20260401"}]
+        coordinator_body["multiagent"] = {
+            "type": "coordinator",
+            "agents": subagent_ids,
+        }
+    coordinator = _post("agents", coordinator_body)
+    coordinator_id: str = coordinator["id"]
+    coordinator_version: int = coordinator["version"]
+    logger.info("Created coordinator agent: %s v%s (model: %s)", coordinator_id, coordinator_version, c_model)
 
-    # 2. Create an execution environment
-    env = _post(f"agents/{agent_id}/environments", {})
+    # 3. Create an execution environment (top-level resource, not nested under the agent).
+    env = _post("environments", {
+        "name": "forge-implementation-env",
+        "config": {"type": "anthropic_cloud"},
+    })
     environment_id: str = env["id"]
     logger.info("Created environment: %s", environment_id)
 
-    # 3. Create the session
-    session = _post(f"agents/{agent_id}/environments/{environment_id}/sessions", {})
+    # 4. Create the session, pinning the coordinator to its exact version.
+    session = _post("sessions", {
+        "agent": {"type": "agent", "id": coordinator_id, "version": coordinator_version},
+        "environment_id": environment_id,
+    })
     session_id: str = session["id"]
     logger.info("Created session: %s", session_id)
 
     return {
-        "agent_id": agent_id,
+        "coordinator_id": coordinator_id,
+        "coordinator_version": coordinator_version,
+        "subagent_ids": subagent_ids,
         "environment_id": environment_id,
         "session_id": session_id,
     }
@@ -212,7 +263,19 @@ def poll_until_idle(
     poll_interval: int = _DEFAULT_POLL_INTERVAL,
 ) -> dict:
     """
-    Poll the session status until it reaches "idle" (or raises on timeout/error).
+    Poll the session status until it reaches "idle", then verify no errors occurred.
+
+    IMPORTANT — "idle" status alone does NOT mean the run succeeded. Errors surface
+    as session.error events in the event stream, not as a distinct status value. This
+    function scans the event stream after reaching idle and raises if any session.error
+    events are present.
+
+    Also checks the session.status_idle event's stop_reason:
+    - "end_turn"        → completed normally, returns the status dict.
+    - "requires_action" → session is blocked waiting for a tool confirmation. FORGE
+                          agents use agent_toolset_20260401 without always_ask policies,
+                          so this should never occur in normal operation. Raises rather
+                          than hanging indefinitely.
 
     Args:
         session_id: The session ID to poll.
@@ -223,8 +286,9 @@ def poll_until_idle(
         The final session status dict from the API.
 
     Raises:
-        TimeoutError: If the session has not become idle within timeout_seconds.
-        RuntimeError: If the session reaches a terminal error state.
+        TimeoutError:   If the session has not become idle within timeout_seconds.
+        RuntimeError:   If session.error events are found, stop_reason is requires_action,
+                        or the session reaches "terminated" status.
     """
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -233,10 +297,42 @@ def poll_until_idle(
         logger.debug("Session %s status: %s", session_id, state)
 
         if state == "idle":
-            logger.info("Session %s reached idle", session_id)
+            # Scan event stream for errors before declaring success.
+            events_resp = _get(f"sessions/{session_id}/events?limit=100")
+            events = events_resp.get("data", [])
+
+            # Check for session.error events — these carry the real error detail.
+            error_events = [e for e in events if e.get("type") == "session.error"]
+            if error_events:
+                error_detail = "; ".join(
+                    e.get("error", {}).get("message", "unknown error")
+                    for e in error_events
+                )
+                raise RuntimeError(
+                    f"Session {session_id} reported error(s) in event stream: {error_detail}"
+                )
+
+            # Check stop_reason on the most recent session.status_idle event.
+            idle_events = [e for e in events if e.get("type") == "session.status_idle"]
+            if idle_events:
+                stop_reason = idle_events[-1].get("stop_reason", {})
+                if stop_reason.get("type") == "requires_action":
+                    blocking_ids = stop_reason.get("event_ids", [])
+                    raise RuntimeError(
+                        f"Session {session_id} is paused waiting for tool confirmation "
+                        f"(stop_reason=requires_action). This is unexpected in FORGE's "
+                        f"autonomous mode — check whether agent_toolset_20260401 has an "
+                        f"always_ask permission policy set. Blocking event IDs: {blocking_ids}"
+                    )
+
+            logger.info("Session %s reached idle (end_turn)", session_id)
             return status
-        if state in {"failed", "cancelled", "archived"}:
-            raise RuntimeError(f"Session {session_id} reached terminal state: {state}")
+
+        if state == "terminated":
+            raise RuntimeError(
+                f"Session {session_id} reached 'terminated' status — "
+                "this indicates an unrecoverable error in the orchestration layer."
+            )
 
         time.sleep(poll_interval)
 
@@ -247,75 +343,117 @@ def poll_until_idle(
 
 def get_subagent_audit_trail(session_id: str) -> dict:
     """
-    Retrieve the per-subagent transcript and events for the Claude Console audit trail.
+    Retrieve the per-thread audit trail for a multiagent session.
 
-    Per ADR-0010, the coordinator session provides a full audit trail in Claude Console
-    showing what each subagent (Backend, Frontend, Test Writer) produced. This function
-    surfaces the raw API response so callers can log or link to it.
+    Lists all session threads via GET /v1/sessions/{sid}/threads. The primary thread
+    (parent_thread_id=null) carries the coordinator's trace. Each subagent runs in its
+    own child thread; thread.agent.name identifies which subagent it belongs to.
+    Per-thread events are fetched from GET /v1/sessions/{sid}/threads/{tid}/events.
+
+    Per ADR-0010, this provides the full audit trail in Claude Console showing what each
+    of the Backend, Frontend, and Test Writer subagents produced independently.
 
     Args:
         session_id: The session ID to retrieve the audit trail for.
 
     Returns:
-        The session events/transcript dict from the API.
+        Dict with keys:
+            "session_id"   — echoed for log correlation
+            "thread_count" — total number of threads (coordinator + subagents)
+            "threads"      — list of {thread_id, agent_name, parent_thread_id,
+                             status, events} dicts, one per thread
     """
-    audit = _get(f"sessions/{session_id}/events")
-    logger.info("Retrieved audit trail for session %s (%d event(s))", session_id, len(audit.get("events", [])))
-    return audit
+    threads_resp = _get(f"sessions/{session_id}/threads?limit=100")
+    threads = threads_resp.get("data", [])
+    logger.info("Retrieved %d thread(s) for session %s", len(threads), session_id)
+
+    thread_details = []
+    for thread in threads:
+        thread_id = thread["id"]
+        agent_name = thread.get("agent", {}).get("name", "unknown")
+        parent_id = thread.get("parent_thread_id")
+        events_resp = _get(f"sessions/{session_id}/threads/{thread_id}/events?limit=100")
+        thread_details.append({
+            "thread_id": thread_id,
+            "agent_name": agent_name,
+            "parent_thread_id": parent_id,
+            "status": thread.get("status"),
+            "events": events_resp.get("data", []),
+        })
+        logger.debug(
+            "  Thread %s (%s, parent=%s): %d event(s)",
+            thread_id, agent_name, parent_id, len(events_resp.get("data", [])),
+        )
+
+    return {
+        "session_id": session_id,
+        "thread_count": len(threads),
+        "threads": thread_details,
+    }
 
 
-def archive_session(agent_id: str, environment_id: str, session_id: str) -> None:
+def archive_session(
+    coordinator_id: str,
+    environment_id: str,
+    session_id: str,
+    subagent_ids: list[str] | None = None,
+) -> None:
     """
-    Archive a completed Managed Agents session, then its environment, then its agent.
+    Archive a completed session and all associated agent resources.
 
-    Archive order MUST be: session → environment → agent. Reversing causes 400 errors.
+    Archive order: session → environment → coordinator agent → each subagent agent.
 
-    The session archive call is wrapped in a retry-with-backoff because a session can
-    transiently flip from "idle" back to "running" immediately after the poller sees it
-    idle (trailing extended-thinking wrap-up). This is a known API behaviour observed
-    during Phase 2.9 verification — it is retryable, not a hard failure.
+    The session archive call is wrapped in retry-with-backoff because a session can
+    transiently flip from "idle" back to "running" briefly after the poller sees it idle.
+    This is retryable, not a hard failure.
 
     Args:
-        agent_id: Agent ID from create_agent_session().
-        environment_id: Environment ID from create_agent_session().
-        session_id: Session ID from create_agent_session().
+        coordinator_id:  Coordinator agent ID from create_agent_session().
+        environment_id:  Environment ID from create_agent_session().
+        session_id:      Session ID from create_agent_session().
+        subagent_ids:    List of subagent agent IDs from create_agent_session()["subagent_ids"].
+                         Each is archived after the coordinator. Pass None or [] if there
+                         are no subagents (e.g. smoke test with subagent_configs=[]).
 
     Raises:
         RuntimeError: If the session archive fails after all retries.
     """
-    # Archive session with retry-with-backoff
+    # 1. Archive session with retry-with-backoff.
     last_error: Exception | None = None
     for attempt in range(1, _ARCHIVE_RETRY_ATTEMPTS + 1):
         try:
             _archive(f"sessions/{session_id}/archive", f"session {session_id}")
-            break  # success
+            break
         except requests.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 400:
                 delay = _ARCHIVE_RETRY_BASE_DELAY * (2 ** (attempt - 1))
                 logger.warning(
                     "Session archive attempt %d/%d failed (status 400 — likely transient "
                     "'running' state). Retrying in %.1fs...",
-                    attempt,
-                    _ARCHIVE_RETRY_ATTEMPTS,
-                    delay,
+                    attempt, _ARCHIVE_RETRY_ATTEMPTS, delay,
                 )
                 last_error = exc
                 time.sleep(delay)
             else:
-                raise  # non-400 errors are not retryable
+                raise
     else:
         raise RuntimeError(
             f"Failed to archive session {session_id} after {_ARCHIVE_RETRY_ATTEMPTS} attempts"
         ) from last_error
 
-    # Archive environment, then agent
+    # 2. Archive environment.
     _archive(f"environments/{environment_id}/archive", f"environment {environment_id}")
-    _archive(f"agents/{agent_id}/archive", f"agent {agent_id}")
+
+    # 3. Archive coordinator agent.
+    _archive(f"agents/{coordinator_id}/archive", f"coordinator agent {coordinator_id}")
+
+    # 4. Archive each subagent agent.
+    for sid in (subagent_ids or []):
+        _archive(f"agents/{sid}/archive", f"subagent agent {sid}")
+
     logger.info(
-        "Full cleanup complete: session %s, environment %s, agent %s",
-        session_id,
-        environment_id,
-        agent_id,
+        "Full cleanup complete: session %s, environment %s, coordinator %s, %d subagent(s)",
+        session_id, environment_id, coordinator_id, len(subagent_ids or []),
     )
 
 
@@ -356,14 +494,16 @@ def run_implementation_stage(
         subagent_model=subagent_model,
     )
 
-    agent_id = ids["agent_id"]
+    coordinator_id = ids["coordinator_id"]
+    subagent_ids = ids["subagent_ids"]
     environment_id = ids["environment_id"]
     session_id = ids["session_id"]
 
     log_entry = {
         "forge_event": "managed_agents_session_start",
         "stage": "implementation",
-        "agent_id": agent_id,
+        "coordinator_id": coordinator_id,
+        "subagent_ids": subagent_ids,
         "environment_id": environment_id,
         "session_id": session_id,
     }
@@ -376,7 +516,7 @@ def run_implementation_stage(
     finally:
         # Always attempt cleanup, even if something above raised
         try:
-            archive_session(agent_id, environment_id, session_id)
+            archive_session(coordinator_id, environment_id, session_id, subagent_ids)
         except Exception as cleanup_err:
             logger.error("Cleanup failed for session %s: %s", session_id, cleanup_err)
 

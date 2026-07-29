@@ -137,8 +137,23 @@ The action uses `client-id` input, not `app-id`.
 
 Credentials in `forge-template` repo:
 - `FORGE_APP_ID` — secret
-- `FORGE_APP_PRIVATE_KEY` — secret
+- `FORGE_APP_PRIVATE_KEY` — secret (multiline PEM; in `.env` wrap in double quotes to preserve real newlines)
 - `FORGE_APP_CLIENT_ID` — **variable** (not secret — publicly visible on the App settings page)
+
+### github_helper.py — two auth contexts, two repo targets
+
+| Function | Auth | Target repo |
+|---|---|---|
+| `post_comment`, `add_label`, `remove_label` | `GITHUB_TOKEN` | `forge-template` (tracking issue lives here) |
+| `create_branch`, `commit_files`, `open_pr` | App installation token | `forge-demo-apps` (cross-repo work) |
+
+- `FORGE_SOURCE_REPO` env var names the orchestration repo (default: `forge-template`)
+- `FORGE_TARGET_REPO` env var names the monorepo (default: `forge-demo-apps`)
+- **Do NOT add `GITHUB_TOKEN` as a GitHub Actions secret** — Actions injects it automatically for same-repo workflows. Storing it as a secret would shadow the automatic token. Local dev only: fine-grained PAT scoped to `forge-template`, Issues R/W.
+
+### commit_files() — Git Data API
+
+`commit_files(branch_name, files: dict[str, str], commit_message)` writes files to a branch in `forge-demo-apps` via the Git Data API (blob → tree → commit → ref update). Required by Stage 3 (3.4/3.4a). Commits are attributed to `forge-pipeline[bot]` and verified by GitHub.
 
 ### ADO helper
 
@@ -174,19 +189,45 @@ Auth: HTTP Basic with blank username and PAT as password (standard ADO pattern).
 - Overview: all six canonical keys present, each a dict of field_label → value pairs
 - Requirements: R-001 through R-004 parsed correctly (Functional/Non-Functional, High/Medium/Low)
 
-### Managed Agents API — verified behaviour (Phase 2.9)
+### Managed Agents API — current schema (verified against Anthropic reference docs)
 
-- Beta header: `managed-agents-2026-04-01` required on every request
-- Events endpoint body must be **nested**:
+**Agent creation — multi-step, no inline subagents:**
+- `name` is required on every `POST /v1/agents` call
+- Subagents must be created as separate agent resources first, then the coordinator references them by ID:
   ```json
-  {"events": [{"type": "user.message", "content": [{"type": "text", "text": "..."}]}]}
+  "multiagent": {"type": "coordinator", "agents": ["<subagent_id>", ...]}
   ```
-  A flat top-level `"content"` field is rejected with HTTP 400.
-- Archive order: **session → environment → agent** (not reversible)
-- Archive race condition: session can flip `idle → running` briefly; `archive_session()` wraps
-  the session archive in a 3-attempt exponential-backoff retry (2s base delay)
-- Model split per ADR-0010: coordinator = Opus tier, subagents = Sonnet tier (both configurable
-  via `FORGE_COORDINATOR_MODEL` / `FORGE_SUBAGENT_MODEL` env vars)
+- The old `"subagents": [...]` inline field is gone — rejected with HTTP 400 (`"unknown field subagents"`)
+- Coordinator needs `"tools": [{"type": "agent_toolset_20260401"}]` to delegate; omit when no subagents
+
+**Resource hierarchy — all top-level, not nested:**
+- `POST /v1/environments` (body: `{"name": ..., "config": {"type": "anthropic_cloud"}}`)
+- `POST /v1/sessions` (body: `{"agent": {"type": "agent", "id": ..., "version": ...}, "environment_id": ...}`)
+- Old nested paths (`/v1/agents/{id}/environments`, `/v1/agents/{id}/environments/{eid}/sessions`) no longer exist
+
+**`create_agent_session()` return dict keys:** `coordinator_id`, `coordinator_version`, `subagent_ids`, `environment_id`, `session_id`
+(old key `agent_id` is gone — use `coordinator_id`)
+
+**Error detection — do NOT treat `idle` status as success:**
+- Errors surface as `session.error` events in the event stream, not as a distinct status
+- `poll_until_idle()` scans `GET /v1/sessions/{sid}/events` after reaching idle and raises on any `session.error` events
+- `session.status_idle` event carries `stop_reason.type`:
+  - `"end_turn"` → completed normally
+  - `"requires_action"` → blocked on tool confirmation — unexpected in FORGE's autonomous mode, raises explicitly
+
+**Session status values:** `idle`, `running`, `rescheduling`, `terminated`
+(old states `failed`, `cancelled` no longer exist; `terminated` = unrecoverable orchestration error)
+
+**Archive order:** session → environment → coordinator agent → each subagent agent
+`archive_session(coordinator_id, environment_id, session_id, subagent_ids=[...])`
+
+**Audit trail:** `get_subagent_audit_trail()` uses `GET /v1/sessions/{sid}/threads` — returns one thread per agent (coordinator has `parent_thread_id=null`; subagents have `parent_thread_id` set and `agent.name` identifying them). Per-thread events at `GET /v1/sessions/{sid}/threads/{tid}/events`.
+
+**Other unchanged behaviours:**
+- Beta header: `managed-agents-2026-04-01` required on every request
+- Events endpoint body must be nested: `{"events": [{"type": "user.message", "content": [...]}]}`
+- Archive race condition: session can flip `idle → running` briefly; archive wrapped in 3-attempt exponential-backoff retry (2s base)
+- Model split per ADR-0010: coordinator = Opus tier, subagents = Sonnet tier (`FORGE_COORDINATOR_MODEL` / `FORGE_SUBAGENT_MODEL`)
 
 ---
 
@@ -210,13 +251,15 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 
 | Test | Status | Notes |
 |------|--------|-------|
-| `smoke_file_io` | Not yet run | No credentials needed — safe to run anytime |
-| `smoke_claude_agent` | **PASSED 3/3** | Verified `query()`, `ResultMessage`, cost fields |
-| `smoke_ado` | Pending `.env` setup | Needs `ADO_PAT` |
-| `smoke_github` | Pending `.env` setup | Needs `FORGE_APP_*` vars |
-| `smoke_managed_agents` | Pending `.env` setup | Needs `ANTHROPIC_API_KEY` + beta access |
+| `smoke_file_io` | **PASSED 7/7** | Path bug fixed (`parents[5]` → `parents[4]`); xlsx + markdown + yaml all passing |
+| `smoke_claude_agent` | **PASSED 5/5** | cache_creation_tokens / cache_read_tokens now verified in AgentResult and JSON log |
+| `smoke_ado` | **PASSED 4/4** | Fixed: drop `System.State` from all four `_make_patch` calls — only `"New"` is valid as initial state in FORGE-Build |
+| `smoke_github` | **PASSED 7/7** | post_comment/add_label retargeted to forge-template; commit_files + open_pr verified against forge-demo-apps |
+| `smoke_managed_agents` | **PASSED 6/6** | Multi-agent path verified: coordinator + smoke-specialist subagent, 2-thread audit trail, specialist received delegation and replied DONE, archive of both agent resources, session.error scan clean |
 
-`.env` must be created locally (gitignored) — see `.env.example` for required vars.
+`.env` vars needed: `FORGE_APP_ID`, `FORGE_APP_PRIVATE_KEY`, `FORGE_APP_CLIENT_ID`, `FORGE_GITHUB_OWNER`, `FORGE_TARGET_REPO`, `FORGE_SOURCE_REPO`, `GITHUB_TOKEN`, `ADO_PAT`, `ANTHROPIC_API_KEY`
+
+**PEM format in `.env`:** wrap the full key in double quotes to preserve real newlines — `python-dotenv` requires this for multiline values. A trailing `""` (double double-quote) will break parsing.
 
 ---
 
@@ -224,5 +267,5 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 
 - **Document 4 (Governance)** — ADR-0010 still needs to be added to the seed ADR list.
   Deferred 5+ times. Should land before Phase 3 wraps up.
-- Complete remaining smoke tests (ado, github, managed_agents) once `.env` is in place.
+- **`smoke_managed_agents`** — run once ready; wrapper has been fully rewritten for the current API.
 - Phase 3 next step: **3.2 Intake Agent** (`core/agents/intake_agent.py`)

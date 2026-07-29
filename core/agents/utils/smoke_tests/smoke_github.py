@@ -1,16 +1,20 @@
 """
 Smoke test — github_helper.py
 
-Exercises the real GitHub API against forge-demo-apps using stored credentials.
+Exercises the real GitHub API using stored credentials.
 Run manually from the repo root:
     python -m core.agents.utils.smoke_tests.smoke_github
 
-Requires a .env file with: FORGE_APP_ID, FORGE_APP_PRIVATE_KEY,
-FORGE_GITHUB_OWNER, FORGE_TARGET_REPO.
+Requires a .env file with:
+    FORGE_APP_ID, FORGE_APP_PRIVATE_KEY, FORGE_GITHUB_OWNER,
+    FORGE_TARGET_REPO, FORGE_SOURCE_REPO, GITHUB_TOKEN
 
-This script does NOT commit or push anything. It creates a test branch,
-posts a comment on issue #1 (must exist), adds/removes a label, and
-opens + immediately closes a draft PR. All changes are ephemeral.
+Two repos are exercised:
+  forge-template  — post_comment, add_label, remove_label (GITHUB_TOKEN)
+                    Requires issue #1 and label "forge-smoke-test" to exist there.
+  forge-demo-apps — create_branch, commit_files, open_pr (App installation token)
+
+The test branch and PR are cleaned up after the run.
 """
 
 from __future__ import annotations
@@ -70,25 +74,57 @@ def main():
         lambda: gh.remove_label(1, "forge-smoke-test"),
     )
 
-    # create_branch — creates a throwaway branch
+    # create_branch — creates a throwaway branch in forge-demo-apps
     branch_name = "forge-smoke-test-branch"
     branch = run(
         f"create_branch('{branch_name}', 'main')",
         lambda: gh.create_branch(branch_name, "main"),
     )
 
-    # open_pr — requires the branch to have at least one commit ahead of main
-    # This will likely fail if branch is identical to main (no diff) — that's expected
-    run(
-        "open_pr (expected to fail if branch has no commits ahead of main)",
-        lambda: gh.open_pr(
-            title="FORGE smoke test PR — delete me",
-            body="This PR was created by the FORGE smoke test. Safe to close.",
-            head_branch=branch_name,
-            base_branch="main",
-            draft=True,
-        ),
+    # commit_files — write a real file so the branch is ahead of main (required for open_pr)
+    pr = None
+    if branch:
+        run(
+            f"commit_files('{branch_name}', {{smoke file}}, ...)",
+            lambda: gh.commit_files(
+                branch_name=branch_name,
+                files={"forge-smoke-test.txt": "FORGE smoke test — safe to delete.\n"},
+                commit_message="chore: FORGE smoke test commit — safe to delete",
+            ),
+        )
+
+        # open_pr — branch now has a real commit ahead of main
+        pr = run(
+            "open_pr (draft PR on non-empty branch)",
+            lambda: gh.open_pr(
+                title="FORGE smoke test PR — delete me",
+                body="This PR was created by the FORGE smoke test. Safe to close.",
+                head_branch=branch_name,
+                base_branch="main",
+                draft=True,
+            ),
+        )
+
+    # Cleanup — close the PR and delete the branch
+    token = gh.get_installation_token()
+    import requests as _requests
+    owner = gh._repo_url().split("/repos/")[1].split("/")[0]
+    repo = gh._repo_url().split("/repos/")[1].split("/")[1]
+    if pr:
+        pr_num = pr.get("number")
+        _requests.patch(
+            f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_num}",
+            headers=gh._auth_headers(token),
+            json={"state": "closed"},
+            timeout=15,
+        )
+        print(f"       Closed PR #{pr_num}")
+    _requests.delete(
+        f"https://api.github.com/repos/{owner}/{repo}/git/refs/heads/{branch_name}",
+        headers=gh._auth_headers(token),
+        timeout=15,
     )
+    print(f"       Deleted branch '{branch_name}'")
 
     print("\n=== Results ===")
     passed = sum(1 for _, ok in results if ok)

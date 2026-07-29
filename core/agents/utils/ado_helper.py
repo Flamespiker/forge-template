@@ -106,7 +106,6 @@ def create_epic(title: str, description: str) -> dict:
         "System.Description": description,
         "System.AreaPath": _AREA_PATH,
         "System.Tags": _tag_string(),
-        "System.State": "Active",
     })
     return _create_work_item("Epic", patch)
 
@@ -128,7 +127,6 @@ def create_feature(title: str, description: str, parent_epic_id: int) -> dict:
         "System.Description": description,
         "System.AreaPath": _AREA_PATH,
         "System.Tags": _tag_string(),
-        "System.State": "Active",
     })
     feature = _create_work_item("Feature", patch)
     link_items(parent_epic_id, feature["id"])
@@ -159,7 +157,6 @@ def create_user_story(
         "Microsoft.VSTS.Common.AcceptanceCriteria": acceptance_criteria,
         "System.AreaPath": _AREA_PATH,
         "System.Tags": _tag_string(),
-        "System.State": "Active",
     })
     story = _create_work_item("User Story", patch)
     link_items(parent_feature_id, story["id"])
@@ -190,7 +187,6 @@ def create_bug(
         "Microsoft.VSTS.Common.Severity": severity,
         "System.AreaPath": _AREA_PATH,
         "System.Tags": _tag_string(),
-        "System.State": "Active",
     })
     bug = _create_work_item("Bug", patch)
     link_items(parent_story_id, bug["id"])

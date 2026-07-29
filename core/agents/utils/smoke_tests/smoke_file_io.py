@@ -40,7 +40,7 @@ def main():
     print("=== File I/O Smoke Test ===\n")
 
     # ── Excel ──────────────────────────────────────────────────────────────────
-    template_path = Path(__file__).parents[5] / "docs" / "Intake Template.xlsx"
+    template_path = Path(__file__).parents[4] / "docs" / "Intake Template.xlsx"
     if template_path.exists():
         data = run(
             f"read_xlsx('{template_path.name}')",
