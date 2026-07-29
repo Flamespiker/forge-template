@@ -140,6 +140,11 @@ def read_xlsx(path: str | Path) -> dict[str, Any]:
             label = str(row[1] or "").strip() if len(row) > 1 else ""
             value = str(row[2] or "").strip() if len(row) > 2 else ""
             if label:
+                # Unfilled template cells still contain the instructional example text,
+                # always wrapped in square brackets (e.g. "[Example: FORGE-2026-001 ...]").
+                # Treat that as blank rather than real BA input.
+                if value.startswith("[") and value.endswith("]"):
+                    value = ""
                 overview[current_section][label] = value or None
 
     logger.debug("Parsed Overview sheet: %s sections found", len(overview))
