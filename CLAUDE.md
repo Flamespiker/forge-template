@@ -248,7 +248,6 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 
 ## Outstanding Before Phase 3 Continues
 
-- **Document 4 (Governance)** — ADR-0010 still needs to be added to the seed ADR list.
-  Deferred 5+ times. Should land before Phase 3 wraps up.
-- **`smoke_managed_agents`** — run once ready; wrapper has been fully rewritten for the current API.
-- Phase 3 next step: **3.2 Intake Agent** (`core/agents/intake_agent.py`)
+- Document 4 (Governance) already lists ADR-0010 as the 10th seed ADR — this is done.
+- ADR-0011 is committed at `core/decisions/0011-base-anthropic-client.md` — this is done.
+- Phase 3 next step: **3.2 Intake Agent** (`core/agents/intake_agent.py`) — in progress.
