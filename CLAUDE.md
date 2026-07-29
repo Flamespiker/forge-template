@@ -24,7 +24,9 @@ security → deploy) with human approval gates at each stage.
 
 **Phase 3 — Agent Implementation** (in progress)
 
-Step 3.1 (shared agent utilities) is complete. Files created:
+Step 3.1 (shared agent utilities) is complete. Step 3.2 (Intake Agent) is complete.
+
+Files created:
 
 ```
 core/agents/utils/
@@ -41,6 +43,10 @@ core/agents/utils/
         smoke_file_io.py
         smoke_claude_agent.py
         smoke_managed_agents.py
+core/agents/
+    intake_agent.py
+core/decisions/
+    0011-base-anthropic-client.md
 requirements.txt
 .env.example
 ```
@@ -168,9 +174,35 @@ Auth: HTTP Basic with blank username and PAT as password (standard ADO pattern).
   e.g. `overview["request_identification"]["Request ID"]` → the BA's value directly.
   Empty dict `{}` if the BA left the section blank.
 
+**Bracket-placeholder stripping (added during Step 3.2):**
+- Unfilled template cells retain the instructional example text, e.g. `[Example: FORGE-2026-001 ...]`
+- Any Overview value that starts with `[` AND ends with `]` is treated as blank (set to `None`)
+- This prevents example text from reaching Claude as if it were real BA input, and saved 418 tokens
+  on the first live Intake Agent run
+
 **Real parsed output confirmed against `docs/Intake Template.xlsx`:**
 - Overview: all six canonical keys present, each a dict of field_label → value pairs
 - Requirements: R-001 through R-004 parsed correctly (Functional/Non-Functional, High/Medium/Low)
+
+### intake_agent.py — Stage 0b
+
+Entry point: `python -m core.agents.intake_agent --spreadsheet <path> --issue-number <n>`
+
+- `--dry-run` flag: calls Claude and prints the comment to stdout without posting to GitHub or applying the label. Used for local review before the real pipeline is wired in Phase 4.
+- `--request-id`: optional override; defaults to the spreadsheet's `Request ID` field (after bracket-placeholder stripping). Falls back to `"unknown"` if blank.
+- `_MAX_TOKENS = 2048` — sufficient for 5–7 questions; adjust if the output regularly hits the ceiling.
+- `sys.stdout.reconfigure(encoding="utf-8")` is the first line of `main()` — required on Windows to prevent `UnicodeEncodeError` when printing the 🧭 emoji in the comment header.
+
+**Exception handling pattern (per ADR-0011):**
+`invoke_agent()` is wrapped in `try/except` at the call site. On failure the agent posts a
+structured failure comment to the tracking issue (best-effort) before re-raising, so the
+GitHub Actions job fails loudly with a visible GitHub comment rather than silently. All six
+stage agent scripts must follow this pattern.
+
+**Live run verified 2026-07-29:**
+- Issue `forge-template#2`, request-id `REQ-2026-01`
+- 1,045 input tokens / 472 output tokens / `total_cost_usd: $0.010215` / 13.3 s
+- 6 questions posted; `clarification-pending` label applied
 
 ### Managed Agents API — current schema (verified against Anthropic reference docs)
 
@@ -248,6 +280,7 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 
 ## Outstanding Before Phase 3 Continues
 
-- Document 4 (Governance) already lists ADR-0010 as the 10th seed ADR — this is done.
-- ADR-0011 is committed at `core/decisions/0011-base-anthropic-client.md` — this is done.
-- Phase 3 next step: **3.2 Intake Agent** (`core/agents/intake_agent.py`) — in progress.
+- Document 4 (Governance) already lists ADR-0010 as the 10th seed ADR — done.
+- ADR-0011 committed at `core/decisions/0011-base-anthropic-client.md` — done.
+- Step 3.2 Intake Agent (`core/agents/intake_agent.py`) — done; live run verified on issue #2.
+- Phase 3 next step: **3.3 Requirements Agent** (`core/agents/requirements_agent.py`)
