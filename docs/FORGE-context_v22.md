@@ -2,7 +2,7 @@
 
 **Project:** FORGE — Full-SDLC Orchestration with Review Gates for Engineers  
 **Owner:** Mike Faulkner (mfaulkner@legalaid.ab.ca) — Legal Aid Alberta  
-**Last Updated:** 2026-07-29 (Phase 3.1 complete, ADR-0011 decided — chat 21)  
+**Last Updated:** 2026-07-29 (Document 4 drift corrected, ADR-0011 code rewrite sent back to Claude Code — chat 22)  
 **Purpose:** Living reference document. Read this at the start of every new chat to restore full project context without re-explanation.
 
 ---
@@ -141,7 +141,7 @@ PRs are always **opened by the agent, confirmed/approved by a human** — never 
 **Affected documents requiring update:**
 - Document 2 (Architecture) — Sections 2.2, 3, 4.5; ADR-0002 clarification note — ✅ done, chat 12
 - Document 3 (Tool Inventory) — Managed Agents billing row in Anthropic section — ✅ done, chat 14
-- Document 4 (Governance) — ADR-0010 added to seed ADR list (10th ADR) — still outstanding
+- Document 4 (Governance) — ADR-0010 added to seed ADR list (10th ADR) — **done** (completed chat "FORGE 04 Governance," 2026-07-23; see drift-correction note under chat 22 below — this was miscarried as "still outstanding" in every session note from chat 13 through chat 21)
 - Document 5 (AI Foundations) — Section 9 training resources; Section 3 orchestration concepts — ✅ done, chat 15
 - Document 6 (Orchestration Manager Guide) — Part 4 failure handling (Managed Agents failures) — ✅ done, chat 16
 - Document 7 (Customization Reference) — Agent Configuration section note — ✅ done, chat 16 (scope was larger than "note" — see session note)
@@ -238,6 +238,7 @@ These are hands-on findings from the Phase 2.9 access check, worth building corr
 - Document 2 (Architecture) — agent invocation section currently states Claude Agent SDK for all non-Stage-3 stages
 - Document 3 (Tool Inventory) — §3.3 Claude Agent SDK row and cost summary; this is the **third** update to Document 3 this build phase (v4: Context7 dev-tooling note; v5: ADO State-on-creation correction; this would be v6)
 - Document 9 (README) — Prerequisites and cost-reference sections reference the Agent SDK
+- **FORGE Build Plan (added chat 22 — missed in the original chat 21 list)** — step 3.1's "Claude Agent SDK wrapper... used by all stages except Stage 3" line is now stale. Also: Phase 8.3 says "confirm the **ten** seed ADRs... are fully written" but ADR-0011 is an organic 11th ADR, not yet committed to `core/decisions/` at all — the plan has no step tracking that commit or the count correction. This would be v4 of the Build Plan.
 
 **ADR-0011 full text:** see `ADR-0011.md`, generated chat 21, awaiting commit to `core/decisions/` in `forge-template` (an organic addition beyond the original ten-seed-ADR list from Phase 1 — the governance model supports ADRs being added over time, per Document 4's not-yet-written RFC process).
 
@@ -337,14 +338,14 @@ These are hands-on findings from the Phase 2.9 access check, worth building corr
 
 **Update priority order for new chats:**
 1. ~~Document 2 (Architecture) — highest priority, other docs reference it~~ — done, chat 12
-2. **Document 4 (Governance) — seed ADR list needs ADR-0010 — still outstanding, only original priority-list item remaining**
+2. ~~Document 4 (Governance) — seed ADR list needs ADR-0010~~ — **done** (see chat 22 drift-correction note; incorrectly tracked as outstanding for six sessions)
 3. ~~Build Plan — build sequence changes before Phase 3~~ — done, chat 13
 4. ~~Document 3 (Tool Inventory) — billing update~~ — done, chat 14
 5. ~~Document 5 (AI Foundations) — training materials + orchestration concepts~~ — done, chat 15
 6. ~~Document 6 (Orchestration Manager Guide) — failure handling~~ — done, chat 16
 7. ~~Document 7 (Customization Reference) — Agent Configuration + Pipeline & Orchestration sections~~ — done, chat 16 (turned out to be more than "minor" — see session note)
 8. ~~Document 9 (README) — minor update~~ — done, chat 17
-9. **Document 4 (Governance) — ADR-0010 seed ADR list — still outstanding; now the only document remaining from the original priority list, deferred five times in favour of other work (four document chats, plus the full Phase 2 build)**
+9. ~~Document 4 (Governance) — ADR-0010 seed ADR list~~ — **done**, not actually outstanding (see chat 22 drift-correction note)
 
 ---
 
@@ -488,6 +489,14 @@ Before Phase 3 (Agent Implementation), every developer working on the agent laye
   - **New memory edit added:** for FORGE project work, don't use organizational skills (`laa-brand`, `laa-security-review`, `freshservice-kb-article`) unless explicitly asked.
   - **Document 4 (Governance) — ADR-0010 seed ADR list remains the only outstanding *document-list* item**, now deferred six times. **New outstanding item this chat:** Documents 2, 3, and 9 need correction for ADR-0011 once its code is verified — do not action until then.
   - Next: continue Phase 3 at step 3.2 (Intake Agent) — but **first**, confirm ADR-0011's `claude_agent_wrapper.py` rewrite is genuinely complete and re-tested (real diff, real smoke test output), since 3.2 will call `invoke_agent()` and the interface changed (`allowed_tools` removed, `max_tokens` added). Starting 3.2 against an unverified wrapper interface risks building against a signature that isn't final.
+  - **[Correction added chat 22 — see below]:** the "Document 4 still outstanding" claim above, and every prior instance of it back through chat 13, was stale. Document 4 was actually completed on 2026-07-23 in a session titled "FORGE 04 Governance," which produced the ADR-0010 addition and bumped that session's context doc to a v13. A **different** same-day session ("Build Plan") branched off the same earlier context version independently and became the lineage that actually continued forward into v14 → v21 — so every context doc from that point on inherited "still outstanding" from the branch that never saw the fix, even though the real, completed `04_Governance-v2.md` was uploaded to the project and has been sitting there correctly the whole time. Content was never wrong; only this document's own session log was. Confirmed by direct inspection of `04_Governance-v2.md` (ADR-0010 is present in the Seeded ADRs table) and by conversation search of the "FORGE 04 Governance" session.
+- **2026-07-29 (chat 22 — this chat):** Session opened with the standard "review everything, read context first" request. Reviewed all nine project documents, `CLAUDE.md`, `requirements.txt`, and `ADR-0011.md` before making any changes, per standing process.
+  - **Document 4 drift found and corrected** — see note above. No content changes needed to `04_Governance-v2.md` itself; only this context document's session-log claims were corrected (this entry, the Governance bullet under Key Decisions, and both Document List entries).
+  - **ADR-0011 code status checked and confirmed still pending** — inspected `requirements.txt` (still pins `claude-agent-sdk`, does not list `anthropic`) and `CLAUDE.md` (still fully describes the pre-ADR-0011 `claude_agent_sdk` / `query()` architecture with no mention of ADR-0011). Neither file shows any trace of the rewrite landing. User confirmed verbally: still pending.
+  - **Decision:** since the ADR-0011 code gate is still closed, Documents 2, 3, and 9 remain untouched this chat — updating them now would describe code that doesn't exist in the repo yet. User chose to send the ADR-0011 rewrite back to Claude Code now, rather than draft provisional doc language.
+  - **Claude Code brief for the rewrite handed to the user this chat** (not yet run): rewrite `claude_agent_wrapper.py` to call the base `anthropic` Messages API directly per ADR-0011 (drop `allowed_tools`, add `max_tokens`, build a maintained per-model cost-rate table instead of reading `total_cost_usd` from an SDK `ResultMessage`); update `requirements.txt` (`anthropic` back in as a direct dependency, `claude-agent-sdk` removed); update `CLAUDE.md`'s stale Agent SDK section to match; re-run `smoke_claude_agent` for a real pass/fail with real output; produce a real diff. See the chat 22 transcript for the exact brief given.
+  - **Build Plan reviewed for accuracy while user ran Claude Code.** Confirmed accurate throughout for ADR-0010 (Phases 3.1, 3.4a, 3.5–3.7, 4.4, 4.8, 4.9/4.10, 5.6, 5.10 all consistent). **Found it was missed from the ADR-0011 affected-documents list** — step 3.1's SDK-wrapper line is stale, and Phase 8.3's "ten seed ADRs" count doesn't account for ADR-0011, which also has no checklist step tracking its commit to `core/decisions/`. Added to the outstanding list above (would become Build Plan v4). Not edited this chat — same code-verification gate applies.
+  - Next: user runs the Claude Code brief above. **Before Phase 3 continues to step 3.2, and before Documents 2/3/9/Build Plan are touched, this chat needs to see the real diff and the real re-run smoke test output** — same standard applied throughout Phase 3.1 (real executed evidence, not a summary). Once verified, Documents 2, 3, 9, and the Build Plan can all be corrected for ADR-0011 (v6 for Document 3, v4 for the Build Plan), and 3.2 (Intake Agent) can begin against a confirmed-final `invoke_agent()` signature.
 
 ---
 
