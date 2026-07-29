@@ -1,0 +1,31 @@
+# FORGE — Python dependencies
+# Install with: pip install -r requirements.txt
+
+# HTTP
+requests>=2.31.0
+
+# GitHub App JWT auth
+PyJWT>=2.8.0
+
+# GitHub API client (used by github_helper.py — see module docstring for rationale)
+PyGithub>=2.1.1
+
+# Excel parsing
+openpyxl>=3.1.2
+
+# YAML
+PyYAML>=6.0.1
+
+# Environment variable loading for local dev
+python-dotenv>=1.0.0
+
+# Claude Agent SDK — drives the agent loop for all stages except Stage 3.
+# Stage 3 (Implementation) uses managed_agents_wrapper.py with raw requests instead;
+# those beta Managed Agents endpoints are not exposed through this package.
+# Pinned to exact version — this SDK is Alpha-classified and has already had one breaking
+# rename (ClaudeCodeOptions -> ClaudeAgentOptions). An open floor risks a silent breaking
+# upgrade on a future rebuild. Update the pin deliberately after testing the new version.
+claude-agent-sdk==0.2.128
+
+# Note: the base `anthropic` package is NOT listed here. claude-agent-sdk depends on it
+# internally, but FORGE code does not import anthropic directly in any module.
