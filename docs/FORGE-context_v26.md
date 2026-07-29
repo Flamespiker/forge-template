@@ -2,7 +2,7 @@
 
 **Project:** FORGE — Full-SDLC Orchestration with Review Gates for Engineers  
 **Owner:** Mike Faulkner (mfaulkner@legalaid.ab.ca) — Legal Aid Alberta  
-**Last Updated:** 2026-07-29 (Document 9 corrected via Claude Code verification — real secrets/gate-naming errors found and fixed — chat 25)  
+**Last Updated:** 2026-07-29 (Build Plan updated for ADR-0011 — ADR-0011 document queue fully closed — chat 25)  
 **Purpose:** Living reference document. Read this at the start of every new chat to restore full project context without re-explanation.
 
 ---
@@ -240,7 +240,7 @@ These are hands-on findings from the Phase 2.9 access check, worth building corr
 - ~~Document 2 (Architecture) — agent invocation section currently states Claude Agent SDK for all non-Stage-3 stages~~ — **done**, produced `02-forge-architecture-document-v3.md` (see Document List; exact changes not re-summarized here — see the file's own diff from v2)
 - ~~Document 3 (Tool Inventory) — §3.3 Claude Agent SDK row and cost summary~~ — **done**, produced `03_FORGE_Tooling_v6.md`, plus the flagged open item (Sonnet 5 introductory pricing as a future cost-optimization candidate) added. **Follow-up, chat 24:** the dollar estimate itself (~$1–5) had been left unrevised despite the invocation-mechanism fix — caught during the Document 9 refinement pass and corrected to ~$0.50–3 in `03_FORGE_Tooling_v7.md` (see chat 24 note below).
 - ~~Document 9 (README) — Prerequisites and cost-reference sections reference the Agent SDK~~ — **done, chat 23 (this chat).** Actual review found the flagged assumption didn't hold: Document 9's Prerequisites bullet (`Anthropic API — an API key with Managed Agents beta access...`) never named the Claude Agent SDK, and the Cost reference table was already split by ADR-0010 mechanism (API tokens vs. Managed Agents runtime) rather than by invocation library — so neither section was actually factually wrong, unlike Docs 2 and 3, which did name the SDK explicitly and required real corrections. The one genuine gap: the reader-relevant *consequence* of ADR-0011 (elimination of the ~$0.10 cold-call cost + ~10s launch latency the Agent SDK's bundled CLI added per invocation) wasn't mentioned anywhere. Added a single footnote under the Cost reference table stating this, worded to match Document 3's ADR-0011 note. No other section changed. Also investigated whether the Prerequisites' "Node.js 20+ installed locally" line was Agent-SDK-driven (it would have been a genuine correction if so) — confirmed via Documents 2/3/6 that Node.js only appears in this document set in connection with `actions/create-github-app-token`'s own GitHub-hosted-runner requirement (not a local prerequisite) and with the target application's own TypeScript/Next.js stack — unrelated to the Agent SDK, so left unchanged. Produced `09-forge-readme_v4.md` (project file was already at v3 for reasons not reflected in this context doc's session log — treated v3 as the correct current baseline and incremented from there).
-- FORGE Build Plan — step 3.1's SDK-wrapper line; Phase 8.3's "ten seed ADRs" count needs to become eleven, and a step should track ADR-0011's actual commit to `core/decisions/`; this would be v4 — **still outstanding, next in queue**
+- FORGE Build Plan — step 3.1's SDK-wrapper line; Phase 8.3's "ten seed ADRs" count needs to become eleven, and a step should track ADR-0011's actual commit to `core/decisions/`; this would be v4 — **done, chat 25 (this chat).** Step 3.1's wrapper description rewritten for the base `anthropic` Messages API client, plus the Document-6 try/except hard requirement folded in as a callout. New step 3.1a added to track committing ADR-0011 itself to `core/decisions/`. Phase 8.3 reworded rather than a blunt "ten→eleven" swap — resolved a real internal inconsistency in this context doc's own prior notes: one earlier note called ADR-0011 "an organic addition BEYOND the original ten-seed-ADR list" while this affected-documents entry said the count "needs to become eleven." Both are true depending on what's being counted — ADR-0011 isn't one of the original Phase-1 seed stubs, but by Phase 8 (Handoff Readiness) the actual ADR count in `core/decisions/` is eleven. Phase 8.3 now says so explicitly rather than picking one framing and burying the other.
 - ~~Document 6 (Orchestration Manager Guide) — added chat 22, not in the original ADR-0011 list.~~ Needs a new, explicit requirement: every stage-agent script from 3.2 onward MUST wrap `invoke_agent()` in try/except at the call site. — **done**, produced `06_Orchestration_v3.md`
 
 **ADR-0011 full text:** see `ADR-0011.md`, generated chat 21, awaiting commit to `core/decisions/` in `forge-template` (an organic addition beyond the original ten-seed-ADR list from Phase 1 — the governance model supports ADRs being added over time, per Document 4's not-yet-written RFC process).
@@ -337,7 +337,7 @@ These are hands-on findings from the Phase 2.9 access check, worth building corr
 | 7 | Customization Reference | ✅ Complete — **updated (chat 16, `07_Customization_Ref_v2.md`)** | Done |
 | 8 | Excel Intake Template | ✅ Complete | No |
 | 9 | FORGE README | ✅ Complete — **corrected via Claude Code verification (chat 25, `09-forge-readme_v6.md`)** | Done (ADR-0010, chat 17); Done (ADR-0011, chat 23–24); Done (real errors found + fixed, chat 25) |
-| — | FORGE Build Plan | ✅ Complete — **updated (chat 13, `FORGE_Build_Plan_v2.md`)** | Done |
+| — | FORGE Build Plan | ✅ Complete — **updated for ADR-0011 (chat 25, `FORGE_Build_Plan_v4.md`)** | Done (chat 13); Done (ADR-0011, chat 25) |
 
 **Update priority order for new chats:**
 1. ~~Document 2 (Architecture) — highest priority, other docs reference it~~ — done, chat 12
@@ -350,7 +350,7 @@ These are hands-on findings from the Phase 2.9 access check, worth building corr
 8. ~~Document 9 (README) — minor update~~ — done, chat 17 (ADR-0010); done again, chat 23 (ADR-0011)
 9. ~~Document 4 (Governance) — ADR-0010 seed ADR list~~ — **done**, not actually outstanding (see chat 22 drift-correction note)
 
-**ADR-0011 update queue (post chat-22 code verification):** ~~Document 2~~ → ~~Document 3 (v6)~~ → ~~Document 9 (v4)~~ → **Build Plan (v4) — next** → ~~Document 6 (try/except requirement)~~
+**ADR-0011 update queue (post chat-22 code verification):** ~~Document 2~~ → ~~Document 3 (v6, further aligned to v7 chat 24)~~ → ~~Document 9 (v4 → v5 → v6, chat 23–25)~~ → ~~Build Plan (v4, chat 25)~~ → ~~Document 6 (try/except requirement)~~ — **queue fully closed as of chat 25.**
 
 ---
 
@@ -532,7 +532,15 @@ Before Phase 3 (Agent Implementation), every developer working on the agent laye
   - **Process note worth keeping:** this is the same "verify against the real build, not the summary" pattern that caught the file_io/github_helper/ADO/Managed-Agents bugs back in chat 21 — worth defaulting to a Claude-Code verification pass before accepting any further hand-edited draft of a document that touches credentials, secret names, or environment identifiers.
   - Produced `09-forge-readme_v6.md`. This supersedes `09-forge-readme_v5.md` — do not upload that one. File is in `/mnt/user-data/outputs/`.
   - **ADR-0011 update queue unchanged: only the Build Plan (v4) remains.**
-  - Next: Build Plan (v4) in a fresh chat, pasting in this context doc.
+  - **User elected to close out the Build Plan update in this same chat** rather than starting a fresh one — one-document-per-chat is a default, not a hard rule, and the remaining item was small and tightly scoped.
+  - **Build Plan updated for ADR-0011.** Three changes, matching the original affected-documents entry:
+    1. Step 3.1's wrapper bullet rewritten from "Claude Agent SDK wrapper... used by all stages except Stage 3" to describe the base `anthropic` Messages API client per ADR-0011 (no `allowed_tools`, explicit `max_tokens`, maintained per-model rate table for `total_cost_usd`). Folded in a callout for Document 6's try/except hard requirement, since it directly affects how every 3.2-onward stage script must be written and this is the step where a builder would first need to know that.
+    2. New step **3.1a** added: commit the actual ADR-0011 text to `core/decisions/0011-base-anthropic-client.md`, noting explicitly that this is the first ADR added organically mid-build (as opposed to ADR-0010, which was folded into the seed list before Phase 1 ran).
+    3. Step 8.3 reworded rather than a blunt "ten→eleven" replace. This resolved a genuine internal inconsistency in this context doc's own prior wording: one note (under the ADR-0011 subsection) called ADR-0011 "an organic addition BEYOND the original ten-seed-ADR list," while the Build Plan's own affected-documents entry said the seed count "needs to become eleven" — both true under different readings (ADR-0011 isn't one of the Phase-1 seed stubs, but by Phase 8 the real count in `core/decisions/` is eleven). Step 8.3 now says both things explicitly instead of collapsing to one framing.
+  - **Also caught in passing:** the Document List's Build Plan row still credited chat 13 (`FORGE_Build_Plan_v2.md`) as current, despite the actual project file already being at v3 since chat 20's Phase 2 correction — same drift pattern as Documents 2, 3, and 6 earlier this session. Corrected.
+  - Produced `FORGE_Build_Plan_v4.md`. File is in `/mnt/user-data/outputs/`.
+  - **ADR-0011 document queue is now fully closed.** Documents 2, 3, 6, 9, and the Build Plan have all been updated and cross-verified against real code (`CLAUDE.md`, `requirements.txt`, direct repo greps via Claude Code) rather than assumption alone.
+  - Next: Phase 3 resumes at step 3.2 (Intake Agent) — but first, complete step 3.1a (commit ADR-0011 to `core/decisions/`) if it hasn't happened yet, since it's now formally part of the plan. Start a fresh chat for the Phase 3 build work itself.
 
 ---
 

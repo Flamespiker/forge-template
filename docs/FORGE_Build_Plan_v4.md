@@ -2,7 +2,7 @@
 
 **Purpose:** Step-by-step checklist for building FORGE from scratch. Work through one item at a time. Each step is a discrete unit — complete it, confirm it, move on.
 
-**Version:** v3 — minor Phase 2 correction following the Phase 2 build (chat 20): step 2.1 now notes the GitHub App Client ID / `create-github-app-token@v3` requirement discovered during that build. No other phases changed from v2.
+**Version:** v4 — updated for ADR-0011 (chat 25): step 3.1's wrapper description changed from Claude Agent SDK to the base `anthropic` Messages API client; new step 3.1a tracks committing ADR-0011 itself to `core/decisions/`; step 8.3 reworded to account for ADR-0011 as an organic (non-seed) addition to the ADR set. No other phases changed from v3.
 
 ---
 
@@ -94,8 +94,12 @@
   - GitHub API helper (post comment, add label, create branch, open PR)
   - ADO API helper (create Epic, Feature, User Story, Bug)
   - File I/O helpers (read XLSX, read/write Markdown, read/write YAML)
-  - Claude Agent SDK wrapper (standard invocation pattern, logging) — used by all stages except Stage 3
-  - **Managed Agents API wrapper** *(new — ADR-0010)* — standard invocation pattern for starting a coordinator agent session, declaring subagents, polling/streaming the session event stream to completion, and retrieving the per-subagent audit trail. Used only by Stage 3. Build in the correct events-endpoint request shape and archive retry behavior noted in step 2.9 above.
+  - **Anthropic Messages API wrapper** (`claude_agent_wrapper.py`) *(ADR-0011 — supersedes the originally-planned Claude Agent SDK wrapper)* — calls the base `anthropic` Python client's Messages API directly (system prompt + user prompt, single-turn, no tool-use loop); `invoke_agent()` takes an explicit `max_tokens` parameter and has no `allowed_tools` parameter; `total_cost_usd` is computed from a maintained per-model rate table in the wrapper rather than an SDK-provided value. Used by all stages except Stage 3.
+    - **Hard requirement (ADR-0011 / Document 6):** every stage-agent script built in 3.2 onward (except Stage 3) MUST wrap its `invoke_agent()` call in try/except at the call site — the wrapper never sets `is_error=True` itself, so an uncaught API failure aborts the script silently with no `forge_event` log line and no chance to post a failure comment on the tracking issue.
+  - **Managed Agents API wrapper** *(ADR-0010)* — standard invocation pattern for starting a coordinator agent session, declaring subagents, polling/streaming the session event stream to completion, and retrieving the per-subagent audit trail. Used only by Stage 3. Build in the correct events-endpoint request shape and archive retry behavior noted in step 2.9 above.
+- [ ] 3.1a **Commit ADR-0011 to `core/decisions/`** *(new — organic ADR, decided chat 21, verified chat 22)*
+  - Write the full ADR-0011 text (see `ADR-0011.md`) into `core/decisions/0011-base-anthropic-client.md`, alongside the ten seed ADR stubs from Phase 1.8
+  - Unlike ADR-0010 (folded into the seed list before Phase 1 ran), ADR-0011 was decided mid-build — it's the first ADR added organically after the initial seed set, exercising Document 4's ADR/RFC process as intended for ongoing decisions rather than just the initial ten
 - [ ] 3.2 **Intake Agent** (`core/agents/intake_agent.py`)
   - Reads the BA's Excel spreadsheet (Overview + Requirements tabs)
   - Produces 5–7 clarifying questions
@@ -229,7 +233,7 @@
 
 - [ ] 8.1 Final review of Document 6 (Orchestration Manager Guide) against everything learned in Phases 5–7 — update where reality differed from the doc
 - [ ] 8.2 Final review of Document 7 (Customization Reference) — confirm all locked/flexible/open items are accurate
-- [ ] 8.3 Confirm the ten seed ADRs in `core/decisions/` are fully written (not stubs)
+- [ ] 8.3 Confirm all eleven ADRs in `core/decisions/` are fully written (not stubs) — the ten seed ADRs from Phase 1.8, plus ADR-0011 (organically added mid-build per step 3.1a, not part of the original seed set)
 - [ ] 8.4 Run the setup verification workflow (Phase 2.8–2.9) on a fresh clone — confirms a new Orchestration Manager can get from clone to verified config (including Managed Agents access) without hand-holding
 - [ ] 8.5 Tag the repo `v1.0.0` — first stable release of the FORGE template
 
