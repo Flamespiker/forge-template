@@ -120,6 +120,18 @@ These are the languages, frameworks, and runtimes the FORGE-built applications u
 
 ---
 
+### 3.7 Developer Tooling — Context7 (Build-Time Aid, Not a FORGE Runtime Dependency)
+
+Everything above in §3 is something FORGE *provisions and depends on* to run. This entry is different in kind: it's a documentation-lookup aid used by whoever is writing FORGE's agent code (Mike, via Claude Code) — it does not run inside GitHub Actions, is not called by any agent at pipeline runtime, and an Orchestration Manager standing up a new FORGE instance never needs to provision it. It's recorded here only as a development-environment recommendation, not as part of FORGE's tool inventory proper.
+
+| Tool | Role | Required | Who Provisions | License Type | Cost |
+|---|---|---|---|---|---|
+| **Context7 (MCP)** | Documentation-lookup service connected to a coding assistant (e.g., Claude Code) during agent development, to verify current third-party API shapes against live documentation rather than relying on the assistant's training data | Optional (dev-environment recommendation only) | Individual developer, via their own account | Free tier available (confirm current terms before relying on it for production-critical lookups) | Free at typical usage |
+
+**Why it's noted here:** during Phase 3 (step 3.1, shared agent utilities), Claude Code used Context7 to verify the Managed Agents API's endpoint shapes before writing `managed_agents_wrapper.py` — catching exactly the kind of stale-training-data risk that produced the events-endpoint body-shape surprise during the Phase 2.9 manual access check (see §3.3 note above). Connecting an equivalent up-to-date documentation source to whatever coding assistant is used to build or extend `core/agents/` is a reasonable practice recommendation for future Orchestration Managers doing the same kind of work, but it is not a FORGE platform requirement and has no bearing on a running FORGE instance.
+
+---
+
 ## 4. Provisioning Checklist
 
 The order matters — some credentials can't be created until the preceding service exists.
@@ -147,7 +159,7 @@ This resolves the open item from Document 2 §5 and §10. The table below specif
 |---|---|---|
 | Title | Requirements Agent: high-level capability name from `requirements.md` | FORGE (automatic) |
 | Description | Summary paragraph from the relevant section of `requirements.md` | FORGE (automatic) |
-| State | "Active" on creation | FORGE (automatic) |
+| State | "New" on creation (see note below) | FORGE (automatic) |
 | Area Path | Default area path for the team | Team config (`team/config.yaml`) — Orchestration Manager sets the default; not overridden by FORGE |
 | Iteration Path | Left blank on creation | Team fills in after creation — FORGE does not assign sprints |
 | Priority | Not set | Left to team |
@@ -159,7 +171,7 @@ This resolves the open item from Document 2 §5 and §10. The table below specif
 | Title | Requirements Agent: feature-level capability from `requirements.md` | FORGE (automatic) |
 | Description | Feature description from `requirements.md` | FORGE (automatic) |
 | Parent | Linked to the corresponding Epic | FORGE (automatic) |
-| State | "Active" on creation | FORGE (automatic) |
+| State | "New" on creation (see note below) | FORGE (automatic) |
 | Area Path | Inherited from Epic / team default | FORGE (automatic, mirrors Epic) |
 | Iteration Path | Left blank | Team fills in |
 
@@ -171,7 +183,7 @@ This resolves the open item from Document 2 §5 and §10. The table below specif
 | Description | Narrative from `requirements.md` | FORGE (automatic) |
 | Acceptance Criteria | Acceptance criteria section from `requirements.md` | FORGE (automatic) |
 | Parent | Linked to the corresponding Feature | FORGE (automatic) |
-| State | "Active" on creation | FORGE (automatic) |
+| State | "New" on creation (see note below) | FORGE (automatic) |
 | Story Points | Not set | Team estimates after creation |
 | Priority | Not set | Team sets after creation |
 | Area Path | Inherited from Feature | FORGE (automatic, mirrors Feature) |
@@ -188,9 +200,11 @@ This resolves the open item from Document 2 §5 and §10. The table below specif
 | Steps to Reproduce | Test case steps from the test suite | FORGE (automatic) |
 | Severity | Mapped from test failure type (assertion failure = Medium; exception/crash = High) | FORGE (automatic, using a fixed mapping — not AI judgment) |
 | Parent | Linked to the relevant User Story | FORGE (automatic) |
-| State | "Active" on creation | FORGE (automatic) |
+| State | "New" on creation (see note below) | FORGE (automatic) |
 | Tags | `forge-managed`, `<request-id>`, `qa-loop-back` | FORGE (automatic) |
 | GitHub PR URL | Link to the implementation PR in the monorepo | FORGE (automatic) |
+
+**State field correction (confirmed Phase 3.1, 2026-07-28):** all four tables above originally specified `"Active" on creation`. Verified against the actual ADO REST API (`/wit/workitemtypes/{type}/states`) for all four types in `FORGE-Build`: every type's valid state set is `New, Active, Resolved, Closed[, Removed]` (Bug has no `Removed`), but the transition-from-initial-state list (`transitions[""]`) returns only `[{"to": "New"}]` for all four — meaning **`"New"` is the only state reachable via a single creation call; `"Active"` requires a subsequent transition PATCH**. FORGE does not perform that follow-up transition — items are created in `"New"` and left there; state progression from that point is a team/planning-process concern, consistent with the "Fields FORGE never touches" boundary below. If a future team's ADO configuration relies on a dashboard, report, or query that filters specifically on `"Active"`, that team's Orchestration Manager should add the transition call as a team-layer customization — this is not a core-layer requirement.
 
 **Fields FORGE never touches:** Effort, Business Value, Risk, custom org fields, any field not listed above. FORGE writes a minimal, accurate record; teams layer in their own planning data after creation. This is the dividing line between what FORGE is responsible for (traceability and accuracy) and what belongs to the team's planning process (prioritization and scheduling).
 

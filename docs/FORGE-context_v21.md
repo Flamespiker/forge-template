@@ -2,7 +2,7 @@
 
 **Project:** FORGE — Full-SDLC Orchestration with Review Gates for Engineers  
 **Owner:** Mike Faulkner (mfaulkner@legalaid.ab.ca) — Legal Aid Alberta  
-**Last Updated:** 2026-07-25 (Phase 2 build complete — chat 20)  
+**Last Updated:** 2026-07-29 (Phase 3.1 complete, ADR-0011 decided — chat 21)  
 **Purpose:** Living reference document. Read this at the start of every new chat to restore full project context without re-explanation.
 
 ---
@@ -44,8 +44,8 @@ The core pattern: **deterministic orchestration** (Git operations, state transit
 ### Technology Stack
 - **Source control & CI/CD:** GitHub (repos + GitHub Actions pipelines)
 - **Work item tracking:** Azure DevOps (ADO) Boards — Epics, Features, User Stories
-- **Agent runtime:** Anthropic Claude Managed Agents (Stage 3 coordinator/subagent pattern); Claude Agent SDK (all other stages)
-- **Primary model:** Claude (Sonnet tier for agentic loops; Opus tier for coordinator in Stage 3 — see ADR-0010)
+- **Agent runtime:** Anthropic Claude Managed Agents (Stage 3 coordinator/subagent pattern); base `anthropic` Python client / Messages API for all other stages (ADR-0011, chat 21 — supersedes the original Claude Agent SDK decision; Documents 2/3/9 correction still outstanding, see below)
+- **Primary model:** Claude (Sonnet tier for non-Stage-3 stages; Opus tier for coordinator in Stage 3 — see ADR-0010)
 - **Frontend:** React / Next.js — **TypeScript mandated (core layer)**
 - **Backend:** .NET
 - **Architecture pattern:** C4 model, microservices (small, manageable domains for mid-sized org)
@@ -216,6 +216,31 @@ These are hands-on findings from the Phase 2.9 access check, worth building corr
 - **Archive race condition observed:** a session can flip briefly back to `running` immediately after reaching `idle` (e.g., trailing extended-thinking wrap-up), causing an archive call to fail with a 400 ("cannot be archived while its status is running") even though the poller had just seen it idle. Build a short retry-with-backoff around session archival in the real wrapper rather than treating this as a hard failure.
 - Two throwaway local diagnostic scripts (`managed_agents_check.py`, `archive_retry.py`) were created for this check — gitignored, not committed to `forge-template`, not intended for reuse beyond this one verification.
 
+### Base Anthropic client for non-Stage-3 invocation — ADR-0011
+
+**Decision:** The six non-Stage-3 stages (Codebase Ingestion, Intake, Requirements, Design, QA, Security, Deploy) switch from the Claude Agent SDK to the base `anthropic` Python client, calling the Messages API directly. Stage 3 is unaffected (Managed Agents, ADR-0010, separate mechanism).
+
+**Why:** Phase 3.1 live testing showed every Agent SDK invocation — even a trivial, tool-free text exchange — pays a fixed cost: ~25,700 tokens of Claude Code's bundled system prompt/tool definitions written to cache on a cold call (~$0.10 at $3.75/MTok cache-write rates), plus a subprocess-launch latency floor measured at ~10 seconds regardless of task size. None of the six stages ever use the SDK's autonomous tool-execution capability — FORGE's deterministic Python layer handles all file I/O; Claude only generates text from content already in the prompt. Confirmed empirically: every Phase 3.1 invocation across these stages already passed `allowed_tools=[]`.
+
+**What changes:**
+- `claude_agent_wrapper.py` calls the Messages API directly instead of the Agent SDK's `query()`
+- `invoke_agent()` drops the `allowed_tools` parameter (no tool-use loop left to scope) and gains an explicit `max_tokens` parameter (the SDK managed this internally; the raw Messages API requires it)
+- `total_cost_usd` is now computed via a maintained per-model rate table in the wrapper, rather than read directly from an SDK-provided `ResultMessage` — needs manual updates if Anthropic's pricing changes
+- `requirements.txt`: `anthropic` becomes a direct dependency again; `claude-agent-sdk` is removed (Stage 3's Managed Agents wrapper never depended on it — confirmed, uses raw `requests` to the beta REST endpoints)
+
+**What does not change:**
+- `invoke_agent()`'s core signature and `AgentResult`'s shape are preserved as closely as possible — the stage-agent scripts calling it need no architectural changes, only the wrapper's internals changed
+- Stage 3 / Managed Agents is entirely unaffected
+
+**Status as of this chat's end: decided, code rewrite handed to Claude Code, NOT yet confirmed complete or re-tested.** Do not assume this is live until a real diff and a clean `smoke_claude_agent` re-run have been reviewed.
+
+**Affected documents requiring update — outstanding, blocked on code verification above:**
+- Document 2 (Architecture) — agent invocation section currently states Claude Agent SDK for all non-Stage-3 stages
+- Document 3 (Tool Inventory) — §3.3 Claude Agent SDK row and cost summary; this is the **third** update to Document 3 this build phase (v4: Context7 dev-tooling note; v5: ADO State-on-creation correction; this would be v6)
+- Document 9 (README) — Prerequisites and cost-reference sections reference the Agent SDK
+
+**ADR-0011 full text:** see `ADR-0011.md`, generated chat 21, awaiting commit to `core/decisions/` in `forge-template` (an organic addition beyond the original ten-seed-ADR list from Phase 1 — the governance model supports ADRs being added over time, per Document 4's not-yet-written RFC process).
+
 ### Repository model — two repos, not one
 - **Existing platform reality:** LAA's custom applications live in a single existing **monorepo** (all microservices, one repo). A separate, existing **Dynamics 365 repo** holds D365 development — out of scope for FORGE v1, flagged as a real future goal.
 - **FORGE is a separate repo from the code it acts on.** FORGE's own template repo (workflows, agents, core/team config, the per-request tracking issue) never holds application source. It orchestrates *into* the custom-apps monorepo by opening branches/commits/PRs there.
@@ -228,9 +253,9 @@ These are hands-on findings from the Phase 2.9 access check, worth building corr
 - **Traceability now crosses a repo boundary** (FORGE repo ↔ monorepo) partway through the chain. Full traceability depends on both sides writing the reciprocal link.
 
 ### Agent topology
-- Ten agents total. All other than Stage 3 are Claude Agent SDK calls invoked within GitHub Actions jobs, none persistent.
+- Ten agents total. All other than Stage 3 are stateless single-purpose calls invoked within GitHub Actions jobs, none persistent.
 - **Stage 3 (Implementation):** One Managed Agents coordinator agent + three specialist subagents (Backend, Frontend, Test Writer). Coordinator runs subagents in parallel on a shared sandbox filesystem. Integration checking is native to the coordinator. (ADR-0010)
-- All other stages: Codebase Ingestion, Intake, Requirements, Design, QA, Security, Deploy — stateless single-purpose Claude Agent SDK calls.
+- All other stages: Codebase Ingestion, Intake, Requirements, Design, QA, Security, Deploy — stateless single-purpose calls via the base `anthropic` client / Messages API (ADR-0011, chat 21 — originally spec'd as Claude Agent SDK calls; changed after Phase 3.1 testing showed the SDK's CLI-subprocess overhead was unjustified since none of these stages use its autonomous tool-calling).
 
 ### ADO integration
 - ADO Epics/Features/User Stories are created only on `requirements-approved` — never speculatively.
@@ -451,6 +476,18 @@ Before Phase 3 (Agent Implementation), every developer working on the agent laye
   - **Formatting preference established:** anything meant to be handed to Claude Code, and all git commands, should be given in fenced code blocks so the copy button is available — apply this from now on in all future chats, not just this one.
   - **Document 4 (Governance) — ADR-0010 seed ADR list is still the only outstanding document update**, now deferred five times (four document-update chats, plus the entire Phase 2 build) in favour of other work. Per the chat 19 note, this should land before Phase 3 begins.
   - Next: Phase 3 — Agent Implementation. Start a fresh chat.
+- **2026-07-29 (chat 21 — this chat):** Phase 3.1 (Shared Agent Utilities) fully complete — all five modules built, reviewed, and **verified against real services with real evidence**, not just code review. User explicitly chose to proceed with Phase 3 this session rather than land Document 4 first — that item is now deferred six times (see below).
+  - **`file_io.py`** — 7/7 passed. Three real bugs found and fixed during review, all confirmed against the actual `Intake_Template.xlsx` (not assumed): (1) Requirements-sheet header search was scanning every cell for the substring "req" instead of exact-matching column A — fixed to `row[0].strip().lower() == "req #"`; (2) an `_is_example_row()` heuristic meant to skip the four pre-populated example rows was flagged for removal but initially left in place on the first fix attempt — genuinely removed on the second pass, confirmed by re-running against the real file; (3) Overview-section detection used exact match against bare section names ("Request Identification") when the real cells have letter prefixes ("A — Request Identification") — fixed via substring matching, then further improved to return canonical snake_case dict keys (`request_identification`, etc.) with nested `{field_label: field_value}` dicts per section, rather than the raw spreadsheet text or a flat interleaved list. A separate portability bug (wrong `Path.parents[]` index, overshooting the repo root by one level) was also found and fixed, confirmed genuinely portable (anchored to `__file__` depth, not any absolute path).
+  - **`claude_agent_wrapper.py`** — 5/5 passed, then superseded by ADR-0011 (see below). Initial build mistakenly used the base `anthropic` package instead of the real Claude Agent SDK; corrected to the actual `claude-agent-sdk` PyPI package (verified real via direct PyPI fetch — v0.2.128 confirmed current) after Claude Code initially disputed the package's existence. Cost investigation after an anomalous $0.09652-for-3-tokens smoke test result correctly diagnosed the cause as Claude Code CLI system-prompt/tool-definition cache creation (~25,700 tokens on a cold call) rather than a per-invocation minimum charge — this diagnosis directly led to ADR-0011.
+  - **`ado_helper.py`** — 4/4 passed. Real bug found via live API testing: Document 3 §5 specified `"Active" on creation` for all four work item types (Epic, Feature, User Story, Bug); the live ADO API only permits creation in `"New"` — `"Active"` is transition-only for all four types, confirmed via `/wit/workitemtypes/{type}/states`. Fixed by dropping `System.State` from all four `_make_patch` calls (defaults to `"New"`). **Document 3 corrected same-session (v5)** — the four State rows changed from `"Active" on creation` to `"New" on creation`, with an explanatory note.
+  - **`github_helper.py`** — 7/7 passed. Real architecture bug found: `post_comment`/`add_label`/`remove_label` were targeting `FORGE_TARGET_REPO` (the monorepo, `forge-demo-apps`) when the tracking issue actually lives in `FORGE_SOURCE_REPO` (`forge-template`) — would have silently posted tracking-issue updates to the wrong repo in production. Fixed: those three functions now use a local-dev-only `GITHUB_TOKEN` (explicitly documented in code as a stand-in for the ambient token GitHub Actions injects automatically for same-repo ops — must NOT be added as a real Actions secret in Phase 4) targeting `FORGE_SOURCE_REPO`, while `create_branch`/`commit_files`/`open_pr` correctly stay on the GitHub App's installation token targeting `FORGE_TARGET_REPO`. Also: `commit_files()` was missing entirely from the original build (needed by 3.4 and 3.4a, not just this smoke test) — added, verified via a real signed commit (`forge-pipeline[bot]`, `verified: true`) into `forge-demo-apps`.
+  - **`managed_agents_wrapper.py`** — 6/6 passed on the second attempt. **Real, substantial Managed Agents API schema change discovered and confirmed against Anthropic's official docs** (`platform.claude.com/docs/en/managed-agents/*`, `github.com/anthropics/skills`, `claude-cookbooks/managed_agents`): the `"subagents"` field assumed since Phase 2.9 no longer exists (if it ever did — Phase 2.9's own verification was explicitly a zero-subagent test, so this may never have been validated rather than having regressed). Current schema: subagents must be created as independent, standalone agent resources first, then a coordinator agent references them by ID via `multiagent: {"type": "coordinator", "agents": [...]}`; environments and sessions are top-level resources (`POST /v1/environments`, `POST /v1/sessions`); errors surface as `session.error` events in the stream, not as a status value (`terminated` is a rare, unrecoverable orchestration-layer state, not the general error signal); per-subagent audit trail comes from `client.beta.sessions.threads.list(session_id)` (coordinator = primary thread, `parent_thread_id: null`; each subagent = its own thread). First smoke test attempt passed 5/5 but was **coordinator-only** (`subagent_configs=[]`) — did not actually exercise the multi-agent path; re-run with a real declared specialist agent confirmed genuine coordinator→subagent delegation, correct thread structure, per-subagent event retrieval, and full four-resource archive (coordinator + specialist agents + environment + session).
+  - **ADR-0011 decided:** the Agent SDK cost/latency investigation above surfaced a broader question — none of the six non-Stage-3 stages use the Agent SDK's autonomous tool-calling, yet every invocation pays its full CLI-subprocess overhead. Decision: switch those six stages to the base `anthropic` client (Messages API), full rationale in the ADR-0011 subsection above. **Code rewrite handed to Claude Code this session but not yet confirmed complete or re-tested** — treat as decided-but-unverified until a real diff and clean smoke test re-run are reviewed in the next chat.
+  - **Process pattern that kept paying off:** insisting on real executed output (diffs, actual API responses, re-run smoke tests) rather than accepting summaries caught real problems repeatedly this session — the file_io fixes, the github_helper repo-targeting bug, the ADO state assumption, and the Managed Agents coordinator-only false-pass would all likely have shipped unnoticed under a "trust the summary" approach.
+  - **Document 3 updated twice this session** (v4: added §3.7 Context7 dev-tooling note, not part of FORGE's runtime tool inventory; v5: corrected the four State-on-creation rows per the ADO finding above) — v5 is the current authoritative version in the project. A third update (v6) is still needed once ADR-0011's code change is verified (see ADR-0011 subsection above).
+  - **New memory edit added:** for FORGE project work, don't use organizational skills (`laa-brand`, `laa-security-review`, `freshservice-kb-article`) unless explicitly asked.
+  - **Document 4 (Governance) — ADR-0010 seed ADR list remains the only outstanding *document-list* item**, now deferred six times. **New outstanding item this chat:** Documents 2, 3, and 9 need correction for ADR-0011 once its code is verified — do not action until then.
+  - Next: continue Phase 3 at step 3.2 (Intake Agent) — but **first**, confirm ADR-0011's `claude_agent_wrapper.py` rewrite is genuinely complete and re-tested (real diff, real smoke test output), since 3.2 will call `invoke_agent()` and the interface changed (`allowed_tools` removed, `max_tokens` added). Starting 3.2 against an unverified wrapper interface risks building against a signature that isn't final.
 
 ---
 
