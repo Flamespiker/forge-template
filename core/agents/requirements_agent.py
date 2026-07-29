@@ -1,0 +1,305 @@
+"""
+FORGE Requirements Agent — Stage 1 (Requirements).
+
+Reads the BA's completed intake spreadsheet plus their clarification answers from
+the tracking issue thread, and produces:
+  - requirements.md — a structured, traceable requirements document
+  - a draft ADO work-item payload (Epic -> Features -> User Stories)
+
+Both are committed directly to the monorepo (docs/<request-id>/) on `main` — this
+stage has no PR/branch of its own (see Document 6 Gate 1: approval happens via the
+`requirements-approved` label on the tracking issue, not a PR merge). A human-readable
+summary of the draft ADO hierarchy is posted as a comment on the tracking issue for
+review. ADO work items are NOT created here — only after a human applies
+`requirements-approved` (Phase 4 wiring, not this script).
+
+Usage:
+    python -m core.agents.requirements_agent --spreadsheet path/to/file.xlsx --issue-number 42 --request-id REQ-2026-01
+    python -m core.agents.requirements_agent --spreadsheet path/to/file.xlsx --issue-number 42 --request-id REQ-2026-01 --dry-run
+
+CLI arguments:
+    --spreadsheet   Path to the completed Intake Template .xlsx file (required)
+    --issue-number  FORGE tracking issue number in forge-template, used to read the
+                     BA's clarification answers and (unless --dry-run) post the
+                     draft summary comment (required)
+    --request-id    FORGE request ID. Required for a real run (used in the monorepo
+                     file path docs/<request-id>/); optional for --dry-run.
+    --dry-run       Parse the spreadsheet, fetch issue comments, and call Claude, but
+                     print requirements.md and the ADO payload to stdout instead of
+                     committing to the monorepo or posting to GitHub.
+
+Per ADR-0011 / Document 6: the invoke_agent() call is wrapped in try/except at the
+call site. On failure (or malformed/truncated JSON from the model), a failure
+comment is posted to the tracking issue (best-effort, real run only) before the
+exception is re-raised.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import sys
+
+from core.agents.utils import file_io
+from core.agents.utils.claude_agent_wrapper import invoke_agent
+from core.agents.utils.github_helper import get_issue_comments, post_comment, commit_files
+
+logger = logging.getLogger(__name__)
+
+_STAGE_NAME = "requirements"
+_MAX_TOKENS = 8000
+_AGENT_COMMENT_PREFIX = "<!-- forge:agent-comment"
+
+_SYSTEM_PROMPT = """You are the FORGE Requirements Agent for Legal Aid Alberta's \
+software delivery pipeline.
+
+You will be given: (1) a Business Analyst's completed intake spreadsheet (Overview \
+section and Requirements rows), and (2) the BA's answers to a prior round of \
+clarifying questions from the Intake Agent, taken verbatim from the GitHub issue \
+thread.
+
+Your job is to produce two things, combining the spreadsheet with the clarification \
+answers so the final output reflects the fuller picture, not just the original \
+spreadsheet in isolation:
+
+1. A complete, traceable requirements.md document (as Markdown text).
+2. A draft Azure DevOps work-item hierarchy: one Epic, containing one or more \
+Features, each containing one or more User Stories.
+
+Rules for requirements.md:
+- Open with the request's title, type (Greenfield/Enhancement), and a one-paragraph \
+summary of the problem and purpose, informed by both the spreadsheet and the \
+clarification answers.
+- Include the success criteria and explicit out-of-scope items.
+- Include a "Clarifications" section summarizing what the BA's answers added or \
+changed versus the original spreadsheet.
+- List every requirement from the spreadsheet under a "Requirements" section, each \
+with its original Req # for traceability, a clear user story, and acceptance \
+criteria sharpened by the clarification answers where relevant. Do not drop any \
+requirement row, and do not invent new ones that aren't grounded in the spreadsheet \
+or the clarification answers.
+- Write for a Technical Approver who needs to decide whether to approve this for \
+ADO work item creation — clear, complete, plain English.
+
+Rules for the ADO work-item hierarchy:
+- Exactly one Epic, titled after the request itself.
+- Group related requirements into logical Features. If no natural grouping exists, \
+one Feature per requirement is acceptable.
+- Every requirement row must map to exactly one User Story somewhere in the tree — \
+never dropped, merged away, or invented.
+- Each User Story's description is the full "As a ... I want ... so that ..." story \
+text (sharpened by clarification answers where relevant), and acceptance_criteria \
+is the full acceptance criteria text.
+- Include source_req_number on every User Story (e.g. "R-001") so it can be traced \
+back to the original spreadsheet row.
+
+Output format — this is strict:
+Respond with ONLY a single JSON object, no markdown code fences, no prose before or \
+after it. It must have exactly this shape:
+
+{
+  "requirements_markdown": "<string - the full contents of requirements.md>",
+  "ado_payload": {
+    "epic": {"title": "<string>", "description": "<string>"},
+    "features": [
+      {
+        "title": "<string>",
+        "description": "<string>",
+        "user_stories": [
+          {
+            "title": "<string>",
+            "description": "<string>",
+            "acceptance_criteria": "<string>",
+            "source_req_number": "<string, e.g. 'R-001'>"
+          }
+        ]
+      }
+    ]
+  }
+}"""
+
+
+def _is_agent_comment(body: str) -> bool:
+    return body.lstrip().startswith(_AGENT_COMMENT_PREFIX)
+
+
+def _format_clarification_answers(comments: list[dict]) -> str:
+    """
+    Comments not authored by a FORGE agent (identified by the invisible
+    forge:agent-comment marker, not by GitHub account) are treated as the BA's
+    clarification answers, concatenated in chronological order.
+    """
+    human_comments = [c for c in comments if not _is_agent_comment(c.get("body", ""))]
+    if not human_comments:
+        return "_(no clarification answers found on the tracking issue yet)_"
+    lines: list[str] = []
+    for c in human_comments:
+        author = c.get("user", {}).get("login", "unknown")
+        lines.append(f"**{author} wrote:**")
+        lines.append(c.get("body", ""))
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _build_user_prompt(parsed: dict, clarification_answers: str) -> str:
+    overview_text = file_io.format_overview_markdown(parsed["overview"])
+    requirements_text = file_io.format_requirements_markdown(parsed["requirements"])
+    return (
+        "## Request Overview\n\n"
+        f"{overview_text}\n"
+        f"## Requirements ({len(parsed['requirements'])} submitted)\n\n"
+        f"{requirements_text}\n"
+        "## BA's Clarification Answers (from the tracking issue thread)\n\n"
+        f"{clarification_answers}\n"
+        "---\n"
+        "Produce your JSON response now."
+    )
+
+
+def _parse_model_json(output_text: str) -> dict:
+    text = output_text.strip()
+    if text.startswith("```"):
+        # Defensive: strip a wrapping ```json ... ``` fence if the model added one
+        # despite instructions not to.
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    return json.loads(text)
+
+
+def _render_ado_summary(ado_payload: dict) -> str:
+    """Human-readable indented rendering of the draft ADO hierarchy for the issue comment."""
+    lines: list[str] = []
+    epic = ado_payload.get("epic", {})
+    lines.append(f"**Epic:** {epic.get('title', '(untitled)')}")
+    for feature in ado_payload.get("features", []):
+        lines.append(f"  - **Feature:** {feature.get('title', '(untitled)')}")
+        for story in feature.get("user_stories", []):
+            req_ref = story.get("source_req_number", "?")
+            lines.append(f"    - **User Story** ({req_ref}): {story.get('title', '(untitled)')}")
+    return "\n".join(lines)
+
+
+def run_requirements_agent(
+    spreadsheet_path: str,
+    issue_number: int,
+    request_id: str | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """
+    Core entry point. Returns the parsed model output dict
+    ({"requirements_markdown": ..., "ado_payload": ...}).
+    """
+    if not dry_run and not request_id:
+        raise ValueError(
+            "--request-id is required for a real (non-dry-run) run — it determines "
+            "the docs/<request-id>/ path in the monorepo. Refusing to write to "
+            "docs/unknown/ by accident."
+        )
+    resolved_request_id = request_id or "unknown"
+
+    parsed = file_io.read_xlsx(spreadsheet_path)
+    comments = get_issue_comments(issue_number)
+    clarification_answers = _format_clarification_answers(comments)
+    user_prompt = _build_user_prompt(parsed, clarification_answers)
+
+    try:
+        result = invoke_agent(
+            system_prompt=_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            max_tokens=_MAX_TOKENS,
+            stage_name=_STAGE_NAME,
+            request_id=resolved_request_id,
+        )
+        if result.stop_reason == "max_tokens":
+            raise ValueError(
+                f"Model response was truncated at max_tokens={_MAX_TOKENS} — "
+                "increase _MAX_TOKENS in requirements_agent.py and retry."
+            )
+        parsed_output = _parse_model_json(result.output_text)
+        requirements_md = parsed_output["requirements_markdown"]
+        ado_payload = parsed_output["ado_payload"]
+        if "epic" not in ado_payload or "features" not in ado_payload:
+            raise ValueError("Model's ado_payload is missing required 'epic' or 'features' keys")
+    except Exception as exc:
+        logger.exception("Requirements Agent failed for request %s", resolved_request_id)
+        if not dry_run:
+            failure_body = (
+                "⚠️ **FORGE Requirements Agent failed to produce a draft.**\n\n"
+                f"Error: `{exc}`\n\n"
+                "An Orchestration Manager needs to investigate before this request "
+                "can proceed. Do not apply `requirements-approved` yet."
+            )
+            try:
+                post_comment(issue_number, failure_body)
+            except Exception:
+                logger.exception("Also failed to post failure comment to issue #%s", issue_number)
+        raise
+
+    if dry_run:
+        print("=" * 20, "requirements.md", "=" * 20)
+        print(requirements_md)
+        print("=" * 20, "ado-work-items.json", "=" * 20)
+        print(json.dumps(ado_payload, indent=2))
+        logger.info(
+            "Dry run complete for request %s — nothing committed, nothing posted.",
+            resolved_request_id,
+        )
+        return parsed_output
+
+    commit_files(
+        branch_name="main",
+        files={
+            f"docs/{resolved_request_id}/requirements.md": requirements_md,
+            f"docs/{resolved_request_id}/ado-work-items.json": json.dumps(ado_payload, indent=2),
+        },
+        commit_message=f"FORGE Requirements Agent: draft requirements for {resolved_request_id}",
+    )
+
+    comment_body = (
+        f"<!-- forge:agent-comment stage=requirements request_id={resolved_request_id} -->\n"
+        "## 📋 FORGE Requirements — Draft Ready for Review\n\n"
+        f"`requirements.md` and the draft ADO work-item hierarchy have been committed "
+        f"to `docs/{resolved_request_id}/` in the monorepo.\n\n"
+        "**Draft ADO hierarchy:**\n\n"
+        f"{_render_ado_summary(ado_payload)}\n\n"
+        "---\n"
+        "Review `requirements.md` and the hierarchy above. If it looks correct, apply "
+        "the `requirements-approved` label to this issue — ADO work items are created "
+        "only after that label is applied."
+    )
+    post_comment(issue_number, comment_body)
+    logger.info(
+        "Requirements Agent complete for request %s — files committed, draft posted "
+        "to issue #%s.",
+        resolved_request_id,
+        issue_number,
+    )
+    return parsed_output
+
+
+def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")
+    logging.basicConfig(level=logging.INFO)
+    parser = argparse.ArgumentParser(description="FORGE Requirements Agent")
+    parser.add_argument("--spreadsheet", required=True, help="Path to the completed Intake Template .xlsx")
+    parser.add_argument("--issue-number", required=True, type=int, help="FORGE tracking issue number in forge-template")
+    parser.add_argument("--request-id", default=None, help="FORGE request ID (required for a real run)")
+    parser.add_argument("--dry-run", action="store_true", help="Print output instead of committing/posting")
+    args = parser.parse_args()
+
+    try:
+        run_requirements_agent(
+            spreadsheet_path=args.spreadsheet,
+            issue_number=args.issue_number,
+            request_id=args.request_id,
+            dry_run=args.dry_run,
+        )
+    except Exception:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

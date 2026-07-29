@@ -25,6 +25,7 @@ security → deploy) with human approval gates at each stage.
 **Phase 3 — Agent Implementation** (in progress)
 
 Step 3.1 (shared agent utilities) is complete. Step 3.2 (Intake Agent) is complete.
+Step 3.3 (Requirements Agent) is complete.
 
 Files created:
 
@@ -45,6 +46,7 @@ core/agents/utils/
         smoke_managed_agents.py
 core/agents/
     intake_agent.py
+    requirements_agent.py
 core/decisions/
     0011-base-anthropic-client.md
 requirements.txt
@@ -204,6 +206,80 @@ stage agent scripts must follow this pattern.
 - 1,045 input tokens / 472 output tokens / `total_cost_usd: $0.010215` / 13.3 s
 - 6 questions posted; `clarification-pending` label applied
 
+### file_io.py — formatting helpers (added Step 3.3)
+
+Two new public functions render parsed spreadsheet data as Markdown for LLM prompts:
+
+- `format_overview_markdown(overview: dict) -> str` — renders all six Overview sections; sections
+  with no BA input show `_(left blank by BA)_` rather than being omitted.
+- `format_requirements_markdown(requirements: list[dict]) -> str` — renders each requirement row
+  with req number, type, priority, user story, acceptance criteria, and notes.
+
+Both live in `file_io.py` (not in agent scripts) so every stage agent can import them without
+duplicating the formatting logic.
+
+### github_helper.py — get_issue_comments() (added Step 3.3)
+
+`get_issue_comments(issue_or_pr_number: int) -> list[dict]`
+
+Retrieves all comments on a tracking issue in `forge-template`, oldest first. Uses `GITHUB_TOKEN`.
+Each returned dict includes `"id"`, `"user"` (with `"login"`), `"body"`, `"created_at"`.
+
+**Agent comment marker (added Step 3.3):**
+Every agent-authored comment begins with an invisible HTML marker:
+`<!-- forge:agent-comment stage=<stage> request_id=<id> -->`
+
+The Requirements Agent (and all subsequent agents) uses `_is_agent_comment()` to filter out
+FORGE-authored comments from the issue thread, treating only the remaining comments as
+BA/human input. This identification is based on the marker body text, NOT on the GitHub
+account/login — safe even if the bot account changes.
+
+### requirements_agent.py — Stage 1
+
+Entry point: `python -m core.agents.requirements_agent --spreadsheet <path> --issue-number <n> --request-id <id>`
+
+- `--request-id` is **required** for a real run (determines `docs/<request-id>/` path in the
+  monorepo). Omitting it on a real run raises `ValueError` rather than silently writing to
+  `docs/unknown/`.
+- `--dry-run` flag: fetches comments, calls Claude, prints `requirements.md` and
+  `ado-work-items.json` to stdout. Does NOT commit or post.
+- `_MAX_TOKENS = 8000` — model produces ~3,500–3,900 output tokens for a 4-requirement intake.
+  Raise if output is regularly truncated (`stop_reason == "max_tokens"`).
+- `_parse_model_json()` defensively strips ` ```json ``` ` fences if the model adds them despite
+  instructions; raises `json.JSONDecodeError` otherwise, caught by the outer `try/except`.
+
+**Output artifacts (committed to `forge-demo-apps` on `main`):**
+- `docs/<request-id>/requirements.md` — full structured requirements document
+- `docs/<request-id>/ado-work-items.json` — draft ADO hierarchy (Epic → Features → User Stories)
+
+**ADO payload shape:**
+```json
+{
+  "epic": {"title": "...", "description": "..."},
+  "features": [
+    {
+      "title": "...", "description": "...",
+      "user_stories": [
+        {
+          "title": "...", "description": "...",
+          "acceptance_criteria": "...",
+          "source_req_number": "R-001"
+        }
+      ]
+    }
+  ]
+}
+```
+Every requirement row maps to exactly one User Story; `source_req_number` preserves traceability
+back to the spreadsheet. ADO work items are NOT created by this agent — only after a human
+applies `requirements-approved` (Phase 4 wiring).
+
+**Live run verified 2026-07-29:**
+- Issue `forge-template#2`, request-id `REQ-2026-01`
+- 2,281 input tokens / 3,876 output tokens / `total_cost_usd: $0.064983` / 62.5 s
+- `requirements.md` + `ado-work-items.json` committed to `forge-demo-apps` on `main`
+- Summary comment posted to issue #2; no label applied (label is human action)
+
 ### Managed Agents API — current schema (verified against Anthropic reference docs)
 
 **Agent creation — multi-step, no inline subagents:**
@@ -283,4 +359,5 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 - Document 4 (Governance) already lists ADR-0010 as the 10th seed ADR — done.
 - ADR-0011 committed at `core/decisions/0011-base-anthropic-client.md` — done.
 - Step 3.2 Intake Agent (`core/agents/intake_agent.py`) — done; live run verified on issue #2.
-- Phase 3 next step: **3.3 Requirements Agent** (`core/agents/requirements_agent.py`)
+- Step 3.3 Requirements Agent (`core/agents/requirements_agent.py`) — done; live run verified on issue #2.
+- Phase 3 next step: **3.4 Spec & Design Agent** (`core/agents/design_agent.py`)
