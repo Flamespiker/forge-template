@@ -197,6 +197,59 @@ def read_xlsx(path: str | Path) -> dict[str, Any]:
     return {"overview": overview, "requirements": requirements}
 
 
+# ── Formatting helpers (used by agent scripts to build LLM prompts) ────────────
+
+_OVERVIEW_SECTION_DISPLAY_NAMES: dict[str, str] = {
+    "request_identification": "A — Request Identification",
+    "request_type": "B — Request Type",
+    "problem_purpose": "C — Problem & Purpose",
+    "success_criteria_scope": "D — Success Criteria & Scope",
+    "constraints_considerations": "E — Constraints & Considerations",
+    "additional_context": "F — Additional Context",
+}
+
+
+def format_overview_markdown(overview: dict) -> str:
+    """
+    Render a parsed Overview dict (as returned by read_xlsx()) as readable Markdown,
+    for inclusion in an LLM prompt. Sections with no BA input are shown as blank
+    rather than omitted, so the model can see what's genuinely missing.
+    """
+    lines: list[str] = []
+    for key, display_name in _OVERVIEW_SECTION_DISPLAY_NAMES.items():
+        fields = overview.get(key) or {}
+        lines.append(f"**{display_name}**")
+        if not fields:
+            lines.append("_(left blank by BA)_")
+        else:
+            for label, value in fields.items():
+                lines.append(f"- {label}: {value if value else '(blank)'}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def format_requirements_markdown(requirements: list[dict]) -> str:
+    """
+    Render a parsed Requirements list (as returned by read_xlsx()) as readable
+    Markdown, for inclusion in an LLM prompt.
+    """
+    if not requirements:
+        return "_(no requirements rows submitted)_"
+    lines: list[str] = []
+    for req in requirements:
+        lines.append(
+            f"**{req.get('req_number') or '(no ID)'}** "
+            f"[{req.get('type') or 'Type not set'}, "
+            f"{req.get('priority') or 'Priority not set'}]"
+        )
+        lines.append(f"- User Story: {req.get('user_story')}")
+        lines.append(f"- Acceptance Criteria: {req.get('acceptance_criteria') or '(none given)'}")
+        if req.get("notes"):
+            lines.append(f"- Notes / Constraints: {req['notes']}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 # ── Markdown ───────────────────────────────────────────────────────────────────
 
 def read_markdown(path: str | Path) -> str:

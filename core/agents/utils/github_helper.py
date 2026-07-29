@@ -170,6 +170,28 @@ def post_comment(issue_or_pr_number: int, body: str) -> dict:
     return response.json()
 
 
+def get_issue_comments(issue_or_pr_number: int) -> list[dict]:
+    """
+    Retrieve all comments on a tracking issue or PR in forge-template (the
+    orchestration repo), oldest first (GitHub's default ordering for this endpoint).
+
+    Uses GITHUB_TOKEN — same-repo operation on forge-template.
+
+    Args:
+        issue_or_pr_number: The issue or PR number in forge-template.
+
+    Returns:
+        List of comment objects from the GitHub API. Each dict includes at least
+        "id", "user" (with "login"), "body", and "created_at".
+    """
+    url = f"{_source_repo_url()}/issues/{issue_or_pr_number}/comments"
+    response = requests.get(url, headers=_github_token_headers(), timeout=15)
+    response.raise_for_status()
+    comments = response.json()
+    logger.info("Retrieved %d comment(s) from forge-template #%s", len(comments), issue_or_pr_number)
+    return comments
+
+
 def add_label(issue_or_pr_number: int, label: str) -> dict:
     """
     Add a label to a tracking issue or PR in forge-template (the orchestration repo).

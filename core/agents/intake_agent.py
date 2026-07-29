@@ -40,15 +40,6 @@ logger = logging.getLogger(__name__)
 _STAGE_NAME = "intake"
 _MAX_TOKENS = 2048
 
-_SECTION_DISPLAY_NAMES: dict[str, str] = {
-    "request_identification": "A — Request Identification",
-    "request_type": "B — Request Type",
-    "problem_purpose": "C — Problem & Purpose",
-    "success_criteria_scope": "D — Success Criteria & Scope",
-    "constraints_considerations": "E — Constraints & Considerations",
-    "additional_context": "F — Additional Context",
-}
-
 _SYSTEM_PROMPT = """You are the FORGE Intake Agent for Legal Aid Alberta's software \
 delivery pipeline.
 
@@ -76,41 +67,9 @@ Requirements data.
 restating the request, no markdown headers."""
 
 
-def _format_overview(overview: dict) -> str:
-    lines: list[str] = []
-    for key, display_name in _SECTION_DISPLAY_NAMES.items():
-        fields = overview.get(key) or {}
-        lines.append(f"**{display_name}**")
-        if not fields:
-            lines.append("_(left blank by BA)_")
-        else:
-            for label, value in fields.items():
-                lines.append(f"- {label}: {value if value else '(blank)'}")
-        lines.append("")
-    return "\n".join(lines)
-
-
-def _format_requirements(requirements: list[dict]) -> str:
-    if not requirements:
-        return "_(no requirements rows submitted)_"
-    lines: list[str] = []
-    for req in requirements:
-        lines.append(
-            f"**{req.get('req_number') or '(no ID)'}** "
-            f"[{req.get('type') or 'Type not set'}, "
-            f"{req.get('priority') or 'Priority not set'}]"
-        )
-        lines.append(f"- User Story: {req.get('user_story')}")
-        lines.append(f"- Acceptance Criteria: {req.get('acceptance_criteria') or '(none given)'}")
-        if req.get("notes"):
-            lines.append(f"- Notes / Constraints: {req['notes']}")
-        lines.append("")
-    return "\n".join(lines)
-
-
 def _build_user_prompt(parsed: dict) -> str:
-    overview_text = _format_overview(parsed["overview"])
-    requirements_text = _format_requirements(parsed["requirements"])
+    overview_text = file_io.format_overview_markdown(parsed["overview"])
+    requirements_text = file_io.format_requirements_markdown(parsed["requirements"])
     return (
         "## Request Overview\n\n"
         f"{overview_text}\n"
@@ -167,6 +126,7 @@ def run_intake_agent(
         raise
 
     comment_body = (
+        f"<!-- forge:agent-comment stage=intake request_id={resolved_request_id} -->\n"
         "## 🧭 FORGE Intake — Clarifying Questions\n\n"
         f"{result.output_text.strip()}\n\n"
         "---\n"
