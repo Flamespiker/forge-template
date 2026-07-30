@@ -445,6 +445,11 @@ by `list_session_output_files`. Returns binary-safe bytes (caller decodes as nee
 `always_allow` permission policy and `web_search`/`web_fetch` disabled. All three
 specialists use this (offline, deterministic code generation — no network egress).
 
+Also exports `SHARED_DOCS_DIR = "/mnt/session/shared-docs"` (added in the shared-docs
+retrofit below) — the one path constant both the coordinator and Backend/Frontend
+import, so neither side can silently disagree on where design.md/openapi.yaml/tasks.md
+live on the sandbox filesystem.
+
 `backend_agent.py` — .NET specialist. `get_config(service_root)` returns name +
 system prompt (writes to `<service_root>/backend/`) + scoped tools. Instructs the
 agent to run `dotnet build` and fix compile errors before declaring done.
@@ -485,3 +490,27 @@ decodes UTF-8 (raises `ValueError` on binary), returns `{path: content}` dict fo
 - session `sesn_0158Mvs91wfr9rNHPfa9W1oH` — 4 threads (coordinator + 3 specialists), `idle (end_turn)`
 - Archive: 156,728 bytes → 96 files extracted under `services/REQ-2026-01/`
   (full .NET solution with DocumentApi + EmailWorker, Next.js frontend, xUnit + Jest tests)
+
+### Retrofit: Backend/Frontend read design docs from shared sandbox path, not coordinator relay (2026-07-30)
+
+Previously Backend and Frontend only had design.md/openapi.yaml/tasks.md via the coordinator's
+own paraphrase in its delegation message — the same relay risk that `test_writer_agent.py`
+was already built to avoid for Backend/Frontend's *code* (it reads their files from the shared
+filesystem directly rather than trusting a hand-off summary). This retrofit closes the same
+gap for the design docs themselves: a paraphrased relay of a structured contract like
+openapi.yaml risks a dropped or renamed field neither subagent could catch without the literal
+source.
+
+- `_COORDINATOR_SYSTEM_PROMPT` gained a new **step 0**, ahead of delegation: write
+  design.md, openapi.yaml, and tasks.md verbatim to `{SHARED_DOCS_DIR}/design.md`,
+  `{SHARED_DOCS_DIR}/openapi.yaml`, `{SHARED_DOCS_DIR}/tasks.md` before delegating to Backend
+  and Frontend. Old steps 1–5 renumbered to 2–6.
+- `backend_agent.py` / `frontend_agent.py` `SYSTEM_PROMPT` now instructs each specialist to
+  read those files directly from `SHARED_DOCS_DIR` once the coordinator confirms they're
+  written, rather than relying on the delegation message's summary.
+- `SHARED_DOCS_DIR` ("/mnt/session/shared-docs") is intentionally outside `service_root`
+  ("services/<request-id>"), so it is never swept into `implementation.tar.gz` — no change
+  needed to the packaging tar command or `_extract_archive_to_file_dict()`.
+- Coordinator's own delegation message can still summarize the docs for convenience; the
+  requirement is only that Backend/Frontend treat the shared-path files as the source of
+  truth, not the summary.
