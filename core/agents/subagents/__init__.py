@@ -10,6 +10,10 @@ code-writing agent live network egress).
 
 from __future__ import annotations
 
+# Coordinator writes design.md/openapi.yaml/tasks.md here before delegating; Backend
+# and Frontend read them directly from this path rather than via relay.
+SHARED_DOCS_DIR = "/mnt/session/shared-docs"
+
 DEFAULT_SCOPED_TOOLS: list[dict] = [
     {
         "type": "agent_toolset_20260401",

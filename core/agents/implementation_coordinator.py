@@ -49,7 +49,7 @@ import os
 import sys
 import tarfile
 
-from core.agents.subagents import backend_agent, frontend_agent, test_writer_agent
+from core.agents.subagents import SHARED_DOCS_DIR, backend_agent, frontend_agent, test_writer_agent
 from core.agents.utils.github_helper import (
     get_file_contents,
     post_comment,
@@ -81,16 +81,23 @@ target directory (a path under services/ in the monorepo) all three subagents wi
 write into.
 
 Your job:
-1. Delegate the Backend, Frontend, and Test Writer sections of tasks.md to the \
+0. Before delegating anything, write the design.md, openapi.yaml, and tasks.md \
+content you were given to these exact paths on your sandbox filesystem: \
+{SHARED_DOCS_DIR}/design.md, {SHARED_DOCS_DIR}/openapi.yaml, {SHARED_DOCS_DIR}/tasks.md. \
+Tell Backend and Frontend to read these files directly rather than relying on your \
+own summary of them in the delegation message -- this is deliberate: a paraphrased \
+relay of a structured contract like openapi.yaml risks a dropped or renamed field \
+neither subagent could catch without the literal source to check against.
+2. Delegate the Backend, Frontend, and Test Writer sections of tasks.md to the \
 matching subagent. Let Backend and Frontend work in parallel; Test Writer should \
 start once there's real code for it to test against.
-2. Check in on all three as they work. When a subagent reports its portion done, \
+3. Check in on all three as they work. When a subagent reports its portion done, \
 verify it actually did what tasks.md asked -- spot-check the files it wrote.
-3. Perform integration checking yourself: confirm the frontend's API calls actually \
+4. Perform integration checking yourself: confirm the frontend's API calls actually \
 match the endpoints Backend implemented and the contract in openapi.yaml; resolve \
 any mismatch by asking the relevant subagent to fix it, or fixing it directly if \
 it's a small inconsistency (e.g. a route casing or field-name mismatch).
-4. Once all three are done and consistent, package the ENTIRE target directory \
+5. Once all three are done and consistent, package the ENTIRE target directory \
 (everything under the path you were given) into a single gzip-compressed tar \
 archive at exactly this path: {_ARCHIVE_SANDBOX_PATH}
 
@@ -109,7 +116,7 @@ source code and config, not binary assets.
 actually produced, and verify with `tar -tzf {_ARCHIVE_SANDBOX_PATH}` that the \
 paths inside look correct (relative, prefixed with the target directory) before \
 finishing.
-5. Confirm the archive was created successfully (nonzero size, contents look \
+6. Confirm the archive was created successfully (nonzero size, contents look \
 right) before ending your turn. State "IMPLEMENTATION COMPLETE" once you've \
 verified this.
 
