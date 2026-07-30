@@ -26,6 +26,7 @@ security → deploy) with human approval gates at each stage.
 
 Step 3.1 (shared agent utilities) is complete. Step 3.2 (Intake Agent) is complete.
 Step 3.3 (Requirements Agent) is complete. Step 3.4 (Design Agent) is complete.
+Step 3.5 (Implementation Coordinator) is complete.
 
 Files created:
 
@@ -48,6 +49,12 @@ core/agents/
     intake_agent.py
     requirements_agent.py
     design_agent.py
+    implementation_coordinator.py
+core/agents/subagents/
+    __init__.py
+    backend_agent.py
+    frontend_agent.py
+    test_writer_agent.py
 core/decisions/
     0011-base-anthropic-client.md
 requirements.txt
@@ -347,7 +354,7 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 | `smoke_claude_agent` | **PASSED 5/5** | Rewritten for anthropic Messages API (ADR-0011); rate-table cost verified ($0.00021 for 30in/8out tokens on Sonnet 4.6) |
 | `smoke_ado` | **PASSED 4/4** | Fixed: drop `System.State` from all four `_make_patch` calls — only `"New"` is valid as initial state in FORGE-Build |
 | `smoke_github` | **PASSED 8/8** | post_comment/add_label retargeted to forge-template; commit_files + open_pr verified against forge-demo-apps; get_file_contents round-trip added (Step 3.4) |
-| `smoke_managed_agents` | **PASSED 6/6** | Multi-agent path verified: coordinator + smoke-specialist subagent, 2-thread audit trail, specialist received delegation and replied DONE, archive of both agent resources, session.error scan clean |
+| `smoke_managed_agents` | **PASSED 10/10** | Extended for Files API: specialist writes file to /mnt/session/outputs/, list_session_output_files + download_file_content verified, content match exact, 4-thread audit trail, archive clean |
 
 `.env` vars needed: `FORGE_APP_ID`, `FORGE_APP_PRIVATE_KEY`, `FORGE_APP_CLIENT_ID`, `FORGE_GITHUB_OWNER`, `FORGE_TARGET_REPO`, `FORGE_SOURCE_REPO`, `GITHUB_TOKEN`, `ADO_PAT`, `ANTHROPIC_API_KEY`
 
@@ -362,7 +369,8 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 - Step 3.2 Intake Agent (`core/agents/intake_agent.py`) — done; live run verified on issue #2.
 - Step 3.3 Requirements Agent (`core/agents/requirements_agent.py`) — done; live run verified on issue #2.
 - Step 3.4 Design Agent (`core/agents/design_agent.py`) — done; live run verified on issue #2 (PR #4 opened on forge-demo-apps).
-- Phase 3 next step: **3.5 Implementation Agent** (Stage 3 — Managed Agents coordinator + subagents)
+- Step 3.5 Implementation Coordinator (`core/agents/implementation_coordinator.py`) — done; dry run verified on issue #2 (96 files, 156 KB archive).
+- Phase 3 next step: **3.6 QA Agent** (Stage 4)
 
 ---
 
@@ -414,3 +422,66 @@ label → triggers Implementation (Gate 2, Document 6).
 - 2,929 input tokens / 12,738 output tokens / `total_cost_usd: $0.199857` / 222 s
 - `design.md` + `openapi.yaml` + `tasks.md` committed to `forge-demo-apps` on `design/REQ-2026-01`
 - Draft PR #4 opened; summary comment posted to issue #2
+
+### managed_agents_wrapper.py — Files API additions (added Step 3.5)
+
+`_FILES_API_BETA = "files-api-2025-04-14"` — separate beta constant from `_BETA_HEADER`.
+
+`_files_headers() -> dict` — builds headers with **both** beta values comma-separated
+(`files-api-2025-04-14,managed-agents-2026-04-01`). Both are required together when
+scoping a file list to a session via `scope_id`; omitting either causes 400 or silent
+mis-filtering.
+
+`list_session_output_files(session_id, limit=100) -> list[dict]` — lists files persisted
+from `/mnt/session/outputs/` in the session sandbox. Only files written to that exact
+path are visible; scratch files elsewhere in the container are discarded on archive.
+
+`download_file_content(file_id) -> bytes` — downloads raw bytes for a file ID returned
+by `list_session_output_files`. Returns binary-safe bytes (caller decodes as needed).
+
+### core/agents/subagents/ — specialist subagent configs (added Step 3.5)
+
+`__init__.py` — exports `DEFAULT_SCOPED_TOOLS`: `agent_toolset_20260401` with
+`always_allow` permission policy and `web_search`/`web_fetch` disabled. All three
+specialists use this (offline, deterministic code generation — no network egress).
+
+`backend_agent.py` — .NET specialist. `get_config(service_root)` returns name +
+system prompt (writes to `<service_root>/backend/`) + scoped tools. Instructs the
+agent to run `dotnet build` and fix compile errors before declaring done.
+
+`frontend_agent.py` — Next.js/TypeScript specialist. `get_config(service_root)` writes
+to `<service_root>/frontend/`. TypeScript mandated (no `.js`/`.jsx`). Instructs `npm run build`.
+
+`test_writer_agent.py` — xUnit + Jest specialist. `get_config(service_root)` targets
+both backend and frontend directories. Reads subagent output from shared filesystem
+rather than waiting for an explicit hand-off. Instructs `dotnet test` + `npm test` sanity check.
+
+### implementation_coordinator.py — Stage 3
+
+Entry point: `python -m core.agents.implementation_coordinator --issue-number <n> --request-id <id>`
+
+- `--request-id` is **required** for a real run (determines `services/<request-id>/` target dir
+  and `feature/<request-id>` branch).
+- `--dry-run`: runs the REAL Managed Agents session (no cheap substitute exists for this), but
+  skips commit/PR/comment. Prints session ID, Console link, and file list.
+- Reads `design.md`, `openapi.yaml`, `tasks.md` from `forge-demo-apps` `main` via `get_file_contents()`.
+  **Prerequisite: the Design Agent's PR must be merged to `main` before running.**
+
+**Packaging convention:** coordinator tars the entire `services/<request-id>/` tree into
+`/mnt/session/outputs/implementation.tar.gz` before finishing. Python's `tarfile` module
+(not the model) reconstructs the exact path dict `commit_files()` expects. This sidesteps
+any ambiguity about whether the Files API's flat `filename` field preserves nested paths.
+
+**`_extract_archive_to_file_dict(archive_bytes, expected_prefix)`** — extracts the tar.gz,
+filters members to those starting with `expected_prefix` (guards against wrong working dir),
+decodes UTF-8 (raises `ValueError` on binary), returns `{path: content}` dict for `commit_files()`.
+
+**Output on a real run:**
+- All files committed to `feature/<request-id>` branch in `forge-demo-apps`
+- Draft PR opened against `main`; summary comment (with session ID + Console link) posted to tracking issue
+
+**Dry run verified 2026-07-30:**
+- Issue `forge-template#2`, request-id `REQ-2026-01`
+- session `sesn_0158Mvs91wfr9rNHPfa9W1oH` — 4 threads (coordinator + 3 specialists), `idle (end_turn)`
+- Archive: 156,728 bytes → 96 files extracted under `services/REQ-2026-01/`
+  (full .NET solution with DocumentApi + EmailWorker, Next.js frontend, xUnit + Jest tests)

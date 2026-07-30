@@ -90,6 +90,7 @@ logger = logging.getLogger(__name__)
 
 _ANTHROPIC_BASE = "https://api.anthropic.com/v1"
 _BETA_HEADER = "managed-agents-2026-04-01"
+_FILES_API_BETA = "files-api-2025-04-14"
 _ANTHROPIC_VERSION = "2023-06-01"
 
 _DEFAULT_COORDINATOR_MODEL = "claude-opus-4-6"
@@ -390,6 +391,71 @@ def get_subagent_audit_trail(session_id: str) -> dict:
         "thread_count": len(threads),
         "threads": thread_details,
     }
+
+
+def _files_headers() -> dict[str, str]:
+    """
+    Build headers for Files API calls scoped to a Managed Agents session.
+
+    The Files API is a separate beta from Managed Agents. Retrieving files scoped
+    to a session (scope_id=<session_id>) requires BOTH beta headers together,
+    comma-separated — confirmed against Anthropic's own Managed Agents cookbook.
+    Omitting either one either 400s (missing files-api beta) or silently ignores
+    the scope_id filter (missing managed-agents beta).
+    """
+    return {
+        "x-api-key": os.environ["ANTHROPIC_API_KEY"],
+        "anthropic-version": _ANTHROPIC_VERSION,
+        "anthropic-beta": f"{_FILES_API_BETA},{_BETA_HEADER}",
+    }
+
+
+def list_session_output_files(session_id: str, limit: int = 100) -> list[dict]:
+    """
+    List files persisted from a Managed Agents session's sandbox filesystem.
+
+    IMPORTANT: only files written to /mnt/session/outputs/ inside the sandbox are
+    persisted and appear here. Anything written elsewhere in the container (scratch
+    files, intermediate build output) is invisible to this call and is discarded
+    when the session's environment is archived.
+
+    Args:
+        session_id: The session ID whose output files to list.
+        limit: Max files to return in one page (API default 20, max 1000).
+
+    Returns:
+        List of file metadata dicts, each with at least "id", "filename",
+        "size_bytes", "mime_type".
+    """
+    url = f"{_ANTHROPIC_BASE}/files"
+    response = requests.get(
+        url,
+        headers=_files_headers(),
+        params={"scope_id": session_id, "limit": limit},
+        timeout=30,
+    )
+    response.raise_for_status()
+    files = response.json().get("data", [])
+    logger.info("Listed %d output file(s) for session %s", len(files), session_id)
+    return files
+
+
+def download_file_content(file_id: str) -> bytes:
+    """
+    Download the raw bytes of a file produced by a Managed Agents session.
+
+    Args:
+        file_id: The file ID from list_session_output_files().
+
+    Returns:
+        Raw file content as bytes — binary-safe. FORGE uses this to download the
+        gzip-compressed implementation archive, not text.
+    """
+    url = f"{_ANTHROPIC_BASE}/files/{file_id}/content"
+    response = requests.get(url, headers=_files_headers(), timeout=60)
+    response.raise_for_status()
+    logger.info("Downloaded file %s (%d bytes)", file_id, len(response.content))
+    return response.content
 
 
 def archive_session(
