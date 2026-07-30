@@ -93,6 +93,12 @@ def main():
             ),
         )
 
+        # get_file_contents — read back the file we just committed, verify round-trip
+        run(
+            f"get_file_contents('forge-smoke-test.txt', '{branch_name}')",
+            lambda: gh.get_file_contents("forge-smoke-test.txt", branch=branch_name),
+        )
+
         # open_pr — branch now has a real commit ahead of main
         pr = run(
             "open_pr (draft PR on non-empty branch)",

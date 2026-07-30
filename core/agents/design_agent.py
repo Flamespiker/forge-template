@@ -1,0 +1,288 @@
+"""
+FORGE Design Agent — Stage 2 (Design).
+
+Reads the approved requirements.md (committed to the monorepo by the Requirements
+Agent) and the team's stack-preferences.yaml, and produces:
+  - design.md    — architecture narrative, component breakdown, tech choices
+  - openapi.yaml — API contract (OpenAPI 3.0)
+  - tasks.md     — implementation task breakdown for the Stage 3 subagents
+                    (Backend, Frontend, Test Writer)
+
+Unlike the Requirements Agent (which commits straight to main), the Design Agent
+is the first stage to use the full create_branch() -> commit_files() -> open_pr()
+chain: it commits all three artifacts to a design/<request-id> branch in the
+monorepo and opens a PR against main (Document 6 Gate 2). A summary comment
+linking to the PR is posted on the FORGE tracking issue for the Technical
+Approver.
+
+Usage:
+    python -m core.agents.design_agent --issue-number 2 --request-id REQ-2026-01
+    python -m core.agents.design_agent --issue-number 2 --request-id REQ-2026-01 --dry-run
+
+CLI arguments:
+    --issue-number       FORGE tracking issue number in forge-template, used to
+                          post the summary comment (unless --dry-run) (required)
+    --request-id          FORGE request ID. Required for a real run (used for the
+                          monorepo path docs/<request-id>/ and the design/<request-id>
+                          branch); optional for --dry-run.
+    --stack-preferences   Local path to team/stack-preferences.yaml (default:
+                          "team/stack-preferences.yaml" — lives in forge-template,
+                          so a local checkout has it directly; no GitHub API call
+                          needed to read it).
+    --dry-run             Fetch requirements.md and stack preferences and call
+                          Claude, but print design.md / openapi.yaml / tasks.md to
+                          stdout instead of committing or posting to GitHub.
+
+Per ADR-0011 / Document 6: the invoke_agent() call is wrapped in try/except at the
+call site. On failure (or malformed/truncated JSON, or an invalid openapi.yaml), a
+failure comment is posted to the tracking issue (best-effort, real run only)
+before the exception is re-raised.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+
+import yaml
+
+from core.agents.utils import file_io
+from core.agents.utils.claude_agent_wrapper import invoke_agent
+from core.agents.utils.github_helper import (
+    get_file_contents,
+    post_comment,
+    create_branch,
+    commit_files,
+    open_pr,
+)
+
+logger = logging.getLogger(__name__)
+
+_STAGE_NAME = "design"
+_MAX_TOKENS = 20000
+_DEFAULT_STACK_PREFS_PATH = "team/stack-preferences.yaml"
+
+_SYSTEM_PROMPT = """You are the FORGE Design Agent for Legal Aid Alberta's software \
+delivery pipeline.
+
+You will be given: (1) the approved requirements.md for this request, and (2) the \
+team's stack-preferences.yaml, describing the technology choices FORGE mandates at \
+the core layer and the choices the team has made (or not yet made) at the team \
+layer.
+
+Your job is to produce three artifacts:
+
+1. design.md — an architecture narrative for a Technical Approver, using the C4 \
+model's vocabulary (context, containers, components) at whatever level of detail \
+this request warrants. Include:
+   - A short architecture overview: what this system is, and where it fits.
+   - A component breakdown: name each component/service, its responsibility, and \
+which requirement(s) it satisfies (cite requirement IDs from requirements.md, \
+e.g. "R-001", so every component traces back to a real requirement).
+   - A tech choices section: state the core-layer mandates as fixed (TypeScript, \
+Next.js, .NET, Docker, Azure Container Apps, GitHub Actions), and state the \
+team-layer choices from stack-preferences.yaml. For any team-layer field marked \
+as not yet set, propose a sensible, well-justified default and flag it clearly as \
+a Design Agent recommendation for the Technical Approver to confirm or override \
+at this gate — never present an unset field as if it were an existing team \
+standard.
+   - Do not invent requirements not present in requirements.md; if something is \
+ambiguous, state your assumption explicitly rather than silently picking one.
+
+2. openapi.yaml — a valid OpenAPI 3.0 specification (YAML) for the API surface \
+implied by requirements.md. Cover the endpoints, request/response schemas, and \
+status codes needed to satisfy the requirements. This must be syntactically valid \
+YAML — it will be parsed and rejected if it is not.
+
+3. tasks.md — an implementation task breakdown organized under three headings \
+("Backend", "Frontend", "Test Writer"), matching the three subagents that will \
+read this file in Stage 3. Each task should be concrete and scoped enough that a \
+subagent can pick it up and know what to build, and should reference the \
+design.md component and requirement ID it serves.
+
+Output format — this is strict:
+Respond with ONLY a single JSON object, no markdown code fences, no prose before \
+or after it. It must have exactly this shape:
+
+{
+  "design_markdown": "<string - the full contents of design.md>",
+  "openapi_yaml": "<string - the full contents of openapi.yaml, valid YAML>",
+  "tasks_markdown": "<string - the full contents of tasks.md>"
+}"""
+
+
+def _build_user_prompt(requirements_md: str, stack_prefs_text: str) -> str:
+    return (
+        "## Approved Requirements (requirements.md)\n\n"
+        f"{requirements_md}\n"
+        "## Team Stack Preferences\n\n"
+        f"{stack_prefs_text}\n"
+        "---\n"
+        "Produce your JSON response now."
+    )
+
+
+def _parse_model_json(output_text: str) -> dict:
+    text = output_text.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    return json.loads(text)
+
+
+def run_design_agent(
+    issue_number: int,
+    request_id: str | None = None,
+    stack_preferences_path: str = _DEFAULT_STACK_PREFS_PATH,
+    dry_run: bool = False,
+) -> dict:
+    """
+    Core entry point. Returns the parsed model output dict
+    ({"design_markdown": ..., "openapi_yaml": ..., "tasks_markdown": ...}).
+    """
+    if not dry_run and not request_id:
+        raise ValueError(
+            "--request-id is required for a real (non-dry-run) run — it determines "
+            "the docs/<request-id>/ path and design/<request-id> branch in the "
+            "monorepo. Refusing to proceed without it."
+        )
+    resolved_request_id = request_id or "unknown"
+
+    requirements_md = get_file_contents(
+        f"docs/{resolved_request_id}/requirements.md", branch="main"
+    )
+    stack_prefs = file_io.read_yaml(stack_preferences_path)
+    stack_prefs_text = file_io.format_stack_preferences_markdown(stack_prefs)
+    user_prompt = _build_user_prompt(requirements_md, stack_prefs_text)
+
+    try:
+        result = invoke_agent(
+            system_prompt=_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            max_tokens=_MAX_TOKENS,
+            stage_name=_STAGE_NAME,
+            request_id=resolved_request_id,
+        )
+        if result.stop_reason == "max_tokens":
+            raise ValueError(
+                f"Model response was truncated at max_tokens={_MAX_TOKENS} — "
+                "increase _MAX_TOKENS in design_agent.py and retry."
+            )
+        parsed_output = _parse_model_json(result.output_text)
+        design_md = parsed_output["design_markdown"]
+        openapi_yaml_text = parsed_output["openapi_yaml"]
+        tasks_md = parsed_output["tasks_markdown"]
+
+        # Validate the openapi.yaml the model produced is actually parseable —
+        # catch a malformed spec here rather than committing broken YAML.
+        try:
+            yaml.safe_load(openapi_yaml_text)
+        except yaml.YAMLError as yaml_exc:
+            raise ValueError(f"Model's openapi_yaml is not valid YAML: {yaml_exc}") from yaml_exc
+
+    except Exception as exc:
+        logger.exception("Design Agent failed for request %s", resolved_request_id)
+        if not dry_run:
+            failure_body = (
+                "⚠️ **FORGE Design Agent failed to produce a draft.**\n\n"
+                f"Error: `{exc}`\n\n"
+                "An Orchestration Manager needs to investigate before this request "
+                "can proceed. Do not apply `design-approved` yet."
+            )
+            try:
+                post_comment(issue_number, failure_body)
+            except Exception:
+                logger.exception("Also failed to post failure comment to issue #%s", issue_number)
+        raise
+
+    if dry_run:
+        print("=" * 20, "design.md", "=" * 20)
+        print(design_md)
+        print("=" * 20, "openapi.yaml", "=" * 20)
+        print(openapi_yaml_text)
+        print("=" * 20, "tasks.md", "=" * 20)
+        print(tasks_md)
+        logger.info(
+            "Dry run complete for request %s — nothing committed, nothing posted.",
+            resolved_request_id,
+        )
+        return parsed_output
+
+    branch_name = f"design/{resolved_request_id}"
+    create_branch(branch_name, from_branch="main")
+    commit_files(
+        branch_name=branch_name,
+        files={
+            f"docs/{resolved_request_id}/design.md": design_md,
+            f"docs/{resolved_request_id}/openapi.yaml": openapi_yaml_text,
+            f"docs/{resolved_request_id}/tasks.md": tasks_md,
+        },
+        commit_message=f"FORGE Design Agent: draft design for {resolved_request_id}",
+    )
+
+    owner = os.environ.get("FORGE_GITHUB_OWNER", "")
+    source_repo = os.environ.get("FORGE_SOURCE_REPO", "forge-template")
+    tracking_issue_ref = f"{owner}/{source_repo}#{issue_number}" if owner else f"#{issue_number}"
+
+    pr = open_pr(
+        title=f"FORGE Design: {resolved_request_id}",
+        body=(
+            f"Design artifacts for {resolved_request_id}, generated by the FORGE "
+            f"Design Agent.\n\nRelated FORGE tracking issue: {tracking_issue_ref}\n\n"
+            "Contains `design.md`, `openapi.yaml`, and `tasks.md`. Merge to approve "
+            "(Document 6 Gate 2)."
+        ),
+        head_branch=branch_name,
+        base_branch="main",
+        draft=True,
+    )
+
+    comment_body = (
+        f"<!-- forge:agent-comment stage=design request_id={resolved_request_id} -->\n"
+        "## 📐 FORGE Design — Draft Ready for Review\n\n"
+        f"`design.md`, `openapi.yaml`, and `tasks.md` have been committed to "
+        f"`docs/{resolved_request_id}/` on branch `{branch_name}`, and a draft PR "
+        f"has been opened: {pr['html_url']}\n\n"
+        "---\n"
+        "Review the PR. If the architecture and API contract look correct, mark it "
+        "ready for review and merge it, then apply the `design-approved` label to "
+        "this issue to start Implementation."
+    )
+    post_comment(issue_number, comment_body)
+    logger.info(
+        "Design Agent complete for request %s — PR #%s opened, summary posted to issue #%s.",
+        resolved_request_id,
+        pr["number"],
+        issue_number,
+    )
+    return parsed_output
+
+
+def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")
+    logging.basicConfig(level=logging.INFO)
+    parser = argparse.ArgumentParser(description="FORGE Design Agent")
+    parser.add_argument("--issue-number", required=True, type=int, help="FORGE tracking issue number in forge-template")
+    parser.add_argument("--request-id", default=None, help="FORGE request ID (required for a real run)")
+    parser.add_argument("--stack-preferences", default=_DEFAULT_STACK_PREFS_PATH, help="Local path to team/stack-preferences.yaml")
+    parser.add_argument("--dry-run", action="store_true", help="Print output instead of committing/posting")
+    args = parser.parse_args()
+
+    try:
+        run_design_agent(
+            issue_number=args.issue_number,
+            request_id=args.request_id,
+            stack_preferences_path=args.stack_preferences,
+            dry_run=args.dry_run,
+        )
+    except Exception:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

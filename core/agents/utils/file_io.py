@@ -250,6 +250,37 @@ def format_requirements_markdown(requirements: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def format_stack_preferences_markdown(prefs: dict) -> str:
+    """
+    Render a parsed team/stack-preferences.yaml dict as Markdown for an LLM prompt.
+
+    Team-layer fields still at their template placeholder value (any string
+    starting with "your-", e.g. "your-css-approach") are treated as NOT YET
+    DECIDED rather than a real team choice, and are called out explicitly so
+    the Design Agent proposes a value and flags it for confirmation rather than
+    presenting an undecided field as if it were a settled team standard.
+    """
+    lines: list[str] = []
+
+    def render_section(title: str, fields: dict) -> None:
+        lines.append(f"**{title}**")
+        for key, value in (fields or {}).items():
+            if isinstance(value, str) and value.startswith("your-"):
+                lines.append(
+                    f"- {key}: _(not yet set by the team — propose a sensible "
+                    f"default and flag it for confirmation)_"
+                )
+            else:
+                lines.append(f"- {key}: {value}")
+        lines.append("")
+
+    render_section("Frontend", prefs.get("frontend", {}))
+    render_section("Backend", prefs.get("backend", {}))
+    render_section("Infrastructure", prefs.get("infrastructure", {}))
+    render_section("Observability", prefs.get("observability", {}))
+    return "\n".join(lines)
+
+
 # ── Markdown ───────────────────────────────────────────────────────────────────
 
 def read_markdown(path: str | Path) -> str:

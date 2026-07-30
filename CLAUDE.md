@@ -25,7 +25,7 @@ security → deploy) with human approval gates at each stage.
 **Phase 3 — Agent Implementation** (in progress)
 
 Step 3.1 (shared agent utilities) is complete. Step 3.2 (Intake Agent) is complete.
-Step 3.3 (Requirements Agent) is complete.
+Step 3.3 (Requirements Agent) is complete. Step 3.4 (Design Agent) is complete.
 
 Files created:
 
@@ -47,6 +47,7 @@ core/agents/utils/
 core/agents/
     intake_agent.py
     requirements_agent.py
+    design_agent.py
 core/decisions/
     0011-base-anthropic-client.md
 requirements.txt
@@ -345,7 +346,7 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 | `smoke_file_io` | **PASSED 7/7** | Path bug fixed (`parents[5]` → `parents[4]`); xlsx + markdown + yaml all passing |
 | `smoke_claude_agent` | **PASSED 5/5** | Rewritten for anthropic Messages API (ADR-0011); rate-table cost verified ($0.00021 for 30in/8out tokens on Sonnet 4.6) |
 | `smoke_ado` | **PASSED 4/4** | Fixed: drop `System.State` from all four `_make_patch` calls — only `"New"` is valid as initial state in FORGE-Build |
-| `smoke_github` | **PASSED 7/7** | post_comment/add_label retargeted to forge-template; commit_files + open_pr verified against forge-demo-apps |
+| `smoke_github` | **PASSED 8/8** | post_comment/add_label retargeted to forge-template; commit_files + open_pr verified against forge-demo-apps; get_file_contents round-trip added (Step 3.4) |
 | `smoke_managed_agents` | **PASSED 6/6** | Multi-agent path verified: coordinator + smoke-specialist subagent, 2-thread audit trail, specialist received delegation and replied DONE, archive of both agent resources, session.error scan clean |
 
 `.env` vars needed: `FORGE_APP_ID`, `FORGE_APP_PRIVATE_KEY`, `FORGE_APP_CLIENT_ID`, `FORGE_GITHUB_OWNER`, `FORGE_TARGET_REPO`, `FORGE_SOURCE_REPO`, `GITHUB_TOKEN`, `ADO_PAT`, `ANTHROPIC_API_KEY`
@@ -360,4 +361,56 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 - ADR-0011 committed at `core/decisions/0011-base-anthropic-client.md` — done.
 - Step 3.2 Intake Agent (`core/agents/intake_agent.py`) — done; live run verified on issue #2.
 - Step 3.3 Requirements Agent (`core/agents/requirements_agent.py`) — done; live run verified on issue #2.
-- Phase 3 next step: **3.4 Spec & Design Agent** (`core/agents/design_agent.py`)
+- Step 3.4 Design Agent (`core/agents/design_agent.py`) — done; live run verified on issue #2 (PR #4 opened on forge-demo-apps).
+- Phase 3 next step: **3.5 Implementation Agent** (Stage 3 — Managed Agents coordinator + subagents)
+
+---
+
+### github_helper.py — get_file_contents() (added Step 3.4)
+
+`get_file_contents(path: str, branch: str = "main") -> str`
+
+Reads a file from the target monorepo (`forge-demo-apps`) via the GitHub Contents API.
+Uses the GitHub App installation token (same auth context as `create_branch`/`commit_files`).
+Decodes the base64-encoded response body and returns UTF-8 string content.
+Required by the Design Agent (and all subsequent agents) to read artifacts committed by
+earlier pipeline stages without needing a local checkout of the monorepo.
+
+### file_io.py — format_stack_preferences_markdown() (added Step 3.4)
+
+`format_stack_preferences_markdown(prefs: dict) -> str`
+
+Renders a parsed `team/stack-preferences.yaml` dict as Markdown for an LLM prompt.
+Team-layer fields still at their template placeholder value (any string starting with
+`"your-"`) are called out as **not yet set** so the Design Agent proposes a default and
+flags it for Technical Approver confirmation rather than presenting it as a settled standard.
+
+### design_agent.py — Stage 2
+
+Entry point: `python -m core.agents.design_agent --issue-number <n> --request-id <id>`
+
+- `--request-id` is **required** for a real run (determines `docs/<request-id>/` path and
+  `design/<request-id>` branch in the monorepo).
+- `--dry-run` flag: fetches `requirements.md` + stack prefs, calls Claude, prints all three
+  artifacts to stdout. Does NOT create a branch, commit, or post.
+- `--stack-preferences`: local path to `team/stack-preferences.yaml` (default). No GitHub
+  API call needed — the file lives in `forge-template`, available in the local checkout.
+- `_MAX_TOKENS = 20000` — model produces ~12,700 output tokens for a 4-requirement intake.
+- First stage to use the full `create_branch() → commit_files() → open_pr()` chain.
+- `yaml.safe_load()` validates the model's `openapi_yaml` before committing — rejects
+  malformed YAML and posts a failure comment instead of committing broken output.
+
+**Output artifacts (committed to `forge-demo-apps` on `design/<request-id>` branch):**
+- `docs/<request-id>/design.md` — C4 architecture narrative, component breakdown, tech choices
+- `docs/<request-id>/openapi.yaml` — OpenAPI 3.0 API contract (YAML-validated before commit)
+- `docs/<request-id>/tasks.md` — implementation task breakdown for Backend / Frontend / Test Writer subagents
+
+A draft PR is opened against `main` in `forge-demo-apps`; a summary comment linking to the
+PR is posted on the FORGE tracking issue. Human merges the PR → applies `design-approved`
+label → triggers Implementation (Gate 2, Document 6).
+
+**Live run verified 2026-07-30:**
+- Issue `forge-template#2`, request-id `REQ-2026-01`
+- 2,929 input tokens / 12,738 output tokens / `total_cost_usd: $0.199857` / 222 s
+- `design.md` + `openapi.yaml` + `tasks.md` committed to `forge-demo-apps` on `design/REQ-2026-01`
+- Draft PR #4 opened; summary comment posted to issue #2

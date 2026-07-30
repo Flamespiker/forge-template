@@ -26,6 +26,7 @@ Required environment variables (see .env.example):
 
 from __future__ import annotations
 
+import base64
 import os
 import time
 import logging
@@ -233,6 +234,44 @@ def remove_label(issue_or_pr_number: int, label: str) -> None:
     if response.status_code != 404:
         response.raise_for_status()
     logger.info("Removed label '%s' from forge-template #%s", label, issue_or_pr_number)
+
+
+def get_file_contents(path: str, branch: str = "main") -> str:
+    """
+    Read a file's content from the target monorepo (forge-demo-apps) at a given
+    branch or ref, via the GitHub Contents API.
+
+    Uses the GitHub App installation token — same cross-repo auth context as
+    create_branch/commit_files/open_pr. Needed starting with the Design Agent
+    (Stage 2), which reads requirements.md — an artifact the Requirements Agent
+    committed to the monorepo, not something available in a local checkout of
+    forge-template.
+
+    Args:
+        path:   Repo-relative file path in the monorepo, e.g.
+                "docs/REQ-2026-01/requirements.md".
+        branch: Branch or ref to read from (default "main").
+
+    Returns:
+        Decoded UTF-8 file content as a string.
+
+    Raises:
+        requests.HTTPError: If the file does not exist at that path/ref (404) or
+                             the API call otherwise fails.
+    """
+    token = get_installation_token()
+    url = f"{_repo_url()}/contents/{path}"
+    response = requests.get(
+        url,
+        headers=_auth_headers(token),
+        params={"ref": branch},
+        timeout=15,
+    )
+    response.raise_for_status()
+    content_b64 = response.json()["content"]
+    content = base64.b64decode(content_b64).decode("utf-8")
+    logger.info("Read file '%s' (ref=%s, %d chars) from monorepo", path, branch, len(content))
+    return content
 
 
 def create_branch(branch_name: str, from_branch: str) -> dict:
