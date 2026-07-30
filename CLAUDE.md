@@ -26,7 +26,8 @@ security → deploy) with human approval gates at each stage.
 
 Step 3.1 (shared agent utilities) is complete. Step 3.2 (Intake Agent) is complete.
 Step 3.3 (Requirements Agent) is complete. Step 3.4 (Design Agent) is complete.
-Step 3.5 (Implementation Coordinator) is complete.
+Step 3.5 (Implementation Coordinator) is complete, including a real (non-dry-run)
+live run verified 2026-07-30 (PR #5 opened on forge-demo-apps).
 
 Files created:
 
@@ -369,7 +370,7 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 - Step 3.2 Intake Agent (`core/agents/intake_agent.py`) — done; live run verified on issue #2.
 - Step 3.3 Requirements Agent (`core/agents/requirements_agent.py`) — done; live run verified on issue #2.
 - Step 3.4 Design Agent (`core/agents/design_agent.py`) — done; live run verified on issue #2 (PR #4 opened on forge-demo-apps).
-- Step 3.5 Implementation Coordinator (`core/agents/implementation_coordinator.py`) — done; dry run verified on issue #2 (96 files, 156 KB archive).
+- Step 3.5 Implementation Coordinator (`core/agents/implementation_coordinator.py`) — done; dry run verified on issue #2 (96 files, 156 KB archive); **real live run verified 2026-07-30 (PR #5 opened on forge-demo-apps, 101 files)**.
 - Phase 3 next step: **3.6 QA Agent** (Stage 4)
 
 ---
@@ -490,6 +491,42 @@ decodes UTF-8 (raises `ValueError` on binary), returns `{path: content}` dict fo
 - session `sesn_0158Mvs91wfr9rNHPfa9W1oH` — 4 threads (coordinator + 3 specialists), `idle (end_turn)`
 - Archive: 156,728 bytes → 96 files extracted under `services/REQ-2026-01/`
   (full .NET solution with DocumentApi + EmailWorker, Next.js frontend, xUnit + Jest tests)
+
+**Live (real, non-dry-run) run verified 2026-07-30:**
+- Issue `forge-template#2`, request-id `REQ-2026-01`
+- session `sesn_01EP8tcHcgdkSz7m14wKL4k6` — 4 threads (coordinator + 3 specialists), `idle (end_turn)`
+- Archive: 79,601 bytes → 101 files extracted under `services/REQ-2026-01/`
+  (full .NET solution with DocumentApi + EmailWorker, Next.js/TypeScript frontend,
+  xUnit + Jest tests, Playwright e2e tests, `COMPLIANCE_CHECKLIST.md`)
+- Committed to `feature/REQ-2026-01` in `forge-demo-apps`; draft **PR #5** opened
+  against `main`; summary comment posted to tracking issue #2
+- Session, environment, coordinator, and all 3 subagents archived cleanly after commit
+
+**Operational incident during this run — resumed by ID, not by re-invoking the script:**
+The `python -m core.agents.implementation_coordinator` process was killed by the
+invoking shell tool's own timeout (background commands are capped around 10 minutes
+in that tooling) while `poll_until_idle()` was still waiting. This killed the *local*
+script only — the Managed Agents session itself runs server-side and kept working
+independently, reaching `idle (end_turn)` on its own. Recovery was a small one-off
+script that reused the already-known `session_id` / `coordinator_id` / `subagent_ids`
+/ `environment_id` (from the `managed_agents_session_start` JSON log line printed
+before the kill) to resume exactly where `run_implementation_coordinator()` left off —
+`poll_until_idle()` (instant, since already idle) → audit trail → list/download output
+files → `_extract_archive_to_file_dict()` → `commit_files()` → `open_pr()` →
+`post_comment()` → `archive_session()`.
+
+**Do NOT simply re-run `implementation_coordinator.py` after a kill/timeout like this.**
+`create_agent_session()` runs again and creates a second, duplicate, billable set of
+agents/environment/session on top of the one that may still be running or already
+finished — an orphaned resource with no cleanup. Before retrying, check for the
+`managed_agents_session_start` log line to recover the IDs, check whether
+`feature/<request-id>` already exists on `forge-demo-apps` (a sign of a prior partial
+completion), and prefer writing a resume script over a fresh invocation.
+
+Also observed: `commit_files()`'s `git/trees` call 422'd once and succeeded immediately
+on identical retry with no changes — treat a single `git/trees` 422 as possibly
+transient GitHub API flakiness, not necessarily a real path/data conflict, and retry
+before deep-diagnosing.
 
 ### Retrofit: Backend/Frontend read design docs from shared sandbox path, not coordinator relay (2026-07-30)
 
