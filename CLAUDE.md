@@ -28,9 +28,10 @@ Step 3.1 (shared agent utilities) is complete. Step 3.2 (Intake Agent) is comple
 Step 3.3 (Requirements Agent) is complete. Step 3.4 (Design Agent) is complete.
 Step 3.5 (Implementation Coordinator) is complete, including a real (non-dry-run)
 live run verified 2026-07-30 (PR #5 opened on forge-demo-apps). Step 3.8 (QA Agent)
-is complete — unit-tested with synthetic data 2026-08-03; no live run yet (needs a
-real monorepo checkout on a feature branch, which Phase 4's checkout wiring,
-step 4.5, doesn't provide yet).
+is complete, including a real (non-dry-run) live run verified 2026-08-04 against a
+manually-provided local checkout (8 ADO Bugs filed, PR #5 comment posted,
+`qa-loop-back` applied to issue #2) — the "needs Phase 4's checkout wiring" caveat
+only blocks the GitHub Actions automation, not a manual `--repo-path` invocation.
 
 Files created:
 
@@ -375,7 +376,7 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 - Step 3.3 Requirements Agent (`core/agents/requirements_agent.py`) — done; live run verified on issue #2.
 - Step 3.4 Design Agent (`core/agents/design_agent.py`) — done; live run verified on issue #2 (PR #4 opened on forge-demo-apps).
 - Step 3.5 Implementation Coordinator (`core/agents/implementation_coordinator.py`) — done; dry run verified on issue #2 (96 files, 156 KB archive); **real live run verified 2026-07-30 (PR #5 opened on forge-demo-apps, 101 files)**.
-- Step 3.8 QA Agent (`core/agents/qa_agent.py`) — done; unit-tested with synthetic data 2026-08-03 (no live run yet — see below).
+- Step 3.8 QA Agent (`core/agents/qa_agent.py`) — done; **real live run verified 2026-08-04** (8 ADO Bugs filed #96–103, comment posted on forge-demo-apps PR #5, `qa-loop-back` applied to issue #2 — see below).
 - Phase 3 next step: remaining stage agents (Security, Deploy) or Phase 4 wiring.
 
 ---
@@ -628,4 +629,62 @@ API/GitHub/ADO calls). `py_compile` clean; `smoke_github` (8/8) and `smoke_ado`
 Confirmed `forge-demo-apps`' frontend `package.json` has `"test": "jest"` (a bare
 script with no args of its own), so `npm test -- --ci --json --outputFile=...`
 correctly forwards those flags to Jest, matching the module docstring's assumption.
-**No live end-to-end run yet** — blocked on Phase 4 step 4.5 (checkout wiring).
+
+**Real `--dry-run` verified 2026-08-04** against an actual local checkout
+(`C:\Users\mikef\projects\forge-demo-apps-clone`, `services/REQ-2026-01/{backend,frontend}`)
+— first time this script ran real `dotnet test` / `npm test` rather than synthetic
+data. Results: backend 9/11 passed, frontend 38/44 passed, 8 deterministic bug
+candidates computed, Claude wrote the PR report, correctly recommended
+`qa-loop-back` (attempt 1 of 3). Confirms the TRX/Jest-JSON parsing, severity
+heuristic, and retry-attempt logic all work against real tool output, not just
+hand-built fixtures.
+
+**Two Windows-only bugs found and fixed in `_run_shell()` during that run**
+(both in the helper only — no behavior change on the Linux GitHub Actions
+runners this normally runs on):
+1. `subprocess.run(["npm", ...])` raised `FileNotFoundError` on Windows — `npm`
+   is actually `npm.cmd`, and Win32 `CreateProcess` doesn't consult `PATHEXT`
+   the way `cmd.exe` does, so a bare `"npm"` never resolves. Fixed by resolving
+   `command[0]` through `shutil.which()` before passing to `subprocess.run`.
+2. Jest's UTF-8/ANSI output (checkmarks, color codes) crashed a `subprocess`
+   reader thread with `UnicodeDecodeError` under Windows' default `cp1252`
+   text decoding. Fixed by passing `encoding="utf-8", errors="replace"`
+   explicitly. Didn't corrupt the first run's result (frontend parsing reads
+   the JSON report file, not stdout) but would have crashed the "suite failed
+   to produce a report" diagnostic path, which does fall back to a stdout/stderr
+   tail.
+
+**Discovered during that same session: PR #5 was already merged, and the checkout
+had uncommitted local patches never pushed to `forge-demo-apps`.** The dry-run's
+8 failures were run against a checkout someone had hand-patched to even get
+`dotnet restore`/`npm test` to run at all (missing `SendGrid.Extensions.
+DependencyInjection` package ref, missing `using Microsoft.Extensions.
+Configuration;`, an unresolvable `Microsoft.AspNetCore.Http.Features` package
+ref, an invalid Jest config key `setupFilesAfterFramework` instead of
+`setupFilesAfterEnv`, and missing frontend test devDependencies) — none of
+which were ever committed. Filed as **PR #7** (`fix/req-2026-01-test-infra` →
+`main`), reviewed, one stale/contradictory code comment removed, merged
+2026-08-04 (`fcae2b6`). Re-verified with a fully clean checkout
+(`git clean -xdf` in both `backend/` and `frontend/`, fresh `dotnet restore` +
+`npm install`) — **identical 8-failure result**, confirming these are real
+application bugs, not artifacts of the earlier patched state.
+
+**Real (non-dry-run) live run verified 2026-08-04**, against that clean,
+post-PR#7 checkout, invoked manually with `--repo-path` pointing at the local
+clone (no Phase 4 workflow wiring involved — `--pr-number` is only required
+for a real run per the script's own argparse help text; a manually-supplied
+checkout satisfies the "needs a repo on disk" requirement just as well as an
+Actions `actions/checkout` step would):
+- 8 ADO Bugs filed in FORGE-Build: #96–97 (backend, Severity 3-Medium),
+  #98–103 (frontend, Severity 2-High) — all with no parent User Story link
+  (expected; Phase 4 ADO item creation hasn't run for this request yet)
+- PR comment posted: `forge-demo-apps#5` comment
+  (`issuecomment-5184902825`), attempt 1 of 3
+- Label `qa-loop-back` applied to tracking issue `forge-template#2`
+  (alongside the pre-existing `clarification-pending`)
+- Claude call: 3,361 in / 947 out tokens, $0.024288, 15.58s
+
+**Still not exercised: the actual Phase 4 GitHub Actions checkout wiring**
+(step 4.5) — this run used a manually-provided local clone, not an
+Actions-driven checkout. Functionally equivalent for the script's own logic,
+but the workflow-level wiring itself remains unbuilt.
