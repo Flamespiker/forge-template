@@ -167,16 +167,24 @@ def create_bug(
     title: str,
     repro_steps: str,
     severity: str,
-    parent_story_id: int,
+    parent_story_id: int | None = None,
 ) -> dict:
     """
-    Create a Bug work item in ADO, linked to a parent User Story.
+    Create a Bug work item in ADO, optionally linked to a parent User Story.
 
     Args:
         title: Bug title.
         repro_steps: HTML or plain-text reproduction steps.
         severity: Severity string — one of "1 - Critical", "2 - High", "3 - Medium", "4 - Low".
-        parent_story_id: ADO work item ID of the parent User Story.
+        parent_story_id: ADO work item ID of the parent User Story. Optional
+            (default None) because as of Step 3.8 (QA Agent), Phase 4's ADO
+            item-creation wiring (step 4.3) has not yet run for any request —
+            no real User Story IDs exist yet to link against. When None, the
+            Bug is created without a parent link and the caller is responsible
+            for logging that the link was skipped. Once Phase 4 exists and a
+            real request-id -> User Story ID mapping is available, callers
+            should always pass a real ID here — this parameter should not stay
+            optional in practice once that mapping exists.
 
     Returns:
         The created work item object from the ADO REST API.
@@ -189,7 +197,15 @@ def create_bug(
         "System.Tags": _tag_string(),
     })
     bug = _create_work_item("Bug", patch)
-    link_items(parent_story_id, bug["id"])
+    if parent_story_id is not None:
+        link_items(parent_story_id, bug["id"])
+    else:
+        logger.warning(
+            "Bug #%s created with no parent User Story link — no real ADO "
+            "User Story ID was available (Phase 4 ADO item creation not yet run "
+            "for this request).",
+            bug["id"],
+        )
     return bug
 
 

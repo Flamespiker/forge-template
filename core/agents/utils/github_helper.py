@@ -274,6 +274,67 @@ def get_file_contents(path: str, branch: str = "main") -> str:
     return content
 
 
+def post_pr_comment(pr_number: int, body: str) -> dict:
+    """
+    Post a comment on a pull request in the target monorepo (forge-demo-apps).
+
+    Uses the GitHub App installation token — same cross-repo auth context as
+    create_branch/commit_files/open_pr/get_file_contents. Needed starting with the
+    QA Agent (Stage 4), which posts its test report on the feature PR in the
+    monorepo, not on the FORGE tracking issue in forge-template (post_comment is
+    same-repo-only, via GITHUB_TOKEN, and cannot reach forge-demo-apps).
+
+    GitHub's REST API treats PRs as issues for the comments endpoint, so this is
+    the same "/issues/{number}/comments" shape as post_comment() — just a
+    different repo and a different token.
+
+    Args:
+        pr_number: The pull request number in forge-demo-apps.
+        body: Markdown comment body.
+
+    Returns:
+        The created comment object from the GitHub API.
+    """
+    token = get_installation_token()
+    url = f"{_repo_url()}/issues/{pr_number}/comments"
+    response = requests.post(
+        url,
+        headers=_auth_headers(token),
+        json={"body": body},
+        timeout=15,
+    )
+    response.raise_for_status()
+    logger.info("Posted comment on monorepo PR #%s", pr_number)
+    return response.json()
+
+
+def get_pr_comments(pr_number: int) -> list[dict]:
+    """
+    Retrieve all comments on a pull request in the target monorepo (forge-demo-apps),
+    oldest first (GitHub's default ordering for this endpoint).
+
+    Uses the GitHub App installation token — same cross-repo auth context as
+    post_pr_comment(). Needed by the QA Agent to count its own prior comments on
+    this PR (each marked with the `<!-- forge:agent-comment stage=qa ... -->`
+    marker) as a stateless way to derive the current retry attempt number —
+    ADR-0002 means no other persistent counter exists between runs.
+
+    Args:
+        pr_number: The pull request number in forge-demo-apps.
+
+    Returns:
+        List of comment objects from the GitHub API. Each dict includes at least
+        "id", "user" (with "login"), "body", and "created_at".
+    """
+    token = get_installation_token()
+    url = f"{_repo_url()}/issues/{pr_number}/comments"
+    response = requests.get(url, headers=_auth_headers(token), timeout=15)
+    response.raise_for_status()
+    comments = response.json()
+    logger.info("Retrieved %d comment(s) from monorepo PR #%s", len(comments), pr_number)
+    return comments
+
+
 def create_branch(branch_name: str, from_branch: str) -> dict:
     """
     Create a new branch in the target repo from an existing branch.
