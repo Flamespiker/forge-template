@@ -84,6 +84,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -151,11 +152,14 @@ class TestSuiteResult:
 
 def _run_shell(command: list[str], cwd: str) -> subprocess.CompletedProcess:
     logger.info("Running: %s (cwd=%s)", " ".join(command), cwd)
+    resolved = shutil.which(command[0]) or command[0]
     return subprocess.run(
-        command,
+        [resolved, *command[1:]],
         cwd=cwd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=_TEST_TIMEOUT_SECONDS,
     )
 
