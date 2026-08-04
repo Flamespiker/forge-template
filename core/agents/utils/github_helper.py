@@ -518,3 +518,176 @@ def commit_files(
         commit_message,
     )
     return new_commit
+
+
+def get_pr(pr_number: int) -> dict:
+    """
+    Retrieve a pull request object from the target monorepo (forge-demo-apps).
+
+    Uses the GitHub App installation token — same cross-repo auth context as
+    post_pr_comment()/get_pr_comments(). Needed by the Security Agent to resolve
+    the PR's head commit SHA before creating inline review comments or a check
+    run — both APIs require a commit SHA, and QA never needed one since it only
+    posts a plain issue-style comment.
+
+    Args:
+        pr_number: The pull request number in forge-demo-apps.
+
+    Returns:
+        The pull request object from the GitHub API. Includes "head" (with
+        "sha" and "ref") among other fields.
+    """
+    token = get_installation_token()
+    url = f"{_repo_url()}/pulls/{pr_number}"
+    response = requests.get(url, headers=_auth_headers(token), timeout=15)
+    response.raise_for_status()
+    pr = response.json()
+    logger.info("Retrieved monorepo PR #%s (head SHA %s)", pr_number, pr["head"]["sha"][:8])
+    return pr
+
+
+def create_check_run(
+    head_sha: str,
+    name: str,
+    conclusion: str,
+    title: str,
+    summary: str,
+) -> dict:
+    """
+    Create a completed check run on a commit in the target monorepo (forge-demo-apps).
+
+    Uses the GitHub App installation token with the App's Checks: Read & Write
+    permission (step 2.1). Needed by the Security Agent (Document 2 §4.7): a
+    Critical finding sets a failing check run that blocks merge via the
+    branch-protection required-status-check rule ("security-check", Build Plan
+    4.8), independent of any human action or label. A clean scan still creates
+    a passing check run — the branch protection rule waits on this specific
+    check name resolving, not just the label.
+
+    Args:
+        head_sha:   The commit SHA to attach the check run to (the PR's head SHA).
+        name:       Check run name (must match the required-status-check name
+                    in branch protection — "security-check").
+        conclusion: One of "success", "failure", "neutral". FORGE only ever
+                    uses these three — no in_progress/queued states, since this
+                    is always called after the scan has already completed.
+        title:      Short check run title.
+        summary:    Markdown summary body (shown in the PR checks tab).
+
+    Returns:
+        The created check run object from the GitHub API.
+    """
+    if conclusion not in ("success", "failure", "neutral"):
+        raise ValueError(f"Unsupported check run conclusion: {conclusion!r}")
+    token = get_installation_token()
+    url = f"{_repo_url()}/check-runs"
+    response = requests.post(
+        url,
+        headers=_auth_headers(token),
+        json={
+            "name": name,
+            "head_sha": head_sha,
+            "status": "completed",
+            "conclusion": conclusion,
+            "output": {"title": title, "summary": summary},
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+    check_run = response.json()
+    logger.info("Created check run '%s' (conclusion=%s) on commit %s", name, conclusion, head_sha[:8])
+    return check_run
+
+
+def create_review_with_comments(
+    pr_number: int,
+    commit_id: str,
+    comments: list[dict],
+    body: str = "",
+) -> dict:
+    """
+    Post a single PR review carrying one or more inline (file+line) comments,
+    in one API call, on the target monorepo (forge-demo-apps).
+
+    Uses the GitHub App installation token. Needed by the Security Agent
+    (Document 2 §4.7 / Document 7: "severity-tagged inline PR comments").
+
+    GitHub's Reviews API is atomic: if ANY comment's path/line isn't part of
+    the PR's diff, the ENTIRE review call fails with a 422 and no comments are
+    posted. security_agent.py's post_findings() retries individually via
+    create_single_review_comment() when this happens, so one bad line
+    reference doesn't silently drop every other legitimate finding.
+
+    Args:
+        pr_number: The pull request number in forge-demo-apps.
+        commit_id: The commit SHA the comments are anchored to (PR's head SHA).
+        comments:  List of {"path": str, "line": int, "body": str} dicts.
+                   Always anchored to the "RIGHT" (new) side of the diff —
+                   security findings are always about code as it exists on
+                   the feature branch, never the base branch.
+        body:      Optional overall review summary body.
+
+    Returns:
+        The created review object from the GitHub API.
+
+    Raises:
+        requests.HTTPError: On any API failure, including the 422 diff-mismatch
+                             case described above — the caller handles fallback.
+    """
+    token = get_installation_token()
+    url = f"{_repo_url()}/pulls/{pr_number}/reviews"
+    payload_comments = [
+        {"path": c["path"], "line": c["line"], "side": "RIGHT", "body": c["body"]}
+        for c in comments
+    ]
+    response = requests.post(
+        url,
+        headers=_auth_headers(token),
+        json={"commit_id": commit_id, "body": body, "event": "COMMENT", "comments": payload_comments},
+        timeout=30,
+    )
+    response.raise_for_status()
+    review = response.json()
+    logger.info("Posted review with %d inline comment(s) on monorepo PR #%s", len(comments), pr_number)
+    return review
+
+
+def create_single_review_comment(
+    pr_number: int,
+    commit_id: str,
+    path: str,
+    line: int,
+    body: str,
+) -> dict:
+    """
+    Post one inline PR review comment. Fallback path when a batch review via
+    create_review_with_comments() fails atomically because one comment in the
+    batch had a path/line outside the diff.
+
+    Uses the GitHub App installation token.
+
+    Args:
+        pr_number: The pull request number in forge-demo-apps.
+        commit_id: The commit SHA the comment is anchored to.
+        path:      File path (repo-relative).
+        line:      Line number on the RIGHT (new) side of the diff.
+        body:      Comment Markdown body.
+
+    Returns:
+        The created review comment object from the GitHub API.
+
+    Raises:
+        requests.HTTPError: If this specific path/line still isn't part of the
+                             diff (422) — the caller catches this per-comment
+                             and falls back further to a plain PR comment.
+    """
+    token = get_installation_token()
+    url = f"{_repo_url()}/pulls/{pr_number}/comments"
+    response = requests.post(
+        url,
+        headers=_auth_headers(token),
+        json={"commit_id": commit_id, "path": path, "line": line, "side": "RIGHT", "body": body},
+        timeout=15,
+    )
+    response.raise_for_status()
+    return response.json()

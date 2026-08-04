@@ -86,6 +86,27 @@ pip install python-dotenv
 pip install anthropic
 ```
 
+### Semgrep — SAST scanner for the Security Agent (added Step 3.9)
+
+`requirements.txt` gained a new dependency block (placed after the `anthropic` entry):
+```
+semgrep>=1.90.0
+```
+
+Semgrep is the only one of the Security Agent's three scanners that's pip-installable.
+Gitleaks and OWASP Dependency-Check are **not** — both are standalone binary installs,
+still outstanding (see Outstanding section below). Don't add them to `requirements.txt`;
+document their install steps here once confirmed.
+
+**Verified 2026-08-04:** `pip install -r requirements.txt` installed cleanly —
+`semgrep-1.172.0` — and `semgrep --version` confirms it's on PATH.
+
+Side effect noted during install: pip's resolver also downgraded two packages already
+present in this environment that aren't in `requirements.txt` — `pywin32` (312→311) and
+`mcp` (1.29.0→1.23.3, pulled in as a semgrep transitive dependency's pin). Not something
+FORGE's own dependency list controls; flagged in case anything else on this machine
+depends on the newer `mcp`.
+
 ---
 
 ## Key Decisions Made This Session

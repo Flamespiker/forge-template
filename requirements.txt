@@ -24,3 +24,7 @@ python-dotenv>=1.0.0
 # Managed Agents beta endpoints, which are separate from the Messages API.
 # ADR-0011: switched from claude-agent-sdk to this package; see that ADR for rationale.
 anthropic>=0.120.2
+
+# Semgrep — SAST scanner for the Security Agent (Stage 5). Gitleaks and OWASP
+# Dependency-Check are NOT pip-installable — separate binary installs, see CLAUDE.md.
+semgrep>=1.90.0
