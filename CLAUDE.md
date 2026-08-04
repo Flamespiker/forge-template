@@ -27,7 +27,10 @@ security → deploy) with human approval gates at each stage.
 Step 3.1 (shared agent utilities) is complete. Step 3.2 (Intake Agent) is complete.
 Step 3.3 (Requirements Agent) is complete. Step 3.4 (Design Agent) is complete.
 Step 3.5 (Implementation Coordinator) is complete, including a real (non-dry-run)
-live run verified 2026-07-30 (PR #5 opened on forge-demo-apps).
+live run verified 2026-07-30 (PR #5 opened on forge-demo-apps). Step 3.8 (QA Agent)
+is complete — unit-tested with synthetic data 2026-08-03; no live run yet (needs a
+real monorepo checkout on a feature branch, which Phase 4's checkout wiring,
+step 4.5, doesn't provide yet).
 
 Files created:
 
@@ -51,6 +54,7 @@ core/agents/
     requirements_agent.py
     design_agent.py
     implementation_coordinator.py
+    qa_agent.py
 core/agents/subagents/
     __init__.py
     backend_agent.py
@@ -145,7 +149,7 @@ Credentials in `forge-template` repo:
 | Function | Auth | Target repo |
 |---|---|---|
 | `post_comment`, `add_label`, `remove_label` | `GITHUB_TOKEN` | `forge-template` (tracking issue lives here) |
-| `create_branch`, `commit_files`, `open_pr` | App installation token | `forge-demo-apps` (cross-repo work) |
+| `create_branch`, `commit_files`, `open_pr`, `get_file_contents`, `post_pr_comment`, `get_pr_comments` | App installation token | `forge-demo-apps` (cross-repo work) |
 
 - `FORGE_SOURCE_REPO` env var names the orchestration repo (default: `forge-template`)
 - `FORGE_TARGET_REPO` env var names the monorepo (default: `forge-demo-apps`)
@@ -371,7 +375,8 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 - Step 3.3 Requirements Agent (`core/agents/requirements_agent.py`) — done; live run verified on issue #2.
 - Step 3.4 Design Agent (`core/agents/design_agent.py`) — done; live run verified on issue #2 (PR #4 opened on forge-demo-apps).
 - Step 3.5 Implementation Coordinator (`core/agents/implementation_coordinator.py`) — done; dry run verified on issue #2 (96 files, 156 KB archive); **real live run verified 2026-07-30 (PR #5 opened on forge-demo-apps, 101 files)**.
-- Phase 3 next step: **3.6 QA Agent** (Stage 4)
+- Step 3.8 QA Agent (`core/agents/qa_agent.py`) — done; unit-tested with synthetic data 2026-08-03 (no live run yet — see below).
+- Phase 3 next step: remaining stage agents (Security, Deploy) or Phase 4 wiring.
 
 ---
 
@@ -551,3 +556,76 @@ source.
 - Coordinator's own delegation message can still summarize the docs for convenience; the
   requirement is only that Backend/Frontend treat the shared-path files as the source of
   truth, not the summary.
+
+### github_helper.py — post_pr_comment() / get_pr_comments() (added Step 3.8)
+
+`post_pr_comment(pr_number: int, body: str) -> dict` / `get_pr_comments(pr_number: int) -> list[dict]`
+
+Both use the GitHub App installation token, targeting a PR in `forge-demo-apps` (not
+`forge-template`). Needed by the QA Agent, which posts its test report on the feature
+PR in the monorepo rather than on the FORGE tracking issue — `post_comment()`/
+`get_issue_comments()` are same-repo-only (`GITHUB_TOKEN`) and cannot reach
+`forge-demo-apps`. Both reuse the same `/issues/{number}/comments` endpoint shape as
+`post_comment()`/`get_issue_comments()` (GitHub treats PRs as issues for comments) —
+just a different repo and a different auth context.
+
+### ado_helper.py — create_bug()'s parent_story_id is now optional (added Step 3.8)
+
+`create_bug(title, repro_steps, severity, parent_story_id: int | None = None)`
+
+Previously `parent_story_id` was required. As of the QA Agent, Phase 4's ADO
+item-creation step (4.3) hasn't been built/run for any request yet, so no real ADO
+User Story IDs exist to link Bugs against. When `None`, `create_bug()` skips the
+`link_items()` call and logs a warning instead of raising — the Bug is still filed,
+just without a parent link. Once Phase 4 exists and writes real IDs to
+`docs/<request-id>/ado-work-items.json`, callers should always pass a real ID; this
+parameter stays optional in the function signature so `create_bug()` doesn't break
+existing callers, but is expected to always receive a real ID in practice going forward.
+
+### qa_agent.py — Stage 4 (QA) (added Step 3.8)
+
+Entry point: `python -m core.agents.qa_agent --issue-number <n> --request-id <id> --pr-number <n> --repo-path <path>`
+
+Unlike every prior stage, QA needs the actual repository contents on disk to run
+tests — not just individual file reads via the Contents API. Assumes a local
+checkout of `forge-demo-apps` at the feature branch already exists at `--repo-path`
+(populated by the invoking GitHub Actions job's own `actions/checkout` step, Phase 4
+step 4.5, **not yet wired**). This script does not clone anything itself.
+
+- Runs `dotnet test` (backend, parses the TRX report) and `npm test -- --ci --json
+  --outputFile=...` (frontend, parses the Jest JSON report) against
+  `services/<request-id>/{backend,frontend}` under `--repo-path`.
+- Presence of the TRX/JSON report file (not process exit code) determines whether a
+  suite actually ran — `dotnet test`/`npm test` also exit non-zero on mere test
+  failures, so exit code alone can't distinguish "ran, some failed" from "never ran"
+  (e.g. a compile error).
+- Severity classification (`_classify_failure_severity()`) is a deterministic
+  substring heuristic (Document 3: "FORGE automatic, not AI judgment") — assertion-
+  library markers (`xunit.sdk`, `expect(`, `tobe(`, etc.) → Medium; anything else
+  (unhandled exception/crash, build/run failure) → High. Claude is not asked to
+  decide pass/fail or severity.
+- Retry-attempt number is derived statelessly (ADR-0002): `1 + count of this
+  agent's own prior comments on the PR`, identified by the
+  `<!-- forge:agent-comment stage=qa request_id=<id> ... -->` marker via
+  `get_pr_comments()`. No separate counter to keep in sync.
+- `_MAX_RETRIES = 3` (Document 6: QA retries up to three times before escalating).
+  Applies `qa-approved` (all pass), `qa-loop-back` (failures, attempts ≤ 3), or
+  `qc-retry-limit-reached` (failures, attempts > 3) to the FORGE tracking issue.
+- Claude is used only once per run: given the already-computed deterministic test
+  summary (counts, failures, severities, bugs filed, attempt number, label), it
+  writes the human-facing Markdown test report comment posted to the feature PR —
+  instructed not to re-judge pass/fail or severity.
+- `_resolve_parent_story_id(request_id)` looks for a real ADO User Story ID at
+  `docs/<request-id>/ado-work-items.json`'s `primary_user_story_id` key; returns
+  `None` (logs a warning) since Phase 4 hasn't written one for any request yet —
+  see the `ado_helper.py` entry above. Bugs are filed either way.
+- `--dry-run`: runs tests and computes everything (including the Claude call) but
+  prints to stdout instead of filing ADO Bugs, posting to GitHub, or applying labels.
+
+**Verified 2026-08-03:** unit-tested with synthetic data in Claude.ai chat (no live
+API/GitHub/ADO calls). `py_compile` clean; `smoke_github` (8/8) and `smoke_ado`
+(4/4) re-run clean after the additive `github_helper.py`/`ado_helper.py` changes.
+Confirmed `forge-demo-apps`' frontend `package.json` has `"test": "jest"` (a bare
+script with no args of its own), so `npm test -- --ci --json --outputFile=...`
+correctly forwards those flags to Jest, matching the module docstring's assumption.
+**No live end-to-end run yet** — blocked on Phase 4 step 4.5 (checkout wiring).
