@@ -1,0 +1,714 @@
+"""
+FORGE Deploy Agent — Stage 6 (Deploy, staging only).
+
+Deploys the built application to the `forge-staging` Azure Container Apps
+environment: detects deployable units, generates any missing Dockerfiles,
+builds and pushes container images to ACR, and creates/updates one Container
+App per unit. Posts one summary PR comment listing each unit's staging URL.
+
+No Claude/invoke_agent call anywhere in this stage — unlike every prior
+stage agent, there is no human-facing write-up here that benefits from an
+LLM pass. Everything this agent produces (unit detection, Dockerfile
+generation, the PR comment) is deterministic string/template work, in the
+same spirit as QA's TRX/Jest parsing and Security's severity mapping: no
+judgment call exists here that would justify a model call. This is a
+deliberate scope decision, not an oversight.
+
+Scope: staging auto-deploy only (Document 3 §9 / FORGE-context v36, chat 33).
+Production (GitHub Environment-gated, second service principal) is explicitly
+out of scope for this stage — see the module-level TODO markers below for
+exactly what's deferred.
+
+Unit detection (deterministic, not an LLM decision — Document 3's "FORGE
+automatic, not AI judgment" discipline, same as QA/Security):
+  - Walk services/<request-id>/backend/ for *.csproj files, skipping any
+    path with a case-insensitive "test" substring in any path segment (same
+    convention as team/gitleaks-allowlist.toml's test-path exclusion).
+  - Classify each remaining project as "web" (references
+    Microsoft.NET.Sdk.Web or Microsoft.AspNetCore.App) or "worker"
+    (references Microsoft.Extensions.Hosting, no ASP.NET reference). A
+    project matching neither is treated as "worker" (no public ingress) as
+    the safer default, logged as a warning — see _classify_backend_unit().
+  - Treat services/<request-id>/frontend/package.json as one additional
+    "frontend" unit if present.
+  - Each unit gets a Container App / image name of
+    "<request-id>-<slug>" (all lowercase — both Docker repository names and
+    Azure Container App names reject uppercase), its own Dockerfile
+    (generated from template ONLY if the project directory doesn't already
+    have one of its own — see _generate_dockerfile_if_missing()), its own
+    ACR image tag, and its own Container App.
+
+KNOWN, PRE-EXISTING GAP THIS AGENT SURFACES BUT DOES NOT FIX: neither
+design.md nor any prior stage ever assigned the EmailWorker unit a
+design.md entry (it appears in tasks.md but not design.md — flagged back in
+the Stage 3 build, chat 28, and never resolved). Rather than silently deploy
+a unit nobody signed off on in the design document, _detect_design_gaps()
+flags (does not block) any detected unit whose project label doesn't appear
+in docs/<request-id>/design.md, surfaced in the PR comment.
+
+TARGET PORTS (fixed, not configurable per-run): web units listen on 8080
+(matching the ASP.NET Core 8+ container default and this project's existing
+hand-written Dockerfiles for DocumentApi/EmailWorker), frontend units on
+3000 (Next.js default `next start` port). Worker units get no ingress at
+all — Document 3 doesn't call for background workers to be reachable over
+HTTP.
+
+Like QA and Security, this script needs the actual repository contents on
+disk (passed via --repo-path) — it does not clone anything itself.
+
+Required environment variables (see .env.example):
+    ACR_LOGIN_SERVER, ACR_USERNAME, ACR_PASSWORD — existing ACR admin-user
+        credentials (Phase 2.2), unchanged, no new secrets introduced here.
+    AZURE_STAGING_CREDENTIALS — one JSON blob with clientId/clientSecret/
+        subscriptionId/tenantId for the `forge-deploy-staging` service
+        principal (Document 3 §9, finalized chat 33). Parsed here, not by
+        the caller — arrives as a single secret in both local .env and the
+        eventual GitHub Actions secret.
+
+Reads container_apps.staging (environment, resource_group, max_replicas,
+min_replicas, cpu, memory) from team/config.yaml via file_io.read_yaml() —
+same config file ado_helper.py already reads at import time, different
+top-level key.
+
+Usage:
+    python -m core.agents.deploy_agent --issue-number 2 --request-id REQ-2026-01 \\
+        --repo-path /path/to/forge-demo-apps-checkout --commit-sha <sha> --pr-number 5
+    python -m core.agents.deploy_agent --issue-number 2 --request-id REQ-2026-01 \\
+        --repo-path /path/to/forge-demo-apps-checkout --commit-sha <sha> --pr-number 5 --dry-run
+
+CLI arguments:
+    --issue-number   FORGE tracking issue number in forge-template, used to
+                     post a failure comment (best-effort) on error (required).
+    --request-id     FORGE request ID. Used to locate services/<request-id>/
+                     within --repo-path and docs/<request-id>/design.md
+                     (required).
+    --repo-path      Local path to an existing checkout of forge-demo-apps at
+                     the feature branch (required — this script does not
+                     clone anything itself).
+    --commit-sha     The commit SHA being deployed — used as the image tag
+                     and included in the PR comment (required).
+    --pr-number      The feature PR number in forge-demo-apps, used to post
+                     the summary comment (required).
+    --dry-run        Run real `docker build`/`docker push` (same "exercise
+                     the real tool, skip only the posting" pattern as QA/
+                     Security dry-runs) and real read-only `az` queries
+                     (login, containerapp show, FQDN lookup), but print the
+                     planned `az containerapp create`/`update` command
+                     instead of executing it, and post nothing to the PR.
+
+Per ADR-0011 / Document 6: the deploy body is wrapped in try/except at the
+call site. On failure, a failure comment is posted to the tracking issue
+(best-effort, real run only) before the exception is re-raised.
+
+No label is applied on success — Document 6's Label Reference table has no
+deploy-stage label; staging is a verification step, not a release gate
+(Build Plan 4.7 / Document 2 §4.8).
+
+EXPLICITLY OUT OF SCOPE for this stage (not built, not stubbed):
+  - Production path (second service principal, GitHub Environment approval
+    gate, `az containerapp update` against forge-production).
+  - Rollback (redeploy prior image tag).
+  - Phase 4 GitHub Actions wiring for either environment.
+  - Actually resolving the EmailWorker design.md gap (flagged, not fixed).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from core.agents.utils import file_io
+from core.agents.utils.github_helper import get_file_contents, post_comment, post_pr_comment
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+_STAGE_NAME = "deploy"
+_SHELL_TIMEOUT_SECONDS = 1800  # 30 min ceiling per docker/az invocation
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_TEMPLATES_DIR = _REPO_ROOT / "core" / "agents" / "templates" / "dockerfiles"
+_CONFIG_PATH = _REPO_ROOT / "team" / "config.yaml"
+
+_TARGET_PORTS = {"web": 8080, "frontend": 3000}  # worker units get no ingress at all
+_SENSITIVE_FLAGS = {"--registry-password", "-p"}  # redacted before logging/printing
+
+_CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+
+
+@dataclass
+class DeployUnit:
+    slug: str                # e.g. "document-api", "email-worker", "frontend"
+    unit_type: str            # "web" | "worker" | "frontend"
+    name: str                 # Container App / image name: "<request-id>-<slug>" (lowercase)
+    project_label: str        # human label for the design.md gap check, e.g. "DocumentApi"
+    dockerfile_path: Path
+    build_context: Path
+    csproj_name: str | None = None
+    dockerfile_generated: bool = False
+
+
+@dataclass
+class DeployResult:
+    unit: DeployUnit
+    image: str
+    action: str               # "create" | "update"
+    command: list[str] = field(default_factory=list)
+    executed: bool = False
+    fqdn: str | None = None
+
+
+def _run_shell(
+    command: list[str],
+    cwd: str,
+    input_text: str | None = None,
+    timeout: int = _SHELL_TIMEOUT_SECONDS,
+    log_override: str | None = None,
+) -> subprocess.CompletedProcess:
+    logger.info("Running: %s (cwd=%s)", log_override or " ".join(command), cwd)
+    resolved = shutil.which(command[0]) or command[0]
+    return subprocess.run(
+        [resolved, *command[1:]],
+        cwd=cwd,
+        input=input_text,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    )
+
+
+def _redact_command(command: list[str]) -> list[str]:
+    redacted = list(command)
+    for i, token in enumerate(redacted):
+        if token in _SENSITIVE_FLAGS and i + 1 < len(redacted):
+            redacted[i + 1] = "***"
+    return redacted
+
+
+def _slugify(name: str) -> str:
+    """'DocumentApi' -> 'document-api', 'EmailWorker' -> 'email-worker', 'frontend' -> 'frontend'."""
+    return _CAMEL_BOUNDARY.sub("-", name).lower()
+
+
+# ---------------------------------------------------------------------------
+# Unit detection
+# ---------------------------------------------------------------------------
+
+def _classify_backend_unit(csproj_path: Path) -> str:
+    """Fixed, deterministic mapping (module docstring) — not an LLM judgment call."""
+    content = csproj_path.read_text(encoding="utf-8")
+    if "Microsoft.NET.Sdk.Web" in content or "Microsoft.AspNetCore.App" in content:
+        return "web"
+    if "Microsoft.Extensions.Hosting" in content:
+        return "worker"
+    logger.warning(
+        "%s matched neither the 'web' nor 'worker' classification markers -- "
+        "defaulting to 'worker' (no public ingress) as the safer default.",
+        csproj_path,
+    )
+    return "worker"
+
+
+def _detect_backend_units(backend_dir: Path, request_id: str) -> list[DeployUnit]:
+    units: list[DeployUnit] = []
+    if not backend_dir.is_dir():
+        return units
+
+    for csproj_path in sorted(backend_dir.rglob("*.csproj")):
+        rel_parts = csproj_path.relative_to(backend_dir).parts
+        if any("test" in part.lower() for part in rel_parts):
+            continue
+
+        project_label = csproj_path.parent.name
+        unit_type = _classify_backend_unit(csproj_path)
+        slug = _slugify(project_label)
+        units.append(DeployUnit(
+            slug=slug,
+            unit_type=unit_type,
+            name=f"{request_id.lower()}-{slug}",
+            project_label=project_label,
+            dockerfile_path=csproj_path.parent / "Dockerfile",
+            build_context=backend_dir,
+            csproj_name=csproj_path.name,
+        ))
+    return units
+
+
+def _detect_frontend_unit(frontend_dir: Path, request_id: str) -> DeployUnit | None:
+    if not (frontend_dir / "package.json").is_file():
+        return None
+    slug = "frontend"
+    return DeployUnit(
+        slug=slug,
+        unit_type="frontend",
+        name=f"{request_id.lower()}-{slug}",
+        project_label="frontend",
+        dockerfile_path=frontend_dir / "Dockerfile",
+        build_context=frontend_dir,
+    )
+
+
+def _detect_units(repo_path: str, request_id: str) -> list[DeployUnit]:
+    service_root = Path(repo_path) / "services" / request_id
+    units = _detect_backend_units(service_root / "backend", request_id)
+    frontend_unit = _detect_frontend_unit(service_root / "frontend", request_id)
+    if frontend_unit:
+        units.append(frontend_unit)
+    return units
+
+
+# ---------------------------------------------------------------------------
+# Dockerfile + .dockerignore generation
+# ---------------------------------------------------------------------------
+
+def _assembly_name(csproj_path: Path) -> str:
+    try:
+        tree = ET.parse(csproj_path)
+        elem = tree.find(".//AssemblyName")
+        if elem is not None and elem.text:
+            return elem.text.strip()
+    except ET.ParseError:
+        logger.warning("Could not parse %s as XML -- falling back to filename for AssemblyName.", csproj_path)
+    return csproj_path.stem
+
+
+def _generate_dockerfile_if_missing(unit: DeployUnit) -> bool:
+    """Returns True if a Dockerfile was generated, False if one already existed (not overwritten)."""
+    if unit.dockerfile_path.exists():
+        logger.info("Dockerfile already exists for %s at %s -- not overwriting.", unit.name, unit.dockerfile_path)
+        return False
+
+    if unit.unit_type == "frontend":
+        content = (_TEMPLATES_DIR / "nextjs.Dockerfile.template").read_text(encoding="utf-8")
+    else:
+        template_name = "dotnet-web.Dockerfile.template" if unit.unit_type == "web" else "dotnet-worker.Dockerfile.template"
+        content = (_TEMPLATES_DIR / template_name).read_text(encoding="utf-8")
+
+        build_props_path = unit.build_context / "Directory.Build.props"
+        build_props_copy_line = (
+            'COPY ["Directory.Build.props", "."]\n' if build_props_path.exists() else ""
+        )
+        assembly_name = _assembly_name(unit.dockerfile_path.parent / unit.csproj_name)
+        content = (
+            content.replace("{{BUILD_PROPS_COPY_LINE}}", build_props_copy_line)
+            .replace("{{PROJECT_DIR}}", unit.project_label)
+            .replace("{{CSPROJ_NAME}}", unit.csproj_name)
+            .replace("{{ASSEMBLY_NAME}}", assembly_name)
+        )
+
+    unit.dockerfile_path.write_text(content, encoding="utf-8")
+    logger.info("Generated Dockerfile for %s at %s.", unit.name, unit.dockerfile_path)
+    return True
+
+
+_DOCKERIGNORE_BACKEND = "**/bin/\n**/obj/\n**/*.user\n.vs/\n"
+_DOCKERIGNORE_FRONTEND = "node_modules\n.next\nnpm-debug.log*\n.env*.local\n.git\n"
+
+
+def _ensure_dockerignore(build_context: Path, unit_type: str) -> None:
+    """
+    Not part of the original brief, but required for a *correct* build:
+    without excluding node_modules/bin/obj, `COPY . .` in the generated
+    templates would overwrite the fresh, correct-platform artifacts copied
+    from the earlier build stage with host-platform ones (Windows dotnet
+    obj/ caches absolute host paths; frontend node_modules would carry
+    Windows-native binaries into a linux/alpine image), and would balloon
+    the build context with gigabytes of irrelevant files on every build.
+    Only written if the build context doesn't already have one.
+    """
+    dockerignore_path = build_context / ".dockerignore"
+    if dockerignore_path.exists():
+        return
+    content = _DOCKERIGNORE_FRONTEND if unit_type == "frontend" else _DOCKERIGNORE_BACKEND
+    dockerignore_path.write_text(content, encoding="utf-8")
+    logger.info("Generated .dockerignore at %s.", dockerignore_path)
+
+
+# ---------------------------------------------------------------------------
+# Docker build / push
+# ---------------------------------------------------------------------------
+
+def _docker_build(unit: DeployUnit, full_image: str) -> None:
+    command = ["docker", "build", "-f", str(unit.dockerfile_path), "-t", full_image, str(unit.build_context)]
+    result = _run_shell(command, cwd=str(_REPO_ROOT))
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"docker build failed for unit {unit.name} (image {full_image}):\n"
+            f"{(result.stdout or '')[-3000:]}\n{(result.stderr or '')[-2000:]}"
+        )
+
+
+def _docker_login(acr_login_server: str, acr_username: str, acr_password: str) -> None:
+    command = ["docker", "login", acr_login_server, "-u", acr_username, "--password-stdin"]
+    result = _run_shell(
+        command, cwd=str(_REPO_ROOT), input_text=acr_password, timeout=120,
+        log_override=f"docker login {acr_login_server} -u {acr_username} --password-stdin",
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"docker login to {acr_login_server} failed:\n{(result.stderr or '')[-2000:]}")
+
+
+def _docker_push(full_image: str) -> None:
+    result = _run_shell(["docker", "push", full_image], cwd=str(_REPO_ROOT))
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"docker push failed for {full_image}:\n{(result.stdout or '')[-3000:]}\n{(result.stderr or '')[-2000:]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Azure CLI: login, existence check, create/update, FQDN
+# ---------------------------------------------------------------------------
+
+def _az_login(credentials: dict) -> None:
+    client_id = credentials["clientId"]
+    tenant_id = credentials["tenantId"]
+    subscription_id = credentials["subscriptionId"]
+
+    command = ["az", "login", "--service-principal", "-u", client_id, "-p", credentials["clientSecret"], "--tenant", tenant_id]
+    result = _run_shell(
+        command, cwd=str(_REPO_ROOT), timeout=120,
+        log_override=f"az login --service-principal -u {client_id} -p *** --tenant {tenant_id}",
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"az login --service-principal failed:\n{(result.stderr or '')[-1500:]}")
+
+    sub_result = _run_shell(["az", "account", "set", "--subscription", subscription_id], cwd=str(_REPO_ROOT), timeout=60)
+    if sub_result.returncode != 0:
+        raise RuntimeError(f"az account set --subscription failed:\n{(sub_result.stderr or '')[-1500:]}")
+
+
+def _containerapp_exists(name: str, resource_group: str) -> bool:
+    result = _run_shell(
+        ["az", "containerapp", "show", "--name", name, "--resource-group", resource_group],
+        cwd=str(_REPO_ROOT), timeout=120,
+    )
+    return result.returncode == 0
+
+
+def _build_containerapp_command(
+    unit: DeployUnit,
+    exists: bool,
+    full_image: str,
+    acr_login_server: str,
+    acr_username: str,
+    acr_password: str,
+    staging_cfg: dict,
+) -> tuple[str, list[str]]:
+    resource_group = staging_cfg["resource_group"]
+
+    if exists:
+        return "update", [
+            "az", "containerapp", "update",
+            "--name", unit.name,
+            "--resource-group", resource_group,
+            "--image", full_image,
+        ]
+
+    command = [
+        "az", "containerapp", "create",
+        "--name", unit.name,
+        "--resource-group", resource_group,
+        "--environment", staging_cfg["environment"],
+        "--image", full_image,
+        "--registry-server", acr_login_server,
+        "--registry-username", acr_username,
+        "--registry-password", acr_password,
+        "--cpu", str(staging_cfg["cpu"]),
+        "--memory", str(staging_cfg["memory"]),
+        "--min-replicas", str(staging_cfg["min_replicas"]),
+        "--max-replicas", str(staging_cfg["max_replicas"]),
+    ]
+    if unit.unit_type in _TARGET_PORTS:
+        command += ["--target-port", str(_TARGET_PORTS[unit.unit_type]), "--ingress", "external"]
+    return "create", command
+
+
+def _get_fqdn(name: str, resource_group: str) -> str | None:
+    result = _run_shell(
+        ["az", "containerapp", "show", "--name", name, "--resource-group", resource_group,
+         "--query", "properties.configuration.ingress.fqdn", "-o", "tsv"],
+        cwd=str(_REPO_ROOT), timeout=120,
+    )
+    if result.returncode != 0:
+        return None
+    fqdn = (result.stdout or "").strip()
+    return fqdn or None
+
+
+# ---------------------------------------------------------------------------
+# design.md gap check
+# ---------------------------------------------------------------------------
+
+def _detect_design_gaps(request_id: str, units: list[DeployUnit]) -> list[str]:
+    """
+    Flags (never blocks) any detected unit with no corresponding design.md
+    entry, so a unit deployed without design sign-off doesn't go unnoticed.
+
+    Checks both the literal project directory name (e.g. "EmailWorker") and
+    a de-camelCased, spaced variant ("Email Worker") case-insensitively --
+    design.md is human-authored prose and consistently refers to components
+    with a space ("Document API", "Email Worker"), never the bare
+    identifier, so a literal-only match produces false-positive gaps for
+    units that ARE documented.
+    """
+    try:
+        design_md = get_file_contents(f"docs/{request_id}/design.md")
+    except Exception:
+        logger.warning(
+            "Could not fetch docs/%s/design.md -- skipping the design-doc gap check for this run.",
+            request_id,
+        )
+        return []
+
+    lowered = design_md.lower()
+    gaps = []
+    for unit in units:
+        spaced = _CAMEL_BOUNDARY.sub(" ", unit.project_label)
+        variants = {unit.project_label.lower(), spaced.lower()}
+        if not any(variant in lowered for variant in variants):
+            gaps.append(unit.project_label)
+    return gaps
+
+
+# ---------------------------------------------------------------------------
+# PR comment (deterministic — no Claude call, see module docstring)
+# ---------------------------------------------------------------------------
+
+def _build_pr_comment(request_id: str, commit_sha: str, results: list[DeployResult], design_gaps: list[str]) -> str:
+    marker = f"<!-- forge:agent-comment stage=deploy request_id={request_id} -->"
+    lines = [
+        marker,
+        "## FORGE Deploy Agent — Staging Deployment",
+        "",
+        f"**Request:** {request_id}  ",
+        f"**Commit:** `{commit_sha[:12]}`",
+        "",
+        "| Unit | Type | Image | Staging URL |",
+        "|---|---|---|---|",
+    ]
+    for r in results:
+        url = f"https://{r.fqdn}" if r.fqdn else "_(internal — no public ingress)_"
+        lines.append(f"| `{r.unit.name}` | {r.unit.unit_type} | `{r.image}` | {url} |")
+    lines.append("")
+
+    if design_gaps:
+        lines.append(
+            "**design.md gap:** the following deployed unit(s) have no corresponding entry "
+            f"in `docs/{request_id}/design.md` — deployed anyway, but nobody has signed off on "
+            "them in the design document:"
+        )
+        for g in design_gaps:
+            lines.append(f"- {g}")
+        lines.append("")
+
+    lines.append(
+        "_Staging deploy only — not gated; Document 6 has no deploy-stage label, so none is "
+        "applied here._"
+    )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Orchestration
+# ---------------------------------------------------------------------------
+
+def _load_staging_config() -> dict:
+    config = file_io.read_yaml(_CONFIG_PATH)
+    staging = (config or {}).get("container_apps", {}).get("staging")
+    if not staging:
+        raise ValueError(f"No container_apps.staging block found in {_CONFIG_PATH}")
+    required = ("environment", "resource_group", "max_replicas", "min_replicas", "cpu", "memory")
+    missing = [k for k in required if k not in staging]
+    if missing:
+        raise ValueError(f"container_apps.staging in {_CONFIG_PATH} is missing key(s): {missing}")
+    return staging
+
+
+def _require_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise ValueError(f"Required environment variable {name} is not set.")
+    return value
+
+
+def run_deploy_agent(
+    issue_number: int,
+    request_id: str,
+    repo_path: str,
+    commit_sha: str,
+    pr_number: int,
+    dry_run: bool = False,
+) -> dict:
+    """Core entry point. Returns a dict summarizing the run."""
+    try:
+        acr_login_server = _require_env("ACR_LOGIN_SERVER")
+        acr_username = _require_env("ACR_USERNAME")
+        acr_password = _require_env("ACR_PASSWORD")
+        azure_credentials = json.loads(_require_env("AZURE_STAGING_CREDENTIALS"))
+        for key in ("clientId", "clientSecret", "subscriptionId", "tenantId"):
+            if key not in azure_credentials:
+                raise ValueError(f"AZURE_STAGING_CREDENTIALS is missing required key '{key}'.")
+
+        staging_cfg = _load_staging_config()
+
+        units = _detect_units(repo_path, request_id)
+        if not units:
+            raise ValueError(
+                f"No deployable units detected under services/{request_id}/ in {repo_path} — "
+                "nothing to deploy. Check --repo-path and --request-id."
+            )
+        logger.info(
+            "Detected %d unit(s) for %s: %s",
+            len(units), request_id, ", ".join(f"{u.name} ({u.unit_type})" for u in units),
+        )
+
+        for unit in units:
+            unit.dockerfile_generated = _generate_dockerfile_if_missing(unit)
+            _ensure_dockerignore(unit.build_context, unit.unit_type)
+
+        # Real docker build + push for every unit, dry-run or not — same
+        # "exercise the real tool, skip only the posting" pattern as
+        # QA/Security's --dry-run.
+        _docker_login(acr_login_server, acr_username, acr_password)
+
+        full_images: dict[str, str] = {}
+        for unit in units:
+            full_image = f"{acr_login_server}/{unit.name}:{commit_sha}"
+            full_images[unit.name] = full_image
+            _docker_build(unit, full_image)
+            _docker_push(full_image)
+
+        # Real az login + real read-only existence checks, dry-run or not —
+        # only the create/update mutation itself is print-only in dry-run.
+        _az_login(azure_credentials)
+
+        results: list[DeployResult] = []
+        for unit in units:
+            full_image = full_images[unit.name]
+            exists = _containerapp_exists(unit.name, staging_cfg["resource_group"])
+            action, command = _build_containerapp_command(
+                unit, exists, full_image, acr_login_server, acr_username, acr_password, staging_cfg,
+            )
+            result = DeployResult(unit=unit, image=full_image, action=action, command=command)
+
+            if dry_run:
+                logger.info(
+                    "[dry-run] Would run: %s", " ".join(_redact_command(command)),
+                )
+            else:
+                exec_result = _run_shell(
+                    command, cwd=str(_REPO_ROOT), timeout=_SHELL_TIMEOUT_SECONDS,
+                    log_override=" ".join(_redact_command(command)),
+                )
+                if exec_result.returncode != 0:
+                    raise RuntimeError(
+                        f"az containerapp {action} failed for unit {unit.name}:\n"
+                        f"{(exec_result.stdout or '')[-3000:]}\n{(exec_result.stderr or '')[-2000:]}"
+                    )
+                result.executed = True
+                if unit.unit_type in _TARGET_PORTS:
+                    result.fqdn = _get_fqdn(unit.name, staging_cfg["resource_group"])
+            results.append(result)
+
+        design_gaps = _detect_design_gaps(request_id, units)
+        pr_comment = _build_pr_comment(request_id, commit_sha, results, design_gaps)
+
+    except Exception as exc:
+        logger.exception("Deploy Agent failed for request %s", request_id)
+        if not dry_run:
+            failure_body = (
+                "⚠️ **FORGE Deploy Agent failed to complete.**\n\n"
+                f"Error: `{exc}`\n\n"
+                "An Orchestration Manager needs to investigate before staging can be "
+                "considered deployed for this request."
+            )
+            try:
+                post_comment(issue_number, failure_body)
+            except Exception:
+                logger.exception("Also failed to post failure comment to issue #%s", issue_number)
+        raise
+
+    run_summary = {
+        "units": [
+            {
+                "name": r.unit.name,
+                "type": r.unit.unit_type,
+                "image": r.image,
+                "action": r.action,
+                "command": _redact_command(r.command),
+                "executed": r.executed,
+                "fqdn": r.fqdn,
+                "dockerfile_generated": r.unit.dockerfile_generated,
+            }
+            for r in results
+        ],
+        "design_gaps": design_gaps,
+        "pr_comment_markdown": pr_comment,
+    }
+
+    if dry_run:
+        print("=" * 20, "units detected", "=" * 20)
+        print(json.dumps(run_summary["units"], indent=2))
+        print("=" * 20, "design.md gaps", "=" * 20)
+        print(json.dumps(design_gaps, indent=2))
+        print("=" * 20, "PR comment (not posted)", "=" * 20)
+        print(pr_comment)
+        logger.info(
+            "Dry run complete for request %s -- images built and pushed for real, "
+            "containerapp create/update NOT executed, nothing posted.",
+            request_id,
+        )
+        return run_summary
+
+    post_pr_comment(pr_number, pr_comment)
+
+    logger.info(
+        "Deploy Agent complete for request %s -- %d unit(s) deployed to staging, "
+        "PR #%s comment posted.",
+        request_id, len(results), pr_number,
+    )
+    return run_summary
+
+
+def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")
+    logging.basicConfig(level=logging.INFO)
+    parser = argparse.ArgumentParser(description="FORGE Deploy Agent (staging)")
+    parser.add_argument("--issue-number", required=True, type=int, help="FORGE tracking issue number in forge-template")
+    parser.add_argument("--request-id", required=True, help="FORGE request ID")
+    parser.add_argument("--repo-path", required=True, help="Local path to an existing checkout of forge-demo-apps at the feature branch")
+    parser.add_argument("--commit-sha", required=True, help="Commit SHA being deployed (used as the image tag)")
+    parser.add_argument("--pr-number", required=True, type=int, help="Feature PR number in forge-demo-apps")
+    parser.add_argument("--dry-run", action="store_true", help="Real docker build/push, but print (don't execute) az containerapp commands and post nothing")
+    args = parser.parse_args()
+
+    try:
+        run_deploy_agent(
+            issue_number=args.issue_number,
+            request_id=args.request_id,
+            repo_path=args.repo_path,
+            commit_sha=args.commit_sha,
+            pr_number=args.pr_number,
+            dry_run=args.dry_run,
+        )
+    except Exception:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
