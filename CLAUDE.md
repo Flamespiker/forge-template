@@ -36,7 +36,11 @@ Step 3.9 (Security Agent) is complete, including a real (non-dry-run) live run
 verified 2026-08-05 against the merged PR #5 (0 findings across Semgrep/Gitleaks/
 Dependency-Check, `security-check` check run created with conclusion `success`,
 `security-approved` applied to issue #2) — same manual `--repo-path` pattern as
-the QA Agent's real run.
+the QA Agent's real run. Step 3.10 (Deploy Agent) is complete, including a real
+(non-dry-run) live run verified 2026-08-05 against the merged PR #5's backend
+units (`req-2026-01-document-api`, `req-2026-01-email-worker` deployed to
+`forge-staging`; PR #5 comment posted) — the frontend unit and a real runtime
+gap found on EmailWorker are still open, see below.
 
 Files created:
 
@@ -61,16 +65,26 @@ core/agents/
     design_agent.py
     implementation_coordinator.py
     qa_agent.py
+    security_agent.py
+    deploy_agent.py
 core/agents/subagents/
     __init__.py
     backend_agent.py
     frontend_agent.py
     test_writer_agent.py
+core/agents/templates/dockerfiles/
+    dotnet-web.Dockerfile.template
+    dotnet-worker.Dockerfile.template
+    nextjs.Dockerfile.template
 core/decisions/
     0011-base-anthropic-client.md
 requirements.txt
 .env.example
 ```
+
+(`security_agent.py` was missing from this list in a prior session despite
+being complete and live-run-verified since Step 3.9 — added here alongside
+`deploy_agent.py`, not a new file.)
 
 ---
 
@@ -404,7 +418,8 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 - Step 3.5 Implementation Coordinator (`core/agents/implementation_coordinator.py`) — done; dry run verified on issue #2 (96 files, 156 KB archive); **real live run verified 2026-07-30 (PR #5 opened on forge-demo-apps, 101 files)**.
 - Step 3.8 QA Agent (`core/agents/qa_agent.py`) — done; **real live run verified 2026-08-04** (8 ADO Bugs filed #96–103, comment posted on forge-demo-apps PR #5, `qa-loop-back` applied to issue #2 — see below).
 - Step 3.9 Security Agent (`core/agents/security_agent.py`) — done; **real live run verified 2026-08-05** (PR #5 comment posted, `security-check` check run created (conclusion `success`), `security-approved` applied to issue #2 — see below).
-- Phase 3 next step: remaining stage agent (Deploy) or Phase 4 wiring.
+- Step 3.10 Deploy Agent (`core/agents/deploy_agent.py`) — done for the staging path; **real live run verified 2026-08-05** against the two backend units (`req-2026-01-document-api`, `req-2026-01-email-worker`) — see below. Frontend unit and the EmailWorker runtime-config gap are open follow-ups, not blockers on Step 3.10 itself.
+- Phase 3 next step: Phase 4 wiring (all six stage agents now exist for the staging path).
 
 ---
 
@@ -815,3 +830,149 @@ satisfies the on-disk-repo requirement" pattern as the QA Agent's real run
   conclusion `success`
 - Label `security-approved` applied to tracking issue `forge-template#2`
 - Claude call: 599 in / 269 out tokens, $0.005832, 5.37s
+
+### deploy_agent.py — Stage 6 (Deploy, staging)
+
+Entry point: `python -m core.agents.deploy_agent --issue-number <n> --request-id <id> --repo-path <path> --commit-sha <sha> --pr-number <n> [--dry-run]`
+
+Like QA and Security, this stage needs the actual repository contents on
+disk (`--repo-path`) — it does not clone anything itself. Unlike every
+prior stage, **it never calls Claude/`invoke_agent()`** — unit detection,
+Dockerfile generation, and the PR comment are all deterministic
+string/template work with no judgment call to hand to a model, the same
+"FORGE automatic, not AI judgment" discipline QA's severity classifier and
+Security's severity tables already established, just taken one step
+further (no model call at all, not even for a write-up).
+
+- **Unit detection** walks `services/<request-id>/backend/` for `*.csproj`
+  files (skipping any path with a case-insensitive "test" segment, same
+  convention as `team/gitleaks-allowlist.toml`), classifies each as `web`
+  (references `Microsoft.NET.Sdk.Web`/`Microsoft.AspNetCore.App`) or
+  `worker` (references `Microsoft.Extensions.Hosting`, no ASP.NET
+  reference; also the default for an unclassifiable project, logged as a
+  warning — the safer failure mode, since `web` implies public ingress).
+  `services/<request-id>/frontend/package.json` becomes one additional
+  `frontend` unit if present. Each unit's Container App / image name is
+  `<request-id>-<slug>` (all lowercase — both Docker repository names and
+  Azure Container App names reject uppercase; e.g. `DocumentApi` →
+  `req-2026-01-document-api`).
+- **Dockerfiles are generated from the three new templates
+  (`core/agents/templates/dockerfiles/`) only when a project directory
+  doesn't already have one of its own** — never overwrites an existing
+  Dockerfile. A matching `.dockerignore` is generated the same way (not
+  in the original brief, but required for a correct build — without it,
+  `COPY . .` in the generated templates would overwrite the fresh,
+  correct-platform artifacts from the earlier build stage with
+  host-platform ones, and balloon the build context with node_modules/
+  bin/obj).
+- **Target ports are fixed, not configurable per run:** web units 8080
+  (ASP.NET Core 8+ container default), frontend 3000 (`next start`
+  default), worker units get no ingress at all.
+- **`docker build`/`docker push` run for real in both `--dry-run` and a
+  real run** — same "exercise the real tool, skip only the posting"
+  pattern as QA/Security. `az login --service-principal` (parsing the
+  `AZURE_STAGING_CREDENTIALS` JSON blob) and the read-only `az containerapp
+  show` existence check also run for real in both modes, so the printed
+  dry-run command reflects an accurate create-vs-update decision. Only the
+  `az containerapp create`/`update` mutation itself is print-only (redacted
+  `--registry-password`) in `--dry-run`.
+- **`_detect_design_gaps()`** flags (never blocks) any unit whose project
+  label doesn't appear in `docs/<request-id>/design.md`, surfaced in the PR
+  comment. Checks both the literal identifier and a de-camelCased spaced
+  variant ("EmailWorker" → "Email Worker") case-insensitively — design.md
+  is human-authored prose and never uses the bare camelCase identifier; a
+  literal-only check produced a false-positive gap on `DocumentApi` during
+  this session's own verification (see below).
+- No label applied on success — Document 6's Label Reference table has no
+  deploy-stage label; staging is a verification step, not a release gate.
+
+**Verified 2026-08-05:** `py_compile` clean throughout.
+
+**Real `--dry-run` against the merged PR #5 checkout surfaced a genuine,
+previously-undiscovered app bug**, not a Deploy Agent bug: `next build`
+failed its type-check on `frontend/components/Navigation.tsx:28` —
+`lucide-react` icon components inherit React's full `AriaAttributes`,
+where `aria-hidden` is typed `Booleanish` (`boolean | "true" | "false"`),
+but `NavItem.icon`'s custom prop type declared `aria-hidden` as plain
+`boolean`, making the icons structurally incompatible. Never caught before
+because QA's `npm test` only runs Jest, never `next build`/`tsc`. Fixed on
+`forge-demo-apps` branch `fix/req-2026-01-navigation-aria-types` (widened
+to `React.AriaAttributes["aria-hidden"]`, the exact type React itself
+uses) — **opened as PR #8, deliberately left unmerged pending Mike's
+review**, same "small, separate, mechanical fix" pattern as QA's PR #7.
+
+**A second, unrelated, pre-existing type error surfaced immediately
+after** in `lib/app-insights.ts:70` — a duplicate `@microsoft/
+applicationinsights-core-js` dependency resolution (hoisted at top-level
+`node_modules` vs. nested inside `applicationinsights-analytics-js/
+node_modules/`), so TypeScript sees two structurally-identical-but-
+nominally-different `ITelemetryPlugin`/`ITelemetryItem` types. **Explicitly
+not investigated or fixed this session, per Mike's direction** — flagged
+as an open follow-up. As a result, **the frontend unit was not verified
+end-to-end this session**: it was parked (its `package.json` renamed aside
+in the local checkout only, no code change) so unit detection would skip
+it, and dry-run/real-run verification proceeded backend-units-only.
+
+**Real (non-dry-run) live run verified 2026-08-05**, backend units only,
+against the same merged-PR-#5 checkout used for QA/Security's real runs:
+- 2 units detected: `req-2026-01-document-api` (web),
+  `req-2026-01-email-worker` (worker)
+- Both Dockerfiles already existed (committed by Stage 3 back in PR #5) —
+  neither template was actually exercised for this run; the templates are
+  verified structurally but not yet by a real from-template build. The
+  Next.js template is similarly unexercised (frontend parked).
+- Both images built and pushed to `forgedemoacr.azurecr.io` for real
+- Both Container Apps created for real via `az containerapp create`
+  against `forge-staging` (`forge-build-rg`, per `team/config.yaml`)
+- PR comment posted: forge-demo-apps#5
+  (issuecomment-5197961121)
+- **`req-2026-01-document-api` confirmed actually working**: its staging
+  FQDN (`req-2026-01-document-api.yellowmeadow-894377a9.canadacentral.
+  azurecontainerapps.io`) resolves and responds over HTTPS (~0.3s once
+  warm; first request timed out during cold-start scale-from-zero,
+  `min_replicas: 0` per `team/config.yaml`, then responded fine on retry).
+  404s on `/` and `/swagger/index.html` are expected (no root route;
+  Swagger UI is Development-only, this container runs
+  `ASPNETCORE_ENVIRONMENT=Production`) — this confirms the ingress/TLS/
+  container layer is genuinely live, not that every route is mapped.
+- **`req-2026-01-email-worker` deployed but is crash-looping — a real,
+  previously-undiscovered gap, not a Deploy Agent bug.** `az containerapp
+  revision list` shows `healthState: Unhealthy` / `runningState: Failed`.
+  Container logs show `System.FormatException: The connection string
+  could not be parsed` from `ServiceBusClient`'s constructor at host
+  startup (`Program.cs:20`) — EmailWorker's hosted service builds its
+  Service Bus client eagerly at startup and crashes immediately with no
+  connection string configured. **Deploy Agent (as scoped this session)
+  has no mechanism at all for wiring application secrets/connection
+  strings (Service Bus, SQL, Blob Storage, SendGrid, App Insights) into
+  the Container App** — only `--image`/`--registry-*`/`--cpu`/`--memory`/
+  `--min-replicas`/`--max-replicas`/`--target-port`/`--ingress` are ever
+  set. DocumentApi doesn't crash the same way because EF Core/Blob clients
+  are constructed lazily (only touched on first actual request), so a
+  missing connection string there just means the *first real API call*
+  would fail, not the whole host at startup — the ingress-level check
+  above cannot distinguish this from full correctness. **This needs an
+  explicit decision (Key Vault references? Container App secrets driven
+  from a new team/config.yaml or GitHub-secrets source? something else?)
+  before EmailWorker can actually run in staging** — flagged here, not
+  designed or built.
+- Two bugs found and fixed in `deploy_agent.py` itself while getting to
+  the clean runs above: an em-dash console-encoding issue in log messages
+  (same class of fix already applied to `security_agent.py`'s log lines —
+  fixed to ASCII `--`), and the design.md-gap false-positive described
+  above (fixed to check both the literal and spaced form).
+- `.env.example` gained `ACR_LOGIN_SERVER`/`ACR_USERNAME`/`ACR_PASSWORD`
+  and `AZURE_STAGING_CREDENTIALS` entries (were previously undocumented
+  there despite being referenced in other project docs).
+- Local tooling: Docker Desktop and Azure CLI (64-bit) already installed
+  and confirmed working per chat 33's setup — no new install steps this
+  session.
+
+**Still open, not built/fixed this session (explicitly out of scope per
+the brief, or newly flagged):**
+- Frontend unit unverified end-to-end (parked — see PR #8 and the
+  app-insights dependency issue above).
+- EmailWorker's runtime connection-string gap (needs a design decision,
+  not just a fix).
+- Production path, rollback, and Phase 4 GitHub Actions wiring for either
+  environment — all explicitly deferred per the original brief.
