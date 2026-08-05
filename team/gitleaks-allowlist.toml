@@ -1,0 +1,10 @@
+title = "FORGE team-configurable Gitleaks allowlist"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "FORGE default: exclude test/fixture project paths from secrets scanning. Hardcoded fake credentials in test setup code (e.g. WebApplicationFactory configuration, __tests__ mocks) are expected and are not real secrets. Teams may extend the `paths` list below -- do not remove the [extend] useDefault line, which keeps Gitleaks' full default detection ruleset active for everything outside these excluded paths."
+paths = [
+  '''(?i).*/[^/]*test[^/]*/.*''',
+]

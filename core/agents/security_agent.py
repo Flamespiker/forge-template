@@ -44,7 +44,11 @@ Severity mapping (fixed, per tool — Document 7: "Locked... used consistently
 across SAST, secrets, and dependency scanning outputs"):
   - Gitleaks: every finding -> Critical. Gitleaks has no lesser-severity
     output category of its own; a hardcoded secret is always treated as
-    Critical under this fixed table.
+    Critical under this fixed table. Test/fixture project paths are excluded
+    from scanning entirely via team/gitleaks-allowlist.toml (team-configurable
+    per Document 7's Flexible/Locked model for the secrets detection tool) --
+    a hardcoded fake key in a WebApplicationFactory or __tests__ mock never
+    reaches this classifier in the first place.
   - OWASP Dependency-Check: CVSS score thresholds — >=9.0 Critical,
     >=7.0 High, >=4.0 Medium, else Low. Prefers cvssv3.baseScore, falls back
     to cvssv2.score if v3 is absent. If neither is present (rare), defaults
@@ -67,6 +71,17 @@ be on PATH wherever this script runs. Unlike QA's dotnet/npm (already
 required for local app development), these three are new tooling
 dependencies specific to the Security stage. See CLAUDE.md for install notes
 once confirmed.
+
+Additionally, an NVD API key is strongly recommended for
+_run_dependency_check(): without one, NVD database updates are rate-limited
+and can be extremely slow on every run, not just the first. If the
+NVD_API_KEY environment variable is set, it's passed to dependency-check via
+--nvdApiKey; if unset, the scan still runs, just slower, and a warning is
+logged. The key is read from an environment variable rather than hardcoded
+or passed as a bare CLI literal from this script's own arguments, consistent
+with this project's "credential storage needs explicit verification"
+principle -- never commit a real key to a file dependency-check reads from
+disk.
 
 Usage:
     python -m core.agents.security_agent --issue-number 2 --request-id REQ-2026-01 \\
@@ -126,6 +141,9 @@ _STAGE_NAME = "security"
 _MAX_TOKENS = 2000
 _TOOL_TIMEOUT_SECONDS = 1800  # 30 min ceiling per scanner invocation
 _CHECK_RUN_NAME = "security-check"  # must match Build Plan 4.8's branch-protection required check
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_GITLEAKS_ALLOWLIST_CONFIG = _REPO_ROOT / "team" / "gitleaks-allowlist.toml"
 
 _SEV_CRITICAL = "Critical"
 _SEV_HIGH = "High"
@@ -239,13 +257,20 @@ def _run_gitleaks(service_dir: str) -> ScanResult:
     """
     with tempfile.TemporaryDirectory() as results_dir:
         json_path = Path(results_dir) / "gitleaks-results.json"
-        try:
-            result = _run_shell(
-                ["gitleaks", "detect", "--source", ".", "--no-git",
-                 "--report-format", "json", "--report-path", str(json_path),
-                 "--exit-code", "0"],
-                cwd=service_dir,
+        command = ["gitleaks", "detect", "--source", ".", "--no-git",
+                   "--report-format", "json", "--report-path", str(json_path),
+                   "--exit-code", "0"]
+        if _GITLEAKS_ALLOWLIST_CONFIG.exists():
+            command.extend(["--config", str(_GITLEAKS_ALLOWLIST_CONFIG)])
+        else:
+            logger.warning(
+                "Gitleaks allowlist config not found at %s -- running with "
+                "Gitleaks' default ruleset only (no test-path exclusions). "
+                "Team-configurable per Document 7; see team/gitleaks-allowlist.toml.",
+                _GITLEAKS_ALLOWLIST_CONFIG,
             )
+        try:
+            result = _run_shell(command, cwd=service_dir)
         except subprocess.TimeoutExpired:
             return ScanResult(tool="gitleaks", ran=False, findings=[],
                                run_failure_message=f"gitleaks timed out after {_TOOL_TIMEOUT_SECONDS}s.")
@@ -287,15 +312,25 @@ def _parse_gitleaks(json_path: Path) -> ScanResult:
 
 def _run_dependency_check(service_dir: str, request_id: str) -> ScanResult:
     with tempfile.TemporaryDirectory() as results_dir:
-        try:
-            _run_shell(
-                [_dependency_check_executable(),
-                 "--project", request_id,
-                 "--scan", ".",
-                 "--format", "JSON",
-                 "--out", results_dir],
-                cwd=service_dir,
+        command = [_dependency_check_executable(),
+                   "--project", request_id,
+                   "--scan", ".",
+                   "--format", "JSON",
+                   "--out", results_dir]
+
+        nvd_api_key = os.environ.get("NVD_API_KEY")
+        if nvd_api_key:
+            command.extend(["--nvdApiKey", nvd_api_key])
+        else:
+            logger.warning(
+                "NVD_API_KEY is not set -- dependency-check's NVD database "
+                "update will be rate-limited and may be extremely slow. "
+                "Set NVD_API_KEY (see https://nvd.nist.gov/developers/request-an-api-key) "
+                "to avoid this on every run, not just the first."
             )
+
+        try:
+            _run_shell(command, cwd=service_dir)
         except subprocess.TimeoutExpired:
             return ScanResult(tool="dependency-check", ran=False, findings=[],
                                run_failure_message=f"dependency-check timed out after {_TOOL_TIMEOUT_SECONDS}s.")
@@ -552,7 +587,7 @@ def run_security_agent(
         print("=" * 20, "label (not applied)", "=" * 20)
         print(label_to_apply or "(none — Critical findings present)")
         logger.info(
-            "Dry run complete for request %s — nothing posted, nothing labeled.",
+            "Dry run complete for request %s -- nothing posted, nothing labeled.",
             request_id,
         )
         return run_summary
@@ -574,7 +609,7 @@ def run_security_agent(
         add_label(issue_number, label_to_apply)
 
     logger.info(
-        "Security Agent complete for request %s — check_conclusion=%s, %d finding(s) "
+        "Security Agent complete for request %s -- check_conclusion=%s, %d finding(s) "
         "(%d Critical), label=%s.",
         request_id, check_conclusion, len(all_findings),
         counts_by_severity[_SEV_CRITICAL], label_to_apply,
