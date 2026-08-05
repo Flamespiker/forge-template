@@ -24,7 +24,9 @@ container_apps:
 
   staging:
     # The name of the Azure Container Apps environment for staging
-    environment: your-staging-environment-name
+    environment: forge-staging
+    # The Azure resource group containing the staging Container Apps environment
+    resource_group: forge-build-rg
     # Maximum number of replicas; limits cost during low-traffic periods
     max_replicas: 2
     # Minimum replicas set to 0 to allow scale-to-zero when idle
