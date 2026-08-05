@@ -32,6 +32,11 @@ is complete, including a real (non-dry-run) live run verified 2026-08-04 against
 manually-provided local checkout (8 ADO Bugs filed, PR #5 comment posted,
 `qa-loop-back` applied to issue #2) — the "needs Phase 4's checkout wiring" caveat
 only blocks the GitHub Actions automation, not a manual `--repo-path` invocation.
+Step 3.9 (Security Agent) is complete, including a real (non-dry-run) live run
+verified 2026-08-05 against the merged PR #5 (0 findings across Semgrep/Gitleaks/
+Dependency-Check, `security-check` check run created with conclusion `success`,
+`security-approved` applied to issue #2) — same manual `--repo-path` pattern as
+the QA Agent's real run.
 
 Files created:
 
@@ -398,7 +403,8 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 - Step 3.4 Design Agent (`core/agents/design_agent.py`) — done; live run verified on issue #2 (PR #4 opened on forge-demo-apps).
 - Step 3.5 Implementation Coordinator (`core/agents/implementation_coordinator.py`) — done; dry run verified on issue #2 (96 files, 156 KB archive); **real live run verified 2026-07-30 (PR #5 opened on forge-demo-apps, 101 files)**.
 - Step 3.8 QA Agent (`core/agents/qa_agent.py`) — done; **real live run verified 2026-08-04** (8 ADO Bugs filed #96–103, comment posted on forge-demo-apps PR #5, `qa-loop-back` applied to issue #2 — see below).
-- Phase 3 next step: remaining stage agents (Security, Deploy) or Phase 4 wiring.
+- Step 3.9 Security Agent (`core/agents/security_agent.py`) — done; **real live run verified 2026-08-05** (PR #5 comment posted, `security-check` check run created (conclusion `success`), `security-approved` applied to issue #2 — see below).
+- Phase 3 next step: remaining stage agent (Deploy) or Phase 4 wiring.
 
 ---
 
@@ -709,3 +715,103 @@ Actions `actions/checkout` step would):
 (step 4.5) — this run used a manually-provided local clone, not an
 Actions-driven checkout. Functionally equivalent for the script's own logic,
 but the workflow-level wiring itself remains unbuilt.
+
+### github_helper.py — get_pr() / create_check_run() / create_review_with_comments() / create_single_review_comment() (added Step 3.9)
+
+Four new functions, all using the GitHub App installation token against
+`forge-demo-apps` (same auth context as `create_branch`/`commit_files`/
+`post_pr_comment`):
+
+- `get_pr(pr_number: int) -> dict` — fetches PR metadata; the Security Agent
+  uses it only for `pr["head"]["sha"]`, needed to anchor the check run and
+  inline review comments to the right commit.
+- `create_check_run(head_sha, name, conclusion, title, summary) -> dict` —
+  creates a completed GitHub check run (not "in progress" — the scan already
+  finished by the time this is called). `name="security-check"` is the fixed
+  string Build Plan 4.8's branch-protection rule requires as its required
+  check.
+- `create_review_with_comments(pr_number, commit_sha, comments: list[dict]) -> dict`
+  — batches multiple line-anchored comments into a single PR review
+  (`comments`: `{"path", "line", "body"}` dicts). Preferred over posting
+  comments one at a time — fewer API calls, one review object instead of N.
+- `create_single_review_comment(pr_number, commit_sha, path, line, body) -> dict`
+  — single-comment fallback, used when the batch review call fails (most
+  commonly because a finding's line falls outside the PR's diff — GitHub
+  rejects review comments anchored to unchanged lines).
+
+### security_agent.py — Stage 5 (Security)
+
+Entry point: `python -m core.agents.security_agent --issue-number <n> --request-id <id> --pr-number <n> --repo-path <path>`
+
+Like QA (Step 3.8), Security needs the actual repository contents on disk —
+not just individual file reads via the Contents API — to run Semgrep,
+Gitleaks, and OWASP Dependency-Check against `services/<request-id>/` under
+`--repo-path`. This script does not clone anything itself; the same "local
+checkout satisfies the manual-invocation case" pattern from the QA Agent
+applies here too.
+
+- Runs all three scanners unconditionally, even if one fails — `ScanResult.ran`
+  (set from report-file presence, not process exit code, same principle as
+  QA's TRX/Jest-JSON check) lets the run continue and report partial results
+  rather than aborting on the first tool failure.
+- Severity mapping is fixed and deterministic per tool (Document 7: "Locked"),
+  never an LLM judgment call:
+  - **Gitleaks** → every finding is Critical (no lesser-severity category of
+    its own). Test/fixture paths are excluded entirely via
+    `team/gitleaks-allowlist.toml` before a finding can even reach this
+    classifier — see below.
+  - **OWASP Dependency-Check** → CVSS thresholds (≥9.0 Critical, ≥7.0 High,
+    ≥4.0 Medium, else Low; cvssv3 preferred, cvssv2 fallback, Medium default
+    if neither score is present).
+  - **Semgrep** → ERROR→High, WARNING→Medium, INFO→Low. Can never produce a
+    Critical under this fixed table.
+- `has_critical` (any Critical finding across all three tools) drives both
+  the check-run conclusion (`failure` if true, else `success`) and the label
+  (`security-approved` only if false — no label at all when Critical findings
+  exist, since nothing should imply the block is lifted).
+- Claude is used only once per run: given already-computed deterministic
+  counts/severities/conclusion, it writes the short human-facing overview
+  comment — instructed not to re-judge severity or write individual finding
+  bodies. Individual findings are posted separately as inline PR review
+  comments (`post_findings()`), built entirely by deterministic string
+  formatting, no LLM involved.
+- `_GITLEAKS_ALLOWLIST_CONFIG` (`team/gitleaks-allowlist.toml`) is passed to
+  Gitleaks via `--config` if the file exists; if missing, `_run_gitleaks()`
+  logs a warning and falls back to Gitleaks' default ruleset with no
+  test-path exclusions, rather than failing the run.
+- Unlike QA, there is no retry-loop/attempt-counting — Document 6 has no
+  `security-loop-back` label. Security re-scans on every PR update; the
+  failing check run itself blocks merge until findings are resolved.
+- `--dry-run`: runs all three scans and the Claude call, prints the scan
+  summary/overview comment/check-run verdict/label decision to stdout, but
+  posts nothing, creates no check run, and applies no label.
+
+**Verified 2026-08-05:** `py_compile` clean throughout.
+
+**Real `--dry-run` first surfaced a genuine false positive**, run against
+the merged PR #5 checkout at `services/REQ-2026-01/`: Gitleaks flagged 1
+Critical finding — a hardcoded fake credential in
+`backend/DocumentApi.IntegrationTests` (`WebApplicationFactory` test setup
+config), the same class of expected-fixture-secret already anticipated in
+the module's own severity-mapping design. Fixed by adding
+`team/gitleaks-allowlist.toml` (Document 7's Flexible/Locked model — team-
+configurable allowlist, `useDefault = true` keeps Gitleaks' full default
+ruleset active everywhere else) with a path regex excluding any
+`.../*test*/...` directory, and wiring `--config` into `_run_gitleaks()`
+(see `github_helper.py` entry above for the four supporting GitHub API
+functions this stage needed). Re-run confirmed the fix: Critical → 0,
+Semgrep/Dependency-Check results unaffected, `check_conclusion` flipped to
+`success`.
+
+**Real (non-dry-run) live run verified 2026-08-05**, against that same
+clean, post-allowlist-fix checkout, invoked manually with `--repo-path`
+pointing at the local clone of the merged PR #5 (same "manual invocation
+satisfies the on-disk-repo requirement" pattern as the QA Agent's real run
+— Phase 4's checkout wiring, step 4.6, still not built):
+- All three scanners ran clean: 0 findings (Semgrep, Gitleaks, Dependency-
+  Check all 0), 0 Critical
+- Overview comment posted to `forge-demo-apps` PR #5
+- `security-check` check run created on PR #5's head commit (`0f5f1c57`),
+  conclusion `success`
+- Label `security-approved` applied to tracking issue `forge-template#2`
+- Claude call: 599 in / 269 out tokens, $0.005832, 5.37s
