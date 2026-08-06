@@ -43,7 +43,7 @@ units (`req-2026-01-document-api`, `req-2026-01-email-worker` deployed to
 `forge-staging`; PR #5 comment posted) — the frontend unit and a real runtime
 gap found on EmailWorker are still open, see below.
 
-**Phase 4 (Build Plan steps 4.1–4.7, 4.9) — all seven `.github/workflows/*.yml`
+**Phase 4 (Build Plan steps 4.1–4.9) — all seven `.github/workflows/*.yml`
 stubs rewritten with real triggers, guard clauses, and agent invocations**;
 committed and pushed directly to `main` 2026-08-06 (`8a702ee`). Full detail in
 the "Phase 4 — Pipeline Wiring" section below. **Verified via a real
@@ -52,9 +52,11 @@ the cross-repo dispatch chain, payload shape, and guard-clause logic are all
 confirmed working. **Not yet verified: a real `qa_agent.py`/`security_agent.py`
 invocation actually running through this dispatch path** — PR #5 is merged, so
 both guard clauses correctly (and harmlessly) stopped before invoking the real
-agents; that requires a fresh open PR, deliberately not created this session.
-Step 4.8 (branch protection tied to the `security-check` required status check)
-is **deliberately deferred** — not an oversight, a decision to hold off for now.
+agents; that requires a fresh open PR, not yet created. **Step 4.8 (branch
+protection on forge-demo-apps requiring the `security-check` status check)
+is complete** — confirmed live via `gh api repos/.../branches/main/protection`:
+`security-check` (app_id 4388813) required, 1 approving review required,
+`enforce_admins: true`, force-pushes/deletions blocked.
 
 Files created:
 
@@ -446,7 +448,10 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 - Step 3.8 QA Agent (`core/agents/qa_agent.py`) — done; **real live run verified 2026-08-04** (8 ADO Bugs filed #96–103, comment posted on forge-demo-apps PR #5, `qa-loop-back` applied to issue #2 — see below).
 - Step 3.9 Security Agent (`core/agents/security_agent.py`) — done; **real live run verified 2026-08-05** (PR #5 comment posted, `security-check` check run created (conclusion `success`), `security-approved` applied to issue #2 — see below).
 - Step 3.10 Deploy Agent (`core/agents/deploy_agent.py`) — done for the staging path; **real live run verified 2026-08-05** against the two backend units (`req-2026-01-document-api`, `req-2026-01-email-worker`) — see below. Frontend unit and the EmailWorker runtime-config gap are open follow-ups, not blockers on Step 3.10 itself.
-- Phase 3 next step: Phase 4 wiring (all six stage agents now exist for the staging path).
+- Phase 3 complete. Phase 4 (pipeline wiring, all seven workflows + branch
+  protection) is also complete as of 2026-08-06 — see the "Phase 4 — Pipeline
+  Wiring" section below. Next: a real end-to-end agent run through the new
+  `repository_dispatch` path (requires an actually-open PR).
 
 ---
 
@@ -1128,14 +1133,28 @@ verification needed):
 
 **Commit:** `8a702ee` on `main` (all ten Phase 4 files — seven workflows,
 `create_ado_items.py`, `workflow_glue.py`, `github_helper.py`'s `get_issue()`
-addition — committed and pushed together). `55a1384` documents this Phase 4
-section itself in `CLAUDE.md`.
+addition — committed and pushed together). `55a1384`/`3201fa8` document this
+Phase 4 section itself in `CLAUDE.md`.
 
-**Not done / explicitly deferred:**
-- **Step 4.8 (branch protection wiring the `security-check` required status
-  check to forge-demo-apps) is deliberately deferred** — a decision, not an
-  oversight; revisit when ready to actually enforce the block on merge.
-- A real end-to-end agent run through the new dispatch path (see above).
+**Step 4.8 — branch protection: complete.** `forge-demo-apps`'s `main` branch
+protection is live, confirmed via `gh api repos/Flamespiker/forge-demo-apps/
+branches/main/protection`:
+- `required_status_checks.contexts`: `["security-check"]` (app_id 4388813 —
+  the FORGE App's own check run from `security_agent.py`'s `create_check_run()`),
+  `strict: false`
+- `required_pull_request_reviews.required_approving_review_count`: `1`,
+  `dismiss_stale_reviews: false`
+- `enforce_admins: true`, `allow_force_pushes: false`, `allow_deletions: false`,
+  `required_linear_history: false`
+
+This is what actually makes a Critical security finding block merge (the
+`security-check` check run's `failure` conclusion, not the `security-approved`
+label, per Document 2 §4.7 — the label is informational for humans, this is
+the enforcement mechanism).
+
+**Not done:**
+- A real end-to-end agent run through the new dispatch path (see above) —
+  requires an actually-open PR, not yet created.
 - `docs/FORGE-context_v37.md` exists in the repo root as an untracked file
   (present before this session started) — not read, not committed, not
   touched; flagged here only so a future session doesn't assume it's part of
