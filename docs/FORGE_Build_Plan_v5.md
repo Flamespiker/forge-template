@@ -2,7 +2,7 @@
 
 **Purpose:** Step-by-step checklist for building FORGE from scratch. Work through one item at a time. Each step is a discrete unit — complete it, confirm it, move on.
 
-**Version:** v4 — updated for ADR-0011 (chat 25): step 3.1's wrapper description changed from Claude Agent SDK to the base `anthropic` Messages API client; new step 3.1a tracks committing ADR-0011 itself to `core/decisions/`; step 8.3 reworded to account for ADR-0011 as an organic (non-seed) addition to the ADR set. No other phases changed from v3.
+**Version:** v5 — checkboxes now tracked (decision made chat 35, closing out a gap flagged since chat 32): Phases 1–2 (all steps) and Phase 3 (all steps except 3.11, deferred to Phase 7 per its own note) checked off as complete and real-run verified. Phase 4 steps 4.1–4.7 and 4.9 checked off as complete (wired, committed to `forge-template` main, and dispatch-chain verified end-to-end — see context doc chat 35). Steps 4.8 (branch protection) and 4.10 (full dry-run) remain unchecked — explicitly deferred to the next chat. No item was checked without real build/run evidence behind it, per the standing "require real executed evidence" principle — this is a bookkeeping pass, not a re-assessment of what's actually done. No content/step text changed from v4 other than this version note.
 
 ---
 
@@ -10,8 +10,8 @@
 
 > Goal: A real GitHub template repository exists with the right structure, configs, and workflow stubs. Nothing runs yet, but everything has a home.
 
-- [ ] 1.1 Create the `forge-template` GitHub repository (template repo setting enabled)
-- [ ] 1.2 Create the FORGE repo folder structure:
+- [x] 1.1 Create the `forge-template` GitHub repository (template repo setting enabled)
+- [x] 1.2 Create the FORGE repo folder structure:
   - `.github/workflows/` — Actions workflow files
   - `.github/ISSUE_TEMPLATE/` — Tracking issue template
   - `core/agents/` — Agent scripts (locked layer)
@@ -19,13 +19,13 @@
   - `core/decisions/` — ADRs
   - `team/personas/` — Agent persona overrides
   - `tracking/` — Tracking utilities
-- [ ] 1.3 Create `team/config.yaml` — main team-layer config (ADO org/project, monorepo name, area path, tags, Container Apps defaults)
-- [ ] 1.4 Create `team/stack-preferences.yaml` — Design Agent input (CSS approach, component library, ORM, state management, logging)
-- [ ] 1.5 Create the FORGE tracking issue template (`.github/ISSUE_TEMPLATE/forge-request.yml`) — request ID, request type, intake spreadsheet attachment slot, status checklist
-- [ ] 1.6 Create `.gitignore` appropriate for a Python + Node environment
-- [ ] 1.7 Create `README.md` — drop in Document 9 (FORGE README)
-- [ ] 1.8 Write the 10 seed ADRs into `core/decisions/` (stubs with title, status, context, decision, consequences — full content to follow). *(Was 9 — ADR-0010 adds a 10th; confirm Document 4 update has landed before writing stubs, since it defines the full seed ADR list.)*
-- [ ] 1.9 Create GitHub Actions workflow stubs (`.github/workflows/`) for all 7 stages — guard clause + job skeleton, no agent logic yet:
+- [x] 1.3 Create `team/config.yaml` — main team-layer config (ADO org/project, monorepo name, area path, tags, Container Apps defaults)
+- [x] 1.4 Create `team/stack-preferences.yaml` — Design Agent input (CSS approach, component library, ORM, state management, logging)
+- [x] 1.5 Create the FORGE tracking issue template (`.github/ISSUE_TEMPLATE/forge-request.yml`) — request ID, request type, intake spreadsheet attachment slot, status checklist
+- [x] 1.6 Create `.gitignore` appropriate for a Python + Node environment
+- [x] 1.7 Create `README.md` — drop in Document 9 (FORGE README)
+- [x] 1.8 Write the 10 seed ADRs into `core/decisions/` (stubs with title, status, context, decision, consequences — full content to follow). *(Was 9 — ADR-0010 adds a 10th; confirm Document 4 update has landed before writing stubs, since it defines the full seed ADR list.)*
+- [x] 1.9 Create GitHub Actions workflow stubs (`.github/workflows/`) for all 7 stages — guard clause + job skeleton, no agent logic yet:
   - `00-intake.yml`
   - `01-requirements.yml`
   - `02-design.yml`
@@ -33,7 +33,7 @@
   - `04-qa.yml`
   - `05-security.yml`
   - `06-deploy.yml`
-- [ ] 1.10 Commit and push — verify repo loads cleanly on GitHub, template flag is on
+- [x] 1.10 Commit and push — verify repo loads cleanly on GitHub, template flag is on
 
 ---
 
@@ -41,7 +41,7 @@
 
 > Goal: Every external dependency is provisioned, credentialed, and verified before any agent code is written.
 
-- [ ] 2.1 **GitHub App — `forge-pipeline`**
+- [x] 2.1 **GitHub App — `forge-pipeline`**
   - Create the GitHub App in your personal/org GitHub account
   - Set permissions: Contents (R/W), Pull requests (R/W), Issues (R/W), Checks (R/W), Metadata (R)
   - Leave Webhook → Active unchecked (not needed — workflows call the GitHub/Anthropic APIs directly using a generated token)
@@ -49,34 +49,34 @@
   - Install the app on the monorepo (not org-wide)
   - Store `FORGE_APP_ID` and `FORGE_APP_PRIVATE_KEY` as repo-level secrets in the FORGE repo
   - Also store the App's **Client ID** (a separate value from the App ID, shown on the same settings page) as a repo-level **variable** named `FORGE_APP_CLIENT_ID` — required because `actions/create-github-app-token@v3` (the current major version as of mid-2026) reads `client-id` rather than the older `app-id` input; older action versions rely on a Node.js runtime GitHub has deprecated and won't be updated
-- [ ] 2.2 **Azure Container Registry**
+- [x] 2.2 **Azure Container Registry**
   - Create an ACR instance (Basic tier, ~$0.17/day)
   - Note the login server URL
   - Create a service principal or admin credentials for GitHub Actions push access
   - Store credentials as FORGE repo secrets: `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`
-- [ ] 2.3 **Azure Container Apps — staging environment**
+- [x] 2.3 **Azure Container Apps — staging environment**
   - Create `forge-staging` Container Apps environment
   - Settings: min 0 replicas, max 2, 0.25 vCPU / 0.5 Gi, single active revision
   - Note: the Azure Portal only creates an environment as a byproduct of creating a Container App (no standalone option) — the CLI (`az containerapp env create`) doesn't have this restriction, if scripting this step
-- [ ] 2.4 **Azure Container Apps — production environment**
+- [x] 2.4 **Azure Container Apps — production environment**
   - Create `forge-production` Container Apps environment
   - Settings: min 1 replica, max 5, 0.5 vCPU / 1.0 Gi, single active revision
-- [ ] 2.5 **GitHub Environments**
+- [x] 2.5 **GitHub Environments**
   - Create `staging` environment in the FORGE repo (no required reviewers — auto-deploy)
   - Create `production` environment in the FORGE repo (required reviewer: you)
   - Note: these GitHub Environment names (`staging`/`production`) are distinct from the Azure Container Apps environment names above (`forge-staging`/`forge-production`) — don't conflate the two
-- [ ] 2.6 **ADO connection**
+- [x] 2.6 **ADO connection**
   - Generate a PAT in Azure DevOps (scopes: Work Items R/W, Project R)
   - Store as FORGE repo secret: `ADO_PAT`
   - Store ADO org URL and project name in `team/config.yaml`
   - Verify PAT can create a test work item via the ADO REST API (curl test is fine)
-- [ ] 2.7 **Anthropic API key**
+- [x] 2.7 **Anthropic API key**
   - Confirm your personal developer API key is active
   - Store as FORGE repo secret: `ANTHROPIC_API_KEY`
-- [ ] 2.8 **End-to-end connectivity check**
+- [x] 2.8 **End-to-end connectivity check**
   - Write a minimal GitHub Actions test workflow that: generates a GitHub App token ✓, pings ADO ✓, pings the Anthropic API (models list) ✓
   - Run it, verify all three green
-- [ ] 2.9 **Managed Agents access check** *(new — ADR-0010)*
+- [x] 2.9 **Managed Agents access check** *(new — ADR-0010)*
   - Confirm the `ANTHROPIC_API_KEY` has access to the Managed Agents beta (`managed-agents-2026-04-01` header)
   - Create a throwaway single-coordinator, zero-subagent test session via the API to confirm the header, environment, and session lifecycle work end-to-end before Phase 3 agent work begins
   - Note the beta status in the tracking log — this is a candidate for an RFC if the API changes materially during the build phase
@@ -90,33 +90,33 @@
 
 > **Order matters:** Implement in pipeline order so each agent's output can be used as the next agent's test input.
 
-- [ ] 3.1 **Shared agent utilities** (`core/agents/utils/`)
+- [x] 3.1 **Shared agent utilities** (`core/agents/utils/`)
   - GitHub API helper (post comment, add label, create branch, open PR)
   - ADO API helper (create Epic, Feature, User Story, Bug)
   - File I/O helpers (read XLSX, read/write Markdown, read/write YAML)
   - **Anthropic Messages API wrapper** (`claude_agent_wrapper.py`) *(ADR-0011 — supersedes the originally-planned Claude Agent SDK wrapper)* — calls the base `anthropic` Python client's Messages API directly (system prompt + user prompt, single-turn, no tool-use loop); `invoke_agent()` takes an explicit `max_tokens` parameter and has no `allowed_tools` parameter; `total_cost_usd` is computed from a maintained per-model rate table in the wrapper rather than an SDK-provided value. Used by all stages except Stage 3.
     - **Hard requirement (ADR-0011 / Document 6):** every stage-agent script built in 3.2 onward (except Stage 3) MUST wrap its `invoke_agent()` call in try/except at the call site — the wrapper never sets `is_error=True` itself, so an uncaught API failure aborts the script silently with no `forge_event` log line and no chance to post a failure comment on the tracking issue.
   - **Managed Agents API wrapper** *(ADR-0010)* — standard invocation pattern for starting a coordinator agent session, declaring subagents, polling/streaming the session event stream to completion, and retrieving the per-subagent audit trail. Used only by Stage 3. Build in the correct events-endpoint request shape and archive retry behavior noted in step 2.9 above.
-- [ ] 3.1a **Commit ADR-0011 to `core/decisions/`** *(new — organic ADR, decided chat 21, verified chat 22)*
+- [x] 3.1a **Commit ADR-0011 to `core/decisions/`** *(new — organic ADR, decided chat 21, verified chat 22)*
   - Write the full ADR-0011 text (see `ADR-0011.md`) into `core/decisions/0011-base-anthropic-client.md`, alongside the ten seed ADR stubs from Phase 1.8
   - Unlike ADR-0010 (folded into the seed list before Phase 1 ran), ADR-0011 was decided mid-build — it's the first ADR added organically after the initial seed set, exercising Document 4's ADR/RFC process as intended for ongoing decisions rather than just the initial ten
-- [ ] 3.2 **Intake Agent** (`core/agents/intake_agent.py`)
+- [x] 3.2 **Intake Agent** (`core/agents/intake_agent.py`)
   - Reads the BA's Excel spreadsheet (Overview + Requirements tabs)
   - Produces 5–7 clarifying questions
   - Posts questions as a comment on the tracking issue
   - Applies `clarification-pending` label
-- [ ] 3.3 **Requirements Agent** (`core/agents/requirements_agent.py`)
+- [x] 3.3 **Requirements Agent** (`core/agents/requirements_agent.py`)
   - Reads the spreadsheet + BA's clarification answers from the issue thread
   - Produces `requirements.md` (structured, traceable)
   - Produces draft ADO work item payload (Epics → Features → User Stories)
   - Posts draft as an issue comment for human review (does NOT create ADO items yet)
-- [ ] 3.4 **Design Agent** (`core/agents/design_agent.py`)
+- [x] 3.4 **Design Agent** (`core/agents/design_agent.py`)
   - Reads `requirements.md` + `team/stack-preferences.yaml`
   - Produces `design.md` (architecture narrative, component breakdown, tech choices)
   - Produces `openapi.yaml` (API contract)
   - Produces `tasks.md` (implementation task list for Backend/Frontend/Test Writer agents)
   - Commits all three to `design/<request-id>` branch, opens PR to `main`
-- [ ] 3.4a **Implementation Coordinator** (`core/agents/implementation_coordinator.py`) *(new — ADR-0010)*
+- [x] 3.4a **Implementation Coordinator** (`core/agents/implementation_coordinator.py`) *(new — ADR-0010)*
   - Starts a Managed Agents coordinator agent session scoped to a request ID
   - Declares Backend, Frontend, and Test Writer as specialist subagents, each with its own system prompt and scoped tool access, sharing one sandbox filesystem
   - Passes `design.md`, `openapi.yaml`, and `tasks.md` into the session as coordinator input
@@ -124,32 +124,32 @@
   - Synthesizes subagent output, performs integration checking natively (no separate integration-check job)
   - Commits the complete implementation to `feature/<request-id>` in the monorepo and opens a draft PR
   - Closes the agent session; surfaces the Claude Console session URL for the audit trail
-- [ ] 3.5 **Backend Agent — subagent definition** (`core/agents/subagents/backend_agent.py`) *(reframed — ADR-0010)*
+- [x] 3.5 **Backend Agent — subagent definition** (`core/agents/subagents/backend_agent.py`) *(reframed — ADR-0010)*
   - Defined as a Managed Agents specialist subagent, not an independently invoked script
   - System prompt + scoped tools for reading `design.md`, `openapi.yaml`, `tasks.md` from the shared sandbox filesystem
   - Produces .NET API implementation (controllers, services, models, xUnit tests) into the sandbox filesystem
   - Does not commit directly — the Implementation Coordinator commits on the subagent's behalf after synthesis
-- [ ] 3.6 **Frontend Agent — subagent definition** (`core/agents/subagents/frontend_agent.py`) *(reframed — ADR-0010)*
+- [x] 3.6 **Frontend Agent — subagent definition** (`core/agents/subagents/frontend_agent.py`) *(reframed — ADR-0010)*
   - Defined as a Managed Agents specialist subagent, running in parallel with Backend
   - System prompt + scoped tools for the same shared sandbox filesystem
   - Produces React/Next.js + TypeScript UI into the sandbox filesystem
   - Does not commit directly — coordinator handles the commit
-- [ ] 3.7 **Test Writer Agent — subagent definition** (`core/agents/subagents/test_writer_agent.py`) *(reframed — ADR-0010)*
+- [x] 3.7 **Test Writer Agent — subagent definition** (`core/agents/subagents/test_writer_agent.py`) *(reframed — ADR-0010)*
   - Defined as a Managed Agents specialist subagent, running in parallel with the above two
   - Reads `design.md`, `tasks.md`, and the in-progress backend/frontend code from the shared sandbox filesystem
   - Produces Jest integration tests and fills any gaps in xUnit coverage into the sandbox filesystem
   - Does not commit directly — coordinator handles the commit
-- [ ] 3.8 **QA Agent** (`core/agents/qa_agent.py`)
+- [x] 3.8 **QA Agent** (`core/agents/qa_agent.py`)
   - Runs the test suite (via shell) and parses results
   - Files ADO bugs for failures (with steps to reproduce, severity mapping)
   - Posts a test summary comment on the feature PR
   - If failures: applies `qa-loop-back` label; if passing: applies `qa-approved` label
-- [ ] 3.9 **Security Agent** (`core/agents/security_agent.py`)
+- [x] 3.9 **Security Agent** (`core/agents/security_agent.py`)
   - Runs Semgrep, Gitleaks, OWASP Dependency-Check (via shell)
   - Parses tool output, maps findings to severity
   - Posts severity-tagged inline PR comments
   - If Critical findings: sets a failing check run (blocks merge); otherwise: applies `security-approved` label
-- [ ] 3.10 **Deploy Agent** (`core/agents/deploy_agent.py`)
+- [x] 3.10 **Deploy Agent** (`core/agents/deploy_agent.py`)
   - Builds Docker image, tags with `<request-id>-<commit-sha>`
   - Pushes to ACR
   - Deploys to `forge-staging` Container Apps environment
@@ -164,18 +164,18 @@
 
 > Goal: The workflow stubs from Phase 1 become fully wired — agents are invoked, state transitions happen, labels flow correctly end-to-end.
 
-- [ ] 4.1 Wire `00-intake.yml` — download attachment, invoke Intake Agent, apply label
-- [ ] 4.2 Wire `01-requirements.yml` — trigger on `clarification-complete` label, invoke Requirements Agent, post draft for review
-- [ ] 4.3 Wire `02-design.yml` — trigger on `requirements-approved` label, create ADO items, invoke Design Agent, commit artifacts, open design PR
-- [ ] 4.4 Wire `03-implementation.yml` *(rewritten — ADR-0010)* — trigger on `design-approved` label, invoke the Implementation Coordinator (starts a Managed Agents coordinator agent session with Backend/Frontend/Test Writer as subagents), the workflow job waits on the session event stream rather than running parallel jobs, opens the feature PR as draft once the coordinator commits. No separate integration-check job — integration is native to the coordinator session.
-- [ ] 4.5 Wire `04-qa.yml` — trigger on feature PR opened, invoke QA Agent, loop-back or apply `qa-approved`
-- [ ] 4.6 Wire `05-security.yml` — trigger on feature PR opened (parallel with QA), invoke Security Agent, apply label or fail check
-- [ ] 4.7 Wire `06-deploy.yml` — trigger on both `qa-approved` and `security-approved` labels present, invoke Deploy Agent (staging), pause for production Environment approval
+- [x] 4.1 Wire `00-intake.yml` — download attachment, invoke Intake Agent, apply label
+- [x] 4.2 Wire `01-requirements.yml` — trigger on `clarification-complete` label, invoke Requirements Agent, post draft for review
+- [x] 4.3 Wire `02-design.yml` — trigger on `requirements-approved` label, create ADO items, invoke Design Agent, commit artifacts, open design PR
+- [x] 4.4 Wire `03-implementation.yml` *(rewritten — ADR-0010)* — trigger on `design-approved` label, invoke the Implementation Coordinator (starts a Managed Agents coordinator agent session with Backend/Frontend/Test Writer as subagents), the workflow job waits on the session event stream rather than running parallel jobs, opens the feature PR as draft once the coordinator commits. No separate integration-check job — integration is native to the coordinator session.
+- [x] 4.5 Wire `04-qa.yml` — trigger on feature PR opened, invoke QA Agent, loop-back or apply `qa-approved`
+- [x] 4.6 Wire `05-security.yml` — trigger on feature PR opened (parallel with QA), invoke Security Agent, apply label or fail check
+- [x] 4.7 Wire `06-deploy.yml` — trigger on both `qa-approved` and `security-approved` labels present, invoke Deploy Agent (staging), pause for production Environment approval
 - [ ] 4.8 Set branch protection rules on monorepo `main` *(updated — ADR-0010)*:
   - Require PR reviews (1 approver)
   - Require status checks: **security-check** (the standalone integration-check is eliminated — integration is performed natively inside the Managed Agents coordinator session, not as a separate GitHub Actions job)
   - No direct pushes (agents use PRs; humans approve)
-- [ ] 4.9 Verify reciprocal traceability links are written:
+- [x] 4.9 Verify reciprocal traceability links are written:
   - FORGE tracking issue → monorepo PR URL (written by the Implementation Coordinator)
   - Monorepo PR body → FORGE tracking issue URL (written by the Implementation Coordinator)
 - [ ] 4.10 Full dry-run: trigger a pipeline with a dummy spreadsheet, walk every stage manually confirming labels, comments, and artifacts appear correctly (no deployment). For Stage 3, also confirm the Claude Console per-subagent audit trail is reachable from the coordinator session.
