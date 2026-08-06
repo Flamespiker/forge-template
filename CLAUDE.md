@@ -56,7 +56,23 @@ agents; that requires a fresh open PR, not yet created. **Step 4.8 (branch
 protection on forge-demo-apps requiring the `security-check` status check)
 is complete** — confirmed live via `gh api repos/.../branches/main/protection`:
 `security-check` (app_id 4388813) required, 1 approving review required,
-`enforce_admins: true`, force-pushes/deletions blocked.
+`enforce_admins: true`, force-pushes/deletions blocked, **no
+`bypass_pull_request_allowances`** (GitHub rejects that field entirely on a
+personal-account repo like forge-demo-apps — confirmed empirically via a 422,
+not assumed from the docs alone).
+
+Getting to a clean rule required a real conflict resolution, not just a
+config change: `requirements_agent.py` and `create_ado_items.py` both wrote
+`requirements.md`/`ado-work-items.json` **straight to `main`** via
+`commit_files()` — which the required-review rule above would reject outright
+(a GitHub App with no bypass path on a personal repo has no way around it).
+**Fix: both files moved to a dedicated, intentionally-unprotected
+`pipeline-state` branch in forge-demo-apps** (created once, branched from
+`main`'s tip) — bookkeeping/traceability records, not application code; the
+real human review already happens via the posted issue-comment draft, not a
+git diff on `main`. `design_agent.py` and `qa_agent.py`'s reads of these two
+files were updated to the same branch. Full detail in the "Phase 4 — Pipeline
+Wiring" section below.
 
 Files created:
 
@@ -331,7 +347,13 @@ Entry point: `python -m core.agents.requirements_agent --spreadsheet <path> --is
 - `_parse_model_json()` defensively strips ` ```json ``` ` fences if the model adds them despite
   instructions; raises `json.JSONDecodeError` otherwise, caught by the outer `try/except`.
 
-**Output artifacts (committed to `forge-demo-apps` on `main`):**
+**Output artifacts (committed to `forge-demo-apps` on the `pipeline-state`
+branch, not `main`** — moved off `main` in the Phase 4 step 4.8 retrofit once
+branch protection required a PR review for every push to `main` with no
+bypass available on this personal-account repo; `pipeline-state` is a
+dedicated, intentionally-unprotected bookkeeping branch, created once and
+reused across every request, not per-request like `design/<request-id>`/
+`feature/<request-id>`):**
 - `docs/<request-id>/requirements.md` — full structured requirements document
 - `docs/<request-id>/ado-work-items.json` — draft ADO hierarchy (Epic → Features → User Stories)
 
@@ -361,6 +383,8 @@ applies `requirements-approved` (Phase 4 wiring).
 - Issue `forge-template#2`, request-id `REQ-2026-01`
 - 2,281 input tokens / 3,876 output tokens / `total_cost_usd: $0.064983` / 62.5 s
 - `requirements.md` + `ado-work-items.json` committed to `forge-demo-apps` on `main`
+  (historical — this run predates the Phase 4 step 4.8 retrofit that moved both
+  files to the `pipeline-state` branch; see above)
 - Summary comment posted to issue #2; no label applied (label is human action)
 
 ### Managed Agents API — current schema (verified against Anthropic reference docs)
@@ -648,14 +672,17 @@ just a different repo and a different auth context.
 
 `create_bug(title, repro_steps, severity, parent_story_id: int | None = None)`
 
-Previously `parent_story_id` was required. As of the QA Agent, Phase 4's ADO
-item-creation step (4.3) hasn't been built/run for any request yet, so no real ADO
-User Story IDs exist to link Bugs against. When `None`, `create_bug()` skips the
-`link_items()` call and logs a warning instead of raising — the Bug is still filed,
-just without a parent link. Once Phase 4 exists and writes real IDs to
-`docs/<request-id>/ado-work-items.json`, callers should always pass a real ID; this
-parameter stays optional in the function signature so `create_bug()` doesn't break
-existing callers, but is expected to always receive a real ID in practice going forward.
+Previously `parent_story_id` was required. As of the QA Agent (Step 3.8), Phase 4's
+ADO item-creation step (4.3) hadn't been built/run for any request yet, so no real
+ADO User Story IDs existed to link Bugs against. When `None`, `create_bug()` skips
+the `link_items()` call and logs a warning instead of raising — the Bug is still
+filed, just without a parent link. **Phase 4's `create_ado_items.py` (step 4.3) now
+exists and writes real IDs to `docs/<request-id>/ado-work-items.json` on the
+`pipeline-state` branch** (see the "Phase 4 — Pipeline Wiring" section) — callers
+should now always pass a real ID once that script has run for a request; this
+parameter stays optional in the function signature only so `create_bug()` doesn't
+break on a request where it hasn't run yet (e.g. an older request, or before
+`requirements-approved` triggers Design).
 
 ### qa_agent.py — Stage 4 (QA) (added Step 3.8)
 
@@ -691,9 +718,11 @@ step 4.5, **not yet wired**). This script does not clone anything itself.
   writes the human-facing Markdown test report comment posted to the feature PR —
   instructed not to re-judge pass/fail or severity.
 - `_resolve_parent_story_id(request_id)` looks for a real ADO User Story ID at
-  `docs/<request-id>/ado-work-items.json`'s `primary_user_story_id` key; returns
-  `None` (logs a warning) since Phase 4 hasn't written one for any request yet —
-  see the `ado_helper.py` entry above. Bugs are filed either way.
+  `docs/<request-id>/ado-work-items.json`'s `primary_user_story_id` key, read
+  from the `pipeline-state` branch (updated in the Phase 4 step 4.8 retrofit —
+  was `main` before); returns `None` (logs a warning) if that request hasn't
+  had `create_ado_items.py` run for it yet — see the `ado_helper.py` entry
+  above. Bugs are filed either way.
 - `--dry-run`: runs tests and computes everything (including the Claude call) but
   prints to stdout instead of filing ADO Bugs, posting to GitHub, or applying labels.
 
@@ -1065,8 +1094,9 @@ forge-template (`actions/create-github-app-token@v3`).
 **New scripts:**
 - `core/agents/create_ado_items.py` — no driver existed to wire
   `ado_helper.py`'s `create_epic`/`create_feature`/`create_user_story` to
-  `docs/<request-id>/ado-work-items.json`. Reads that file (main branch),
-  creates the real Epic → Features → User Stories hierarchy, writes the real
+  `docs/<request-id>/ado-work-items.json`. Reads that file (`pipeline-state`
+  branch, moved off `main` — see the Step 4.8 entry below), creates the real
+  Epic → Features → User Stories hierarchy, writes the real
   IDs back plus a new top-level `primary_user_story_id` key (the first User
   Story created, in document order — `qa_agent.py`'s
   `_resolve_parent_story_id()` already looks for exactly this key and had
@@ -1136,26 +1166,76 @@ verification needed):
 addition — committed and pushed together). `55a1384`/`3201fa8` document this
 Phase 4 section itself in `CLAUDE.md`.
 
-**Step 4.8 — branch protection: complete.** `forge-demo-apps`'s `main` branch
+**Step 4.8 — branch protection: complete, after resolving a real conflict it
+surfaced (not just a config change).** `forge-demo-apps`'s `main` branch
 protection is live, confirmed via `gh api repos/Flamespiker/forge-demo-apps/
 branches/main/protection`:
-- `required_status_checks.contexts`: `["security-check"]` (app_id 4388813 —
-  the FORGE App's own check run from `security_agent.py`'s `create_check_run()`),
-  `strict: false`
+- `required_status_checks.checks`: `[{"context": "security-check", "app_id":
+  4388813}]` (pinned to the FORGE App's own check run from
+  `security_agent.py`'s `create_check_run()`), `strict: false`
 - `required_pull_request_reviews.required_approving_review_count`: `1`,
-  `dismiss_stale_reviews: false`
+  `dismiss_stale_reviews: false`, `require_code_owner_reviews: false`,
+  `require_last_push_approval: false`
 - `enforce_admins: true`, `allow_force_pushes: false`, `allow_deletions: false`,
   `required_linear_history: false`
+- **No `bypass_pull_request_allowances`** — not needed; see below.
 
 This is what actually makes a Critical security finding block merge (the
 `security-check` check run's `failure` conclusion, not the `security-approved`
 label, per Document 2 §4.7 — the label is informational for humans, this is
 the enforcement mechanism).
 
+**How this actually got applied — first attempt found a real conflict, second
+attempt hit a platform limitation, third attempt resolved it properly:**
+1. First applying required-PR-review protection to `main` would have broken
+   `requirements_agent.py` and `create_ado_items.py`, both of which wrote
+   `requirements.md`/`ado-work-items.json` **straight to `main`** via
+   `commit_files()` — a direct ref update, which required-review protection
+   rejects identically to a `git push`. Found by reading the live source
+   before applying anything, not discovered by breaking something.
+2. Considered adding the FORGE App to
+   `required_pull_request_reviews.bypass_pull_request_allowances.apps`
+   (confirmed the correct field expects the app **slug**, `"forge-pipeline"`,
+   not the numeric app ID — those are two different formats; the app ID
+   *is* used, but only in `required_status_checks.checks[].app_id`). Rejected
+   by GitHub with a 422 (`"Only organization repositories can have users and
+   team restrictions"`) even with only `apps` populated — confirmed
+   empirically that `bypass_pull_request_allowances` cannot be used at all on
+   a personal-account-owned repo like forge-demo-apps, not just its
+   `users`/`teams` sub-fields as the docs' wording alone would suggest.
+3. **Resolution: moved `requirements.md`/`ado-work-items.json` off `main`
+   entirely, onto a dedicated, intentionally-unprotected `pipeline-state`
+   branch** (created once, branched from `main`'s tip — persistent and
+   shared across every request, unlike the per-request `design/<request-id>`/
+   `feature/<request-id>` branches, so neither writer calls `create_branch()`
+   itself). Framing: these two files are pipeline bookkeeping/traceability
+   records, not application code — the real human review for Requirements
+   already happens via the posted issue-comment draft, not a git diff on
+   `main`, so this doesn't rework the approval gate at all.
+   - Writers updated: `requirements_agent.py`, `create_ado_items.py`.
+   - Readers updated to the same branch (explicitly, not via a changing
+     default): `design_agent.py` (`requirements.md`), `qa_agent.py`
+     (`ado-work-items.json`, in `_resolve_parent_story_id()`).
+   - Not affected: `implementation_coordinator.py`/`deploy_agent.py`'s reads
+     of `design.md`/`openapi.yaml`/`tasks.md` — those still land on `main`
+     for real, via a human-reviewed PR, exactly as before.
+   - Verified without spending on a real Requirements/Design run or filing
+     duplicate ADO items: `create_ado_items.py --dry-run` still creates real
+     ADO work items (no dry-run mode exists on ADO's side) and
+     `requirements_agent.py --dry-run` never reaches its `commit_files()`
+     call at all — so neither flag actually exercises the changed branch
+     name. Verified the real mechanism directly instead: read both files
+     from `pipeline-state` (confirmed inherited correctly from `main` at
+     branch-creation), then round-tripped a no-op write via `commit_files()`
+     against `pipeline-state` and confirmed the content came back
+     byte-identical — proves the full blob→tree→commit→ref-update chain
+     works against the new branch.
+   - Commit `780a93f` on `main`.
+4. Protection re-applied cleanly (payload above) once the conflict no longer
+   existed, and read back via a fresh `GET` (not trusted from the `PUT`
+   response) to confirm no `bypass_pull_request_allowances` leaked in from
+   the earlier rejected attempts.
+
 **Not done:**
 - A real end-to-end agent run through the new dispatch path (see above) —
   requires an actually-open PR, not yet created.
-- `docs/FORGE-context_v37.md` exists in the repo root as an untracked file
-  (present before this session started) — not read, not committed, not
-  touched; flagged here only so a future session doesn't assume it's part of
-  Phase 4's work.
