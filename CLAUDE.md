@@ -54,7 +54,7 @@ invocation actually running through this dispatch path** — PR #5 is merged, so
 both guard clauses correctly (and harmlessly) stopped before invoking the real
 agents; that requires a fresh open PR, deliberately not created this session.
 Step 4.8 (branch protection tied to the `security-check` required status check)
-not yet actioned.
+is **deliberately deferred** — not an oversight, a decision to hold off for now.
 
 Files created:
 
@@ -1128,11 +1128,13 @@ verification needed):
 
 **Commit:** `8a702ee` on `main` (all ten Phase 4 files — seven workflows,
 `create_ado_items.py`, `workflow_glue.py`, `github_helper.py`'s `get_issue()`
-addition — committed and pushed together).
+addition — committed and pushed together). `55a1384` documents this Phase 4
+section itself in `CLAUDE.md`.
 
 **Not done / explicitly deferred:**
-- Step 4.8 (branch protection wiring the `security-check` required status
-  check to forge-demo-apps) — not actioned this session.
+- **Step 4.8 (branch protection wiring the `security-check` required status
+  check to forge-demo-apps) is deliberately deferred** — a decision, not an
+  oversight; revisit when ready to actually enforce the block on merge.
 - A real end-to-end agent run through the new dispatch path (see above).
 - `docs/FORGE-context_v37.md` exists in the repo root as an untracked file
   (present before this session started) — not read, not committed, not
