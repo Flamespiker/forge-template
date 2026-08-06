@@ -171,6 +171,34 @@ def post_comment(issue_or_pr_number: int, body: str) -> dict:
     return response.json()
 
 
+def get_issue(issue_number: int) -> dict:
+    """
+    Retrieve a tracking issue's own object (title, body, labels, state) from
+    forge-template (the orchestration repo).
+
+    Uses GITHUB_TOKEN — same-repo operation on forge-template. Needed starting
+    with Phase 4 workflow wiring: guard clauses re-check that a triggering
+    label is still actually present at job-run time (the "labeled" event can
+    race with a near-simultaneous label removal), and the label-driven stages
+    resolve the request ID from a prior agent comment rather than a new piece
+    of persisted state — but before either of those, the workflow needs the
+    issue's current label set at all, which no existing function returns.
+
+    Args:
+        issue_number: The issue number in forge-template.
+
+    Returns:
+        The issue object from the GitHub API. Includes "labels" (list of
+        {"name": ...} dicts among other fields), "body", "title", "state".
+    """
+    url = f"{_source_repo_url()}/issues/{issue_number}"
+    response = requests.get(url, headers=_github_token_headers(), timeout=15)
+    response.raise_for_status()
+    issue = response.json()
+    logger.info("Retrieved forge-template issue #%s (state=%s)", issue_number, issue.get("state"))
+    return issue
+
+
 def get_issue_comments(issue_or_pr_number: int) -> list[dict]:
     """
     Retrieve all comments on a tracking issue or PR in forge-template (the

@@ -1,15 +1,104 @@
-# Stub workflow — trigger and steps will be replaced when the Stage 0 agent is built.
+# FORGE Stage 0 — Intake and Clarification
+#
+# Trigger label: intake-ready (applied by the BA/Orchestration Manager once the
+# intake spreadsheet is attached to the tracking issue).
+# Label lifecycle: removes intake-ready on success. Does not apply
+# clarification-pending itself -- intake_agent.py does that (see
+# run_intake_agent() in core/agents/intake_agent.py).
+# On failure: intake_agent.py posts its own failure comment internally before
+# re-raising (see its module docstring / ADR-0011 exception pattern) -- but
+# that only covers a failure *inside* intake_agent.py itself. A failure in the
+# attachment-download step (before the agent even runs) would otherwise exit
+# non-zero with nothing posted to the issue; the final step below covers
+# exactly that gap and is skipped entirely when the agent step actually ran
+# (success or failure) to avoid ever posting a duplicate.
 
 name: FORGE Stage 0 — Intake and Clarification
 
 on:
-  workflow_dispatch:  # manual trigger for now — real triggers added later
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   intake:
+    if: github.event.label.name == 'intake-ready'
     runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORGE_APP_ID: ${{ secrets.FORGE_APP_ID }}
+      FORGE_APP_PRIVATE_KEY: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+      FORGE_GITHUB_OWNER: Flamespiker
+      FORGE_TARGET_REPO: forge-demo-apps
+      FORGE_SOURCE_REPO: forge-template
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
     steps:
-      - name: Guard clause
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Guard clause — confirm intake-ready is still present
+        id: guard
         run: |
-          echo "Workflow stub only — agent logic not yet implemented"
-          exit 0
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import get_issue
+
+          issue = get_issue(int(os.environ["ISSUE_NUMBER"]))
+          labels = [l["name"] for l in issue["labels"]]
+          proceed = "intake-ready" in labels
+          if not proceed:
+              print("intake-ready is no longer present on this issue -- skipping run.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"proceed={'true' if proceed else 'false'}\n")
+          PY
+
+      - name: Download intake spreadsheet attachment
+        id: download
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.workflow_glue download-issue-attachment \
+            --issue-number "$ISSUE_NUMBER" \
+            --output intake.xlsx \
+            --extension .xlsx
+
+      - name: Run Intake Agent
+        id: run_agent
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.intake_agent \
+            --spreadsheet intake.xlsx \
+            --issue-number "$ISSUE_NUMBER"
+
+      - name: Clear intake-ready label
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import remove_label
+          remove_label(int(os.environ["ISSUE_NUMBER"]), "intake-ready")
+          PY
+
+      - name: Post failure comment for a pre-agent step failure
+        if: always() && steps.guard.outputs.proceed == 'true' && steps.run_agent.outcome == 'skipped'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import post_comment
+          post_comment(
+              int(os.environ["ISSUE_NUMBER"]),
+              "⚠️ **FORGE Intake workflow failed before the Intake Agent could run** "
+              "(most likely: no intake spreadsheet attachment found on this issue). "
+              "Check the GitHub Actions run log for this workflow for the exact error. "
+              "An Orchestration Manager needs to investigate before re-applying `intake-ready`.",
+          )
+          PY

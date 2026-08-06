@@ -1,15 +1,121 @@
-# Stub workflow — trigger and steps will be replaced when the Stage 2 agent is built.
+# FORGE Stage 2 — Spec and Design
+#
+# Trigger label: requirements-approved (human applies after reviewing
+# requirements.md/ado-work-items.json from Stage 1).
+# Label lifecycle: removes requirements-approved on success (design.md's own
+# comment tells the approver to apply design-approved next -- see
+# design_agent.py's run_design_agent()).
+#
+# Two steps, strictly ordered, second gated on the first's success:
+#   1. core.agents.create_ado_items -- creates the real ADO Epic/Feature/User
+#      Story hierarchy from docs/<request-id>/ado-work-items.json and commits
+#      the real IDs back to that file (including primary_user_story_id,
+#      which qa_agent.py's _resolve_parent_story_id() already looks for).
+#      If ANY ADO call fails, this step exits non-zero and posts its own
+#      failure comment (see create_ado_items.py) -- GitHub Actions' default
+#      step-failure behavior then skips every step after it, so the Design
+#      Agent never runs against a partial traceability chain. No extra
+#      `if: success()` needed on the Design Agent step for this reason alone,
+#      but it's added explicitly below for clarity since a guard-gated step
+#      earlier in the job already relies on conditional execution.
+#   2. design_agent.py -- only reached if step 1 fully succeeded.
+# On failure inside design_agent.py itself: it posts its own failure comment
+# (same ADR-0011 pattern as every other stage). The final step below covers a
+# failure in the still-earlier "Resolve request ID" glue step (create_ado_items
+# already self-reports its own failures) and is skipped entirely once ADO
+# item creation actually runs, to avoid ever posting a duplicate.
 
 name: FORGE Stage 2 — Spec and Design
 
 on:
-  workflow_dispatch:  # manual trigger for now — real triggers added later
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   design:
+    if: github.event.label.name == 'requirements-approved'
     runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORGE_APP_ID: ${{ secrets.FORGE_APP_ID }}
+      FORGE_APP_PRIVATE_KEY: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+      FORGE_GITHUB_OWNER: Flamespiker
+      FORGE_TARGET_REPO: forge-demo-apps
+      FORGE_SOURCE_REPO: forge-template
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ADO_PAT: ${{ secrets.ADO_PAT }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
     steps:
-      - name: Guard clause
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Guard clause — confirm requirements-approved is still present
+        id: guard
         run: |
-          echo "Workflow stub only — agent logic not yet implemented"
-          exit 0
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import get_issue
+
+          issue = get_issue(int(os.environ["ISSUE_NUMBER"]))
+          labels = [l["name"] for l in issue["labels"]]
+          proceed = "requirements-approved" in labels
+          if not proceed:
+              print("requirements-approved is no longer present on this issue -- skipping run.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"proceed={'true' if proceed else 'false'}\n")
+          PY
+
+      - name: Resolve request ID
+        if: steps.guard.outputs.proceed == 'true'
+        id: request
+        run: |
+          python -m core.agents.workflow_glue resolve-request-id --issue-number "$ISSUE_NUMBER"
+
+      - name: Create ADO work items (Epic -> Features -> User Stories)
+        id: create_ado
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.create_ado_items \
+            --issue-number "$ISSUE_NUMBER" \
+            --request-id "${{ steps.request.outputs.request_id }}"
+
+      - name: Run Design Agent
+        if: steps.guard.outputs.proceed == 'true' && success()
+        run: |
+          python -m core.agents.design_agent \
+            --issue-number "$ISSUE_NUMBER" \
+            --request-id "${{ steps.request.outputs.request_id }}"
+
+      - name: Clear requirements-approved label
+        if: steps.guard.outputs.proceed == 'true' && success()
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import remove_label
+          remove_label(int(os.environ["ISSUE_NUMBER"]), "requirements-approved")
+          PY
+
+      - name: Post failure comment for a pre-ADO-creation step failure
+        if: always() && steps.guard.outputs.proceed == 'true' && steps.create_ado.outcome == 'skipped'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import post_comment
+          post_comment(
+              int(os.environ["ISSUE_NUMBER"]),
+              "⚠️ **FORGE Design workflow failed before ADO item creation could run** "
+              "(most likely: could not resolve the request ID). Check the GitHub Actions "
+              "run log for this workflow for the exact error. An Orchestration Manager "
+              "needs to investigate before re-applying `requirements-approved`.",
+          )
+          PY

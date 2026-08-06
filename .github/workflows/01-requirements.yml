@@ -1,15 +1,115 @@
-# Stub workflow — trigger and steps will be replaced when the Stage 1 agent is built.
+# FORGE Stage 1 — Requirements
+#
+# Trigger label: clarification-complete (applied once the BA has answered the
+# Intake Agent's questions as issue comments).
+# Label lifecycle: removes clarification-complete AND clarification-pending on
+# success (both have served their purpose once requirements.md is drafted).
+# requirements_agent.py applies no label of its own -- the human reviews
+# requirements.md/ado-work-items.json and applies requirements-approved
+# directly (see Document 6 Gate 1); this workflow does NOT call the ADO API,
+# only 02-design.yml does, after requirements-approved.
+# On failure: requirements_agent.py posts its own failure comment internally
+# (same ADR-0011 pattern as Intake) -- that only covers a failure *inside*
+# requirements_agent.py itself. The final step below covers a failure in an
+# earlier glue step (resolving request_id, re-downloading the spreadsheet) and
+# is skipped entirely when the agent step actually ran, to avoid ever posting
+# a duplicate.
 
 name: FORGE Stage 1 — Requirements
 
 on:
-  workflow_dispatch:  # manual trigger for now — real triggers added later
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   requirements:
+    if: github.event.label.name == 'clarification-complete'
     runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORGE_APP_ID: ${{ secrets.FORGE_APP_ID }}
+      FORGE_APP_PRIVATE_KEY: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+      FORGE_GITHUB_OWNER: Flamespiker
+      FORGE_TARGET_REPO: forge-demo-apps
+      FORGE_SOURCE_REPO: forge-template
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
     steps:
-      - name: Guard clause
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Guard clause — confirm clarification-complete is still present
+        id: guard
         run: |
-          echo "Workflow stub only — agent logic not yet implemented"
-          exit 0
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import get_issue
+
+          issue = get_issue(int(os.environ["ISSUE_NUMBER"]))
+          labels = [l["name"] for l in issue["labels"]]
+          proceed = "clarification-complete" in labels
+          if not proceed:
+              print("clarification-complete is no longer present on this issue -- skipping run.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"proceed={'true' if proceed else 'false'}\n")
+          PY
+
+      - name: Resolve request ID
+        if: steps.guard.outputs.proceed == 'true'
+        id: request
+        run: |
+          python -m core.agents.workflow_glue resolve-request-id --issue-number "$ISSUE_NUMBER"
+
+      - name: Re-download intake spreadsheet attachment
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.workflow_glue download-issue-attachment \
+            --issue-number "$ISSUE_NUMBER" \
+            --output intake.xlsx \
+            --extension .xlsx
+
+      - name: Run Requirements Agent
+        id: run_agent
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.requirements_agent \
+            --spreadsheet intake.xlsx \
+            --issue-number "$ISSUE_NUMBER" \
+            --request-id "${{ steps.request.outputs.request_id }}"
+
+      - name: Clear clarification-complete and clarification-pending labels
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import remove_label
+          issue_number = int(os.environ["ISSUE_NUMBER"])
+          remove_label(issue_number, "clarification-complete")
+          remove_label(issue_number, "clarification-pending")
+          PY
+
+      - name: Post failure comment for a pre-agent step failure
+        if: always() && steps.guard.outputs.proceed == 'true' && steps.run_agent.outcome == 'skipped'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import post_comment
+          post_comment(
+              int(os.environ["ISSUE_NUMBER"]),
+              "⚠️ **FORGE Requirements workflow failed before the Requirements Agent could run** "
+              "(most likely: could not resolve the request ID or re-download the intake "
+              "spreadsheet attachment). Check the GitHub Actions run log for this workflow "
+              "for the exact error. An Orchestration Manager needs to investigate before "
+              "re-applying `clarification-complete`.",
+          )
+          PY

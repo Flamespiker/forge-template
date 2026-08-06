@@ -1,15 +1,155 @@
-# Stub workflow — trigger and steps will be replaced when the Stage 4 agent is built.
+# FORGE Stage 4 — QA
+#
+# Trigger: repository_dispatch type feature-pr-opened, forwarded by
+# forge-demo-apps' own .github/workflows/notify-forge.yml (native cross-repo
+# `pull_request` triggers aren't possible -- this workflow lives in
+# forge-template, but the real event happens in forge-demo-apps). Fires on PR
+# OPEN, not merge -- QA must gate before merge, confirmed against notify-
+# forge.yml's own trigger: `on: pull_request: types: [opened, synchronize]`,
+# filtered to `feature/*` branches only.
+# Runs in parallel with 05-security.yml -- both listen on the same dispatch
+# event independently; neither waits on the other.
+# Label lifecycle: qa_agent.py applies qa-approved / qa-loop-back /
+# qc-retry-limit-reached itself (see run_qa_agent()) -- no label gated this
+# workflow's own trigger, so there's nothing to clear on entry. On a pass, this
+# workflow additionally clears any stale qa-loop-back/qc-retry-limit-reached
+# label left over from an earlier failing attempt on the same tracking issue,
+# since qa_agent.py only ever adds its current label, never removes a prior
+# one from an earlier run.
+# On failure inside qa_agent.py itself: it posts its own failure comment (same
+# ADR-0011 pattern as every other stage). The final step below covers a
+# failure in an earlier glue step (checkout, dotnet/node setup) and is skipped
+# entirely once the agent step actually runs, to avoid ever posting a
+# duplicate. A failure in "Resolve tracking issue number" itself has nowhere
+# to post to (that step is what resolves the only issue number we have) --
+# the Actions run failing loudly is the fallback signal for that specific case.
 
 name: FORGE Stage 4 — QA
 
 on:
-  workflow_dispatch:  # manual trigger for now — real triggers added later
+  repository_dispatch:
+    types: [feature-pr-opened]
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   qa:
     runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORGE_APP_ID: ${{ secrets.FORGE_APP_ID }}
+      FORGE_APP_PRIVATE_KEY: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+      FORGE_GITHUB_OWNER: Flamespiker
+      FORGE_TARGET_REPO: forge-demo-apps
+      FORGE_SOURCE_REPO: forge-template
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ADO_PAT: ${{ secrets.ADO_PAT }}
+      PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+      HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+      HEAD_REF: ${{ github.event.client_payload.head_ref }}
     steps:
-      - name: Guard clause
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install FORGE dependencies
+        run: pip install -r requirements.txt
+
+      - name: Guard clause — confirm the PR is still open at this head SHA
+        id: guard
         run: |
-          echo "Workflow stub only — agent logic not yet implemented"
-          exit 0
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import get_pr
+
+          pr = get_pr(int(os.environ["PR_NUMBER"]))
+          proceed = pr["state"] == "open" and pr["head"]["sha"] == os.environ["HEAD_SHA"]
+          if not proceed:
+              print(f"PR #{pr['number']} state={pr['state']!r} head={pr['head']['sha']!r} -- "
+                    f"no longer matches the dispatched event (state=open, head={os.environ['HEAD_SHA']!r}). Skipping.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"proceed={'true' if proceed else 'false'}\n")
+          PY
+
+      - name: Resolve tracking issue number
+        if: steps.guard.outputs.proceed == 'true'
+        id: issue
+        run: |
+          python -m core.agents.workflow_glue resolve-tracking-issue --pr-number "$PR_NUMBER"
+
+      - name: Generate GitHub App installation token (scoped to forge-demo-apps)
+        if: steps.guard.outputs.proceed == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.FORGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+          owner: Flamespiker
+          repositories: forge-demo-apps
+
+      - name: Checkout forge-demo-apps at the PR head commit
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Flamespiker/forge-demo-apps
+          ref: ${{ env.HEAD_SHA }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: monorepo-checkout
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.guard.outputs.proceed == 'true'
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.proceed == 'true'
+        with:
+          node-version: '20'
+
+      - name: Run QA Agent
+        id: run_agent
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          request_id="${HEAD_REF#feature/}"
+          python -m core.agents.qa_agent \
+            --issue-number "${{ steps.issue.outputs.issue_number }}" \
+            --request-id "$request_id" \
+            --pr-number "$PR_NUMBER" \
+            --repo-path "$GITHUB_WORKSPACE/monorepo-checkout"
+
+      - name: Clear a stale qa-loop-back/qc-retry-limit-reached label on pass
+        if: steps.guard.outputs.proceed == 'true' && success()
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import get_issue, remove_label
+
+          issue_number = int("${{ steps.issue.outputs.issue_number }}")
+          issue = get_issue(issue_number)
+          labels = [l["name"] for l in issue["labels"]]
+          if "qa-approved" in labels:
+              for stale in ("qa-loop-back", "qc-retry-limit-reached"):
+                  if stale in labels:
+                      remove_label(issue_number, stale)
+          PY
+
+      - name: Post failure comment for a pre-agent step failure
+        if: >
+          always() && steps.guard.outputs.proceed == 'true' &&
+          steps.issue.outcome == 'success' && steps.run_agent.outcome == 'skipped'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import post_comment
+          post_comment(
+              int("${{ steps.issue.outputs.issue_number }}"),
+              "⚠️ **FORGE QA workflow failed before the QA Agent could run** "
+              f"(PR #{os.environ['PR_NUMBER']}, most likely: checkout or toolchain setup). "
+              "Check the GitHub Actions run log for this workflow for the exact error. "
+              "An Orchestration Manager needs to investigate.",
+          )
+          PY

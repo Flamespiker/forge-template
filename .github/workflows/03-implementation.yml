@@ -1,15 +1,120 @@
-# Stub workflow — trigger and steps will be replaced when the Stage 3 agent is built.
+# FORGE Stage 3 — Implementation
+#
+# Trigger label: design-approved (human applies after merging the design PR).
+# Label lifecycle: removes design-approved on success (once the feature PR is
+# confirmed open -- QA/Security pick up from there via the feature PR event,
+# not a label on this issue).
+#
+# Runs the real Managed Agents coordinator session (ADR-0010) via
+# implementation_coordinator.py -- Backend/Frontend/Test Writer subagents on a
+# shared sandbox. The job simply waits on the script's own
+# poll_until_idle()/run_implementation_stage() call to finish; no separate
+# integration-check job is added, since integration handling is native to the
+# coordinator (see the Phase 3.4a retrofit notes in CLAUDE.md). timeout-minutes
+# below is a safety net for the GitHub Actions runner only -- per the
+# documented chat-32 operational incident, killing this *local* process does
+# NOT stop the server-side Managed Agents session, which keeps running and can
+# be resumed by session ID. A runner timeout here should be treated the same
+# way: recover by ID, do not just re-invoke the script.
+#
+# Step 4.9 traceability check (verified by reading the live source, not
+# assumed): run_implementation_coordinator() already writes both directions --
+# the PR body includes "Related FORGE tracking issue: <owner>/<source_repo>#N"
+# (GitHub auto-links this owner/repo#N shorthand), and the tracking-issue
+# comment includes the PR's own html_url. Both directions confirmed present in
+# core/agents/implementation_coordinator.py as of this wiring pass -- no code
+# change was needed for this step, only this confirmation.
+#
+# On failure inside implementation_coordinator.py itself: it posts its own
+# failure comment (same ADR-0011 pattern as every other stage). The final step
+# below covers a failure in the still-earlier "Resolve request ID" glue step
+# and is skipped entirely once the coordinator actually runs, to avoid ever
+# posting a duplicate.
 
 name: FORGE Stage 3 — Implementation
 
 on:
-  workflow_dispatch:  # manual trigger for now — real triggers added later
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   implementation:
+    if: github.event.label.name == 'design-approved'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORGE_APP_ID: ${{ secrets.FORGE_APP_ID }}
+      FORGE_APP_PRIVATE_KEY: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+      FORGE_GITHUB_OWNER: Flamespiker
+      FORGE_TARGET_REPO: forge-demo-apps
+      FORGE_SOURCE_REPO: forge-template
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
     steps:
-      - name: Guard clause
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Guard clause — confirm design-approved is still present
+        id: guard
         run: |
-          echo "Workflow stub only — agent logic not yet implemented"
-          exit 0
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import get_issue
+
+          issue = get_issue(int(os.environ["ISSUE_NUMBER"]))
+          labels = [l["name"] for l in issue["labels"]]
+          proceed = "design-approved" in labels
+          if not proceed:
+              print("design-approved is no longer present on this issue -- skipping run.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"proceed={'true' if proceed else 'false'}\n")
+          PY
+
+      - name: Resolve request ID
+        if: steps.guard.outputs.proceed == 'true'
+        id: request
+        run: |
+          python -m core.agents.workflow_glue resolve-request-id --issue-number "$ISSUE_NUMBER"
+
+      - name: Run Implementation Coordinator
+        id: run_agent
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.implementation_coordinator \
+            --issue-number "$ISSUE_NUMBER" \
+            --request-id "${{ steps.request.outputs.request_id }}"
+
+      - name: Clear design-approved label
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import remove_label
+          remove_label(int(os.environ["ISSUE_NUMBER"]), "design-approved")
+          PY
+
+      - name: Post failure comment for a pre-agent step failure
+        if: always() && steps.guard.outputs.proceed == 'true' && steps.run_agent.outcome == 'skipped'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import post_comment
+          post_comment(
+              int(os.environ["ISSUE_NUMBER"]),
+              "⚠️ **FORGE Implementation workflow failed before the Implementation Coordinator "
+              "could run** (most likely: could not resolve the request ID). Check the GitHub "
+              "Actions run log for this workflow for the exact error. An Orchestration Manager "
+              "needs to investigate before re-applying `design-approved`.",
+          )
+          PY

@@ -1,15 +1,137 @@
-# Stub workflow — trigger and steps will be replaced when the Stage 6 agent is built.
+# FORGE Stage 6 — Deploy (staging only, this phase)
+#
+# Trigger: BOTH qa-approved AND security-approved present on the tracking
+# issue. The "labeled" event fires whichever label lands second, so this job
+# listens for either one and re-checks the full label set at run time via the
+# guard clause -- if only one is present (this run's own label was the first
+# to land), it's a clean no-op skip, not a failure.
+#
+# Deploys against the feature PR's HEAD commit, not a post-merge commit --
+# nothing in this label-driven trigger chain guarantees the feature PR has
+# been merged yet by the time both labels land (QA/Security gate BEFORE
+# merge, per 04-qa.yml/05-security.yml's own header comments), and
+# deploy_agent.py's own docstring only requires a commit SHA to tag the image
+# with, not a merged one. Staging is a pre-merge verification environment for
+# the human reviewer here, not a post-merge release step -- consistent with
+# CLAUDE.md's "staging is a verification step, not a release gate" framing.
+#
+# Label lifecycle: deploy_agent.py applies no label on success (Document 6's
+# Label Reference table has no deploy-stage label -- see CLAUDE.md). This
+# workflow does not clear qa-approved/security-approved either: they remain
+# valid, true statements about this commit even after a successful staging
+# deploy, and nothing downstream re-triggers on their continued presence, so
+# clearing them would only lose information for no operational benefit.
+# On failure inside deploy_agent.py itself: it posts its own failure comment
+# (same ADR-0011 pattern as every other stage). The final step below covers a
+# failure in an earlier glue step (resolving request_id, resolving the
+# feature PR, checking it out) and is skipped entirely once the agent step
+# actually runs, to avoid ever posting a duplicate.
 
 name: FORGE Stage 6 — Deploy
 
 on:
-  workflow_dispatch:  # manual trigger for now — real triggers added later
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   deploy:
+    if: github.event.label.name == 'qa-approved' || github.event.label.name == 'security-approved'
     runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORGE_APP_ID: ${{ secrets.FORGE_APP_ID }}
+      FORGE_APP_PRIVATE_KEY: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+      FORGE_GITHUB_OWNER: Flamespiker
+      FORGE_TARGET_REPO: forge-demo-apps
+      FORGE_SOURCE_REPO: forge-template
+      ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+      ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+      ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+      AZURE_STAGING_CREDENTIALS: ${{ secrets.AZURE_STAGING_CREDENTIALS }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
     steps:
-      - name: Guard clause
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Guard clause — confirm both qa-approved and security-approved are present
+        id: guard
         run: |
-          echo "Workflow stub only — agent logic not yet implemented"
-          exit 0
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import get_issue
+
+          issue = get_issue(int(os.environ["ISSUE_NUMBER"]))
+          labels = [l["name"] for l in issue["labels"]]
+          proceed = "qa-approved" in labels and "security-approved" in labels
+          if not proceed:
+              print(f"Only one gate present so far (labels: {labels}) -- waiting for the other. Skipping this run.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"proceed={'true' if proceed else 'false'}\n")
+          PY
+
+      - name: Resolve request ID
+        if: steps.guard.outputs.proceed == 'true'
+        id: request
+        run: |
+          python -m core.agents.workflow_glue resolve-request-id --issue-number "$ISSUE_NUMBER"
+
+      - name: Resolve feature PR number and head commit SHA
+        if: steps.guard.outputs.proceed == 'true'
+        id: pr
+        run: |
+          python -m core.agents.workflow_glue resolve-feature-pr --issue-number "$ISSUE_NUMBER"
+
+      - name: Generate GitHub App installation token (scoped to forge-demo-apps)
+        if: steps.guard.outputs.proceed == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.FORGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+          owner: Flamespiker
+          repositories: forge-demo-apps
+
+      - name: Checkout forge-demo-apps at the feature PR head commit
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Flamespiker/forge-demo-apps
+          ref: ${{ steps.pr.outputs.head_sha }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: monorepo-checkout
+
+      - name: Run Deploy Agent
+        id: run_agent
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.deploy_agent \
+            --issue-number "$ISSUE_NUMBER" \
+            --request-id "${{ steps.request.outputs.request_id }}" \
+            --repo-path "$GITHUB_WORKSPACE/monorepo-checkout" \
+            --commit-sha "${{ steps.pr.outputs.head_sha }}" \
+            --pr-number "${{ steps.pr.outputs.pr_number }}"
+
+      - name: Post failure comment for a pre-agent step failure
+        if: always() && steps.guard.outputs.proceed == 'true' && steps.run_agent.outcome == 'skipped'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import post_comment
+          post_comment(
+              int(os.environ["ISSUE_NUMBER"]),
+              "⚠️ **FORGE Deploy workflow failed before the Deploy Agent could run** "
+              "(most likely: could not resolve the request ID or the feature PR). Check "
+              "the GitHub Actions run log for this workflow for the exact error. An "
+              "Orchestration Manager needs to investigate.",
+          )
+          PY

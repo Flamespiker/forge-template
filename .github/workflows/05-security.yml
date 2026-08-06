@@ -1,15 +1,151 @@
-# Stub workflow — trigger and steps will be replaced when the Stage 5 agent is built.
+# FORGE Stage 5 — Security
+#
+# Trigger: repository_dispatch type feature-pr-opened, forwarded by
+# forge-demo-apps' own .github/workflows/notify-forge.yml -- same mechanism
+# and same event as 04-qa.yml (see that file's header comment for the full
+# cross-repo-trigger rationale). Runs in parallel with QA, not after it --
+# both listen on the same dispatch event independently.
+# Label lifecycle: security_agent.py applies security-approved itself on a
+# clean scan (see run_security_agent()) -- no label gated this workflow's own
+# trigger, so there's nothing to clear on entry, and per Document 6 there is
+# no security-loop-back label to clean up on a later pass (unlike QA's retry
+# labels) -- a Critical finding leaves the issue with no label at all, by
+# design, rather than one that would need clearing later.
+# On failure inside security_agent.py itself: it posts its own failure
+# comment (same ADR-0011 pattern as every other stage). The final step below
+# covers a failure in an earlier glue step (checkout, tool installs) and is
+# skipped entirely once the agent step actually runs, to avoid ever posting a
+# duplicate. A failure in "Resolve tracking issue number" itself has nowhere
+# to post to (that step is what resolves the only issue number we have) --
+# the Actions run failing loudly is the fallback signal for that specific case.
+#
+# Gitleaks and OWASP Dependency-Check are standalone binaries, not pip
+# packages (see CLAUDE.md's Python Environment section) -- installed fresh on
+# every run below. Semgrep is in requirements.txt already.
 
 name: FORGE Stage 5 — Security
 
 on:
-  workflow_dispatch:  # manual trigger for now — real triggers added later
+  repository_dispatch:
+    types: [feature-pr-opened]
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   security:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORGE_APP_ID: ${{ secrets.FORGE_APP_ID }}
+      FORGE_APP_PRIVATE_KEY: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+      FORGE_GITHUB_OWNER: Flamespiker
+      FORGE_TARGET_REPO: forge-demo-apps
+      FORGE_SOURCE_REPO: forge-template
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+      PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+      HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+      HEAD_REF: ${{ github.event.client_payload.head_ref }}
     steps:
-      - name: Guard clause
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install FORGE dependencies
+        run: pip install -r requirements.txt
+
+      - name: Guard clause — confirm the PR is still open at this head SHA
+        id: guard
         run: |
-          echo "Workflow stub only — agent logic not yet implemented"
-          exit 0
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import get_pr
+
+          pr = get_pr(int(os.environ["PR_NUMBER"]))
+          proceed = pr["state"] == "open" and pr["head"]["sha"] == os.environ["HEAD_SHA"]
+          if not proceed:
+              print(f"PR #{pr['number']} state={pr['state']!r} head={pr['head']['sha']!r} -- "
+                    f"no longer matches the dispatched event (state=open, head={os.environ['HEAD_SHA']!r}). Skipping.")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"proceed={'true' if proceed else 'false'}\n")
+          PY
+
+      - name: Resolve tracking issue number
+        if: steps.guard.outputs.proceed == 'true'
+        id: issue
+        run: |
+          python -m core.agents.workflow_glue resolve-tracking-issue --pr-number "$PR_NUMBER"
+
+      - name: Generate GitHub App installation token (scoped to forge-demo-apps)
+        if: steps.guard.outputs.proceed == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.FORGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+          owner: Flamespiker
+          repositories: forge-demo-apps
+
+      - name: Checkout forge-demo-apps at the PR head commit
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Flamespiker/forge-demo-apps
+          ref: ${{ env.HEAD_SHA }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: monorepo-checkout
+
+      - uses: actions/setup-java@v4
+        if: steps.guard.outputs.proceed == 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Gitleaks
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Install OWASP Dependency-Check
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          curl -sSfL -o dependency-check.zip \
+            https://github.com/jeremylong/DependencyCheck/releases/download/v9.2.0/dependency-check-9.2.0-release.zip
+          unzip -q dependency-check.zip -d "$HOME/dependency-check-dist"
+          chmod +x "$HOME/dependency-check-dist/dependency-check/bin/dependency-check.sh"
+          echo "$HOME/dependency-check-dist/dependency-check/bin" >> "$GITHUB_PATH"
+
+      - name: Run Security Agent
+        id: run_agent
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          request_id="${HEAD_REF#feature/}"
+          python -m core.agents.security_agent \
+            --issue-number "${{ steps.issue.outputs.issue_number }}" \
+            --request-id "$request_id" \
+            --pr-number "$PR_NUMBER" \
+            --repo-path "$GITHUB_WORKSPACE/monorepo-checkout"
+
+      - name: Post failure comment for a pre-agent step failure
+        if: >
+          always() && steps.guard.outputs.proceed == 'true' &&
+          steps.issue.outcome == 'success' && steps.run_agent.outcome == 'skipped'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import post_comment
+          post_comment(
+              int("${{ steps.issue.outputs.issue_number }}"),
+              "⚠️ **FORGE Security workflow failed before the Security Agent could run** "
+              f"(PR #{os.environ['PR_NUMBER']}, most likely: checkout or tool installation). "
+              "Check the GitHub Actions run log for this workflow for the exact error. "
+              "An Orchestration Manager needs to investigate.",
+          )
+          PY
