@@ -22,7 +22,8 @@ security → deploy) with human approval gates at each stage.
 
 ## Current Build Phase
 
-**Phase 3 — Agent Implementation** (in progress)
+**Phase 3 — Agent Implementation: complete.** **Phase 4 — Pipeline Wiring: wired and
+dispatch-verified, 2026-08-06** (see below for what "verified" does and doesn't cover).
 
 Step 3.1 (shared agent utilities) is complete. Step 3.2 (Intake Agent) is complete.
 Step 3.3 (Requirements Agent) is complete. Step 3.4 (Design Agent) is complete.
@@ -41,6 +42,19 @@ the QA Agent's real run. Step 3.10 (Deploy Agent) is complete, including a real
 units (`req-2026-01-document-api`, `req-2026-01-email-worker` deployed to
 `forge-staging`; PR #5 comment posted) — the frontend unit and a real runtime
 gap found on EmailWorker are still open, see below.
+
+**Phase 4 (Build Plan steps 4.1–4.7, 4.9) — all seven `.github/workflows/*.yml`
+stubs rewritten with real triggers, guard clauses, and agent invocations**;
+committed and pushed directly to `main` 2026-08-06 (`8a702ee`). Full detail in
+the "Phase 4 — Pipeline Wiring" section below. **Verified via a real
+`repository_dispatch` end-to-end against the existing PR #5/issue #2 pair**:
+the cross-repo dispatch chain, payload shape, and guard-clause logic are all
+confirmed working. **Not yet verified: a real `qa_agent.py`/`security_agent.py`
+invocation actually running through this dispatch path** — PR #5 is merged, so
+both guard clauses correctly (and harmlessly) stopped before invoking the real
+agents; that requires a fresh open PR, deliberately not created this session.
+Step 4.8 (branch protection tied to the `security-check` required status check)
+not yet actioned.
 
 Files created:
 
@@ -67,6 +81,8 @@ core/agents/
     qa_agent.py
     security_agent.py
     deploy_agent.py
+    create_ado_items.py
+    workflow_glue.py
 core/agents/subagents/
     __init__.py
     backend_agent.py
@@ -78,6 +94,14 @@ core/agents/templates/dockerfiles/
     nextjs.Dockerfile.template
 core/decisions/
     0011-base-anthropic-client.md
+.github/workflows/
+    00-intake.yml
+    01-requirements.yml
+    02-design.yml
+    03-implementation.yml
+    04-qa.yml
+    05-security.yml
+    06-deploy.yml
 requirements.txt
 .env.example
 ```
@@ -85,6 +109,9 @@ requirements.txt
 (`security_agent.py` was missing from this list in a prior session despite
 being complete and live-run-verified since Step 3.9 — added here alongside
 `deploy_agent.py`, not a new file.)
+
+Also, in `forge-demo-apps` (not this repo): `.github/workflows/notify-forge.yml`
+— see the Phase 4 section below.
 
 ---
 
@@ -976,3 +1003,138 @@ the brief, or newly flagged):**
   not just a fix).
 - Production path, rollback, and Phase 4 GitHub Actions wiring for either
   environment — all explicitly deferred per the original brief.
+
+---
+
+### Phase 4 — Pipeline Wiring (Build Plan steps 4.1–4.7, 4.9)
+
+All seven `.github/workflows/*.yml` files rewritten from `workflow_dispatch`-only
+stubs to real triggers, wired 2026-08-05/06. Every workflow follows the same
+shape: guard clause re-checks trigger state at run time (not just at the
+event, since labels/PR state can change between event and runner start) →
+resolve request-id/PR context → invoke the real stage agent script (no
+`--dry-run`) → label lifecycle cleanup → a final catch-all step posts a
+failure comment if a *pre-agent* glue step failed (the agent scripts
+themselves already self-report their own internal failures per ADR-0011 —
+this only covers the gap before that point, and is skipped whenever the
+agent step actually ran, to never double-post).
+
+**Trigger mapping:**
+
+| Workflow | Trigger | Clears on success |
+|---|---|---|
+| `00-intake.yml` | `intake-ready` label | `intake-ready` |
+| `01-requirements.yml` | `clarification-complete` label | `clarification-complete`, `clarification-pending` |
+| `02-design.yml` | `requirements-approved` label | `requirements-approved` |
+| `03-implementation.yml` | `design-approved` label | `design-approved` |
+| `04-qa.yml` | `repository_dispatch` (`feature-pr-opened`, from forge-demo-apps) | none (qa_agent.py labels itself; a pass also clears a stale `qa-loop-back`/`qc-retry-limit-reached` from an earlier attempt) |
+| `05-security.yml` | `repository_dispatch` (`feature-pr-opened`) | none (security_agent.py labels itself; no retry-loop label exists for this stage) |
+| `06-deploy.yml` | BOTH `qa-approved` AND `security-approved` present | none (Document 6 has no deploy-stage label; `qa-approved`/`security-approved` stay as valid historical markers) |
+
+**Cross-repo trigger problem and its fix:** `04-qa.yml`/`05-security.yml` need
+to run off a PR event that happens in `forge-demo-apps`, but a workflow can
+only be triggered by an event in the repo where it's defined. Fixed via
+`repository_dispatch`: `forge-demo-apps` gained its own
+`.github/workflows/notify-forge.yml` (pushed there directly via `gh api`,
+since the FORGE App itself has no `workflows` permission and can't write
+workflow files programmatically) that fires on `pull_request` (`opened`,
+`synchronize`), filters to `feature/*` branches only, and forwards
+`{pr_number, head_sha, head_ref}` to forge-template as a `repository_dispatch`
+event type `feature-pr-opened`, using a GitHub App token freshly scoped to
+forge-template (`actions/create-github-app-token@v3`).
+
+**Three manual prerequisites this required, all completed 2026-08-06:**
+1. The FORGE App (app_id 4388813, installation id 148876680) is now
+   installed on **both** forge-template and forge-demo-apps — confirmed via
+   a JWT-authenticated `GET /repos/.../installation` check on both repos
+   (both return 200 with identical permissions:
+   `checks/contents/issues/pull_requests: write`, `metadata: read`). This had
+   to be done via the GitHub web UI — the API rejects attempts to modify an
+   App's own installation repository list from anywhere other than that UI.
+2. `forge-demo-apps` gained its own copies of `FORGE_APP_CLIENT_ID` (repo
+   variable) and `FORGE_APP_PRIVATE_KEY` (repo secret) — repo secrets/vars
+   don't cross repos in GitHub Actions, so forge-template's existing values
+   weren't visible there.
+3. `notify-forge.yml` itself, pushed to forge-demo-apps' `main`.
+
+**New scripts:**
+- `core/agents/create_ado_items.py` — no driver existed to wire
+  `ado_helper.py`'s `create_epic`/`create_feature`/`create_user_story` to
+  `docs/<request-id>/ado-work-items.json`. Reads that file (main branch),
+  creates the real Epic → Features → User Stories hierarchy, writes the real
+  IDs back plus a new top-level `primary_user_story_id` key (the first User
+  Story created, in document order — `qa_agent.py`'s
+  `_resolve_parent_story_id()` already looks for exactly this key and had
+  been silently no-op'ing on its absence since Step 3.8). If ANY ADO call
+  fails partway through, posts a failure comment naming what succeeded before
+  the failure (items already created are NOT rolled back — ADO has no
+  multi-item transaction) and exits non-zero, so `02-design.yml` never
+  invokes the Design Agent against a partial traceability chain.
+- `core/agents/workflow_glue.py` — four subcommands used only by the
+  workflows themselves, with no equivalent in any stage agent:
+  `download-issue-attachment` (finds and downloads the BA's intake
+  spreadsheet from the tracking issue's body/comments — handles both GitHub
+  attachment URL shapes), `resolve-request-id` (scans issue comments for any
+  prior stage's `<!-- forge:agent-comment ... request_id=... -->` marker —
+  one tracking issue maps to exactly one request for its whole life),
+  `resolve-feature-pr` (finds the feature PR number/head SHA from the
+  Implementation Coordinator's own tracking-issue comment, for
+  `06-deploy.yml`), `resolve-tracking-issue` (the reverse — finds the
+  tracking issue number from a forge-demo-apps PR body's own "Related FORGE
+  tracking issue: owner/repo#N" line, for `04-qa.yml`/`05-security.yml`,
+  which only ever learn a PR number from the dispatch payload).
+- `github_helper.py` gained `get_issue()` (issue object incl. current labels
+  — needed by every guard clause; didn't exist before since no prior stage
+  needed to re-read an issue's own label set).
+
+**Design decision made where the brief was silent:** `06-deploy.yml` deploys
+against the feature PR's **HEAD commit**, not a merged one. Nothing in the
+label-driven trigger chain guarantees the PR has been merged by the time both
+`qa-approved`/`security-approved` land (both gate *before* merge, by design —
+see `04-qa.yml`/`05-security.yml`'s own header comments), and
+`deploy_agent.py` only ever needed a commit SHA to tag the image with, not a
+merged one. Confirmed intentional: staging is a pre-merge verification
+environment for the human reviewer (Document 2 §4.8's framing — "a
+verification step, not a release"), not a post-merge release gate.
+
+**Verified 2026-08-06** via a real `repository_dispatch` fired manually
+against the existing PR #5 / tracking issue #2 pair (deliberately not a fresh
+PR — reusing already-completed Stage 3 output to avoid re-running the
+Managed Agents coordinator, whose cost is out of proportion to what this
+verification needed):
+- Confirmed both App-installation and forge-demo-apps secrets prerequisites
+  above were actually in place first (not assumed).
+- Fired `POST /repos/Flamespiker/forge-template/dispatches` with
+  `event_type: feature-pr-opened`, `client_payload: {pr_number: 5, head_sha:
+  "0f5f1c57ea5812537bc6d0150aa55d3722f3b190", head_ref:
+  "feature/REQ-2026-01"}` — the same payload shape `notify-forge.yml`
+  produces for a real event.
+- Both `04-qa.yml` ([run 31068863663](https://github.com/Flamespiker/forge-template/actions/runs/31068863663))
+  and `05-security.yml` ([run 31068863654](https://github.com/Flamespiker/forge-template/actions/runs/31068863654))
+  fired for real off the dispatch, both concluded `success`. Logs confirm the
+  `client_payload` crossed the repo boundary intact (`PR_NUMBER: 5`,
+  `HEAD_SHA: 0f5f1c57...`, `HEAD_REF: feature/REQ-2026-01`), and both guard
+  clauses correctly read PR #5's live state (`closed`, since it's merged) and
+  correctly skipped every downstream step (checkout, toolchain setup, the
+  real `qa_agent.py`/`security_agent.py` invocation) rather than running
+  against a stale event — confirmed no new PR #5 comment resulted.
+- **What this confirms:** the full cross-repo dispatch mechanism, payload
+  shape, and guard-clause decision logic all work correctly end-to-end.
+- **What this does NOT confirm:** a real `qa_agent.py`/`security_agent.py`
+  invocation actually completing through this dispatch path (posting a PR
+  comment, applying a label) — that requires an actually-open PR, which
+  would mean either a new throwaway PR or re-running Stage 3, both
+  deliberately out of scope this session.
+
+**Commit:** `8a702ee` on `main` (all ten Phase 4 files — seven workflows,
+`create_ado_items.py`, `workflow_glue.py`, `github_helper.py`'s `get_issue()`
+addition — committed and pushed together).
+
+**Not done / explicitly deferred:**
+- Step 4.8 (branch protection wiring the `security-check` required status
+  check to forge-demo-apps) — not actioned this session.
+- A real end-to-end agent run through the new dispatch path (see above).
+- `docs/FORGE-context_v37.md` exists in the repo root as an untracked file
+  (present before this session started) — not read, not committed, not
+  touched; flagged here only so a future session doesn't assume it's part of
+  Phase 4's work.
