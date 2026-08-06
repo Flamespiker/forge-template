@@ -2,7 +2,7 @@
 
 **Project:** FORGE — Full-SDLC Orchestration with Review Gates for Engineers  
 **Owner:** Mike Faulkner (mfaulkner@legalaid.ab.ca) — Legal Aid Alberta  
-**Last Updated:** 2026-08-06 (Phase 4 — Pipeline Wiring: steps 4.1–4.7 and 4.9 built, committed, and dispatch-chain verified end-to-end; 4.8 and 4.10 remain open — chat 35)  
+**Last Updated:** 2026-08-05 (Phase 4, step 4.8 complete — branch protection live on `forge-demo-apps` `main`; 4.10 remains open — chat 37)  
 **Purpose:** Living reference document. Read this at the start of every new chat to restore full project context without re-explanation.
 
 ---
@@ -862,6 +862,34 @@ Before Phase 3 (Agent Implementation), every developer working on the agent laye
     - `FORGE_Build_Plan_v4.md` — checkboxes updated this session (see below) to reflect Phases 1–3 and Phase 4 steps 4.1–4.7/4.9 as complete; 4.8/4.10 left unchecked. Produced `FORGE_Build_Plan_v5.md`.
 
   - Next: **Phase 4, step 4.8** (branch protection on `forge-demo-apps` `main`) in a fresh chat — start there, then 4.10's full dry-run once protection is in place. After that, Phase 4 closes out and Phase 5 (App 1 greenfield validation) begins. Mike is updating `CLAUDE.md` directly this session; review it for drift at the start of the next chat, per the standing "verify against live repo/docs, not summaries" principle.
+
+---
+
+- **2026-08-05 (chat 36 — this chat):** Phase 4, Step 4.8 (branch protection on `forge-demo-apps` `main`) attempted — **blocked, not completed**, new open item surfaced.
+
+  - **Spec confirmed from `FORGE_Build_Plan_v5.md` (ADR-0010 version)** before acting: require PR reviews (1 approver), require status check `security-check` (matches the check-run name Step 3.9's `create_check_run()` already produces), no direct pushes to `main`. Decision made this chat, not previously specified: **`enforce_admins: true`** — protection applies even to Mike as repo admin, no bypass for emergencies.
+
+  - **Confirmed the `forge-pipeline` App cannot do this itself** — its permission set (Contents, Pull requests, Issues, Checks, Metadata — all R/W or R, per Document 3/7, locked, no RFC-free additions) does not include Administration, so branch protection has to be applied from Mike's personal `Flamespiker` account via `gh api`, not through the App's installation token. This is a real, permanent constraint, not a one-off manual-step framing — worth keeping in mind for any future automation of this step.
+
+  - **New blocker found, not previously known:** `gh api --method PUT repos/Flamespiker/forge-demo-apps/branches/main/protection` returned `403` — `"Upgrade to GitHub Pro or make this repository public to enable this feature."` Confirmed via web search this is a genuine GitHub platform constraint: classic branch protection on **private** repos requires GitHub Pro (or Team/Enterprise) on a personal account; free personal accounts only get it on public repos. `forge-demo-apps` is private on the free `Flamespiker` account, so the rejection is expected, not a misconfigured payload.
+
+  - **Three options surfaced and discussed:** (1) upgrade to GitHub Pro (~$4/mo, no architecture impact), (2) make `forge-demo-apps` public, (3) migrate to a GitHub Team-plan organization (bigger change, likely closer to what production will actually look like, but overkill just to unblock one build-phase step). Mike initially leaned toward making the repo public, prompted to first run a full-history Gitleaks scan (`gitleaks detect --source . --log-opts="--all"`) as a pre-visibility-change safety check given the irreversible nature of a repo's history going public — **then changed his mind before running it or changing visibility.** No visibility change was made; `forge-demo-apps` remains private.
+
+  - **Decision: 4.8 deferred**, pending Mike's decision on which of the three options to take. No branch protection is in place on `forge-demo-apps` `main` as of this session — direct pushes and unreviewed merges are still possible. `branch-protection.json` (the JSON payload for the intended API call, described above) was drafted but not committed anywhere (correctly kept as an untracked scratch file, not part of the repo).
+
+  - **Not done this session:** the branch protection rule itself; the pre-visibility-change Gitleaks history scan (not run, since the public-repo path was abandoned); 4.10 (full dry-run), which was already gated on 4.8 being complete first.
+
+  - Next: **Mike to decide** between GitHub Pro / public repo / org migration for `forge-demo-apps`, then retry Step 4.8 in a fresh chat with this context doc (v39). Once 4.8 is genuinely complete, proceed to 4.10 (full dry-run walkthrough). Build Plan (`FORGE_Build_Plan_v5.md`) intentionally left unchanged this session — 4.8 checkbox stays unchecked since the step did not complete.
+
+---
+
+- **2026-08-05 (chat 37 — this chat):** Phase 4, Step 4.8 — **resolved and complete.** Mike upgraded to GitHub Pro; the same `branch-protection.json` payload and `gh api PUT .../branches/main/protection` command from chat 36 (no changes) succeeded.
+
+  - **Verified live** via the API's own response (not assumed from the 200 status alone): `required_status_checks.checks` shows `security-check` scoped to `app_id: 4388813` (the `forge-pipeline` App) — GitHub auto-scoped the required check to that specific App's check runs, tighter than the Build Plan literally specified, no downside. `required_pull_request_reviews.required_approving_review_count`: 1. `enforce_admins.enabled`: true (per Mike's chat-36 decision — no admin bypass). `allow_force_pushes`/`allow_deletions`: both false.
+  - **`forge-demo-apps` remains private** — Mike's earlier lean toward making it public (chat 36) was abandoned in favor of the GitHub Pro upgrade, which was always the least-disruptive of the three options discussed. No repo visibility change occurred; no Gitleaks full-history scan was needed.
+  - **Standing note carried forward:** classic branch protection on private repos only stays enforced while the account remains on a paid tier (Pro/Team/Enterprise). If Pro is ever downgraded back to Free while `forge-demo-apps` stays private, this protection will likely stop being enforced even though the settings may still display as configured — worth remembering before any future cost-cutting pass touches GitHub subscriptions.
+  - **Build Plan updated:** `FORGE_Build_Plan_v5.md` → `FORGE_Build_Plan_v6.md`, 4.8 checked off with the resolution details noted inline. Only step 4.10 (full dry-run) remains unchecked in Phase 4.
+  - Next: **Phase 4, Step 4.10** — full dry-run walkthrough (trigger a pipeline with a dummy spreadsheet, walk every stage manually confirming labels/comments/artifacts appear correctly, no deployment; for Stage 3, also confirm the Claude Console per-subagent audit trail is reachable from the coordinator session). Its only dependency (4.8) is now satisfied — start this in a fresh chat with context doc v39 (or later) and `FORGE_Build_Plan_v6.md`. Once 4.10 passes, Phase 4 closes out and Phase 5 (App 1 greenfield validation) begins.
 
 ---
 
