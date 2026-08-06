@@ -2,16 +2,21 @@
 FORGE Design Agent — Stage 2 (Design).
 
 Reads the approved requirements.md (committed to the monorepo by the Requirements
-Agent) and the team's stack-preferences.yaml, and produces:
+Agent, on the `pipeline-state` branch -- see below) and the team's
+stack-preferences.yaml, and produces:
   - design.md    — architecture narrative, component breakdown, tech choices
   - openapi.yaml — API contract (OpenAPI 3.0)
   - tasks.md     — implementation task breakdown for the Stage 3 subagents
                     (Backend, Frontend, Test Writer)
 
-Unlike the Requirements Agent (which commits straight to main), the Design Agent
-is the first stage to use the full create_branch() -> commit_files() -> open_pr()
-chain: it commits all three artifacts to a design/<request-id> branch in the
-monorepo and opens a PR against main (Document 6 Gate 2). A summary comment
+Unlike the Requirements Agent (which commits straight to `pipeline-state`, a
+dedicated, intentionally-unprotected bookkeeping branch -- Phase 4 step 4.8
+retrofit, see CLAUDE.md's "Phase 4 -- Pipeline Wiring" section), the Design
+Agent is the first stage to use the full create_branch() -> commit_files() ->
+open_pr() chain: it commits all three artifacts to a design/<request-id>
+branch in the monorepo and opens a real PR against `main` (Document 6 Gate 2)
+-- design.md/openapi.yaml/tasks.md DO land on `main` for real, once a human
+merges that PR, unlike requirements.md/ado-work-items.json. A summary comment
 linking to the PR is posted on the FORGE tracking issue for the Technical
 Approver.
 
@@ -154,7 +159,7 @@ def run_design_agent(
     resolved_request_id = request_id or "unknown"
 
     requirements_md = get_file_contents(
-        f"docs/{resolved_request_id}/requirements.md", branch="main"
+        f"docs/{resolved_request_id}/requirements.md", branch="pipeline-state"
     )
     stack_prefs = file_io.read_yaml(stack_preferences_path)
     stack_prefs_text = file_io.format_stack_preferences_markdown(stack_prefs)

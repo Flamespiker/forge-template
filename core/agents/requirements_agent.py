@@ -6,12 +6,16 @@ the tracking issue thread, and produces:
   - requirements.md — a structured, traceable requirements document
   - a draft ADO work-item payload (Epic -> Features -> User Stories)
 
-Both are committed directly to the monorepo (docs/<request-id>/) on `main` — this
-stage has no PR/branch of its own (see Document 6 Gate 1: approval happens via the
-`requirements-approved` label on the tracking issue, not a PR merge). A human-readable
-summary of the draft ADO hierarchy is posted as a comment on the tracking issue for
-review. ADO work items are NOT created here — only after a human applies
-`requirements-approved` (Phase 4 wiring, not this script).
+Both are committed directly to the monorepo (docs/<request-id>/) on the dedicated
+`pipeline-state` branch (Phase 4 step 4.8 retrofit — this used to be `main`, moved off
+it once branch protection on forge-demo-apps required a PR review for every push to
+`main` and no bypass was available; see CLAUDE.md's "Phase 4 — Pipeline Wiring"
+section). This stage has no PR of its own either way (see Document 6 Gate 1: approval
+happens via the `requirements-approved` label on the tracking issue, reading these
+files as posted in the summary comment below, not via a git diff on `main`). A
+human-readable summary of the draft ADO hierarchy is posted as a comment on the
+tracking issue for review. ADO work items are NOT created here — only after a human
+applies `requirements-approved` (Phase 4 wiring, not this script).
 
 Usage:
     python -m core.agents.requirements_agent --spreadsheet path/to/file.xlsx --issue-number 42 --request-id REQ-2026-01
@@ -250,7 +254,7 @@ def run_requirements_agent(
         return parsed_output
 
     commit_files(
-        branch_name="main",
+        branch_name="pipeline-state",
         files={
             f"docs/{resolved_request_id}/requirements.md": requirements_md,
             f"docs/{resolved_request_id}/ado-work-items.json": json.dumps(ado_payload, indent=2),

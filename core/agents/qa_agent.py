@@ -344,7 +344,7 @@ def _resolve_parent_story_id(request_id: str) -> int | None:
     Until then, this will reliably return None — that's expected, not a bug.
     """
     try:
-        content = get_file_contents(f"docs/{request_id}/ado-work-items.json")
+        content = get_file_contents(f"docs/{request_id}/ado-work-items.json", branch="pipeline-state")
     except Exception:
         logger.warning(
             "No ado-work-items.json found for %s — Bugs will be filed with no "

@@ -2,12 +2,21 @@
 FORGE ADO Item Creation — Phase 4 step 4.3, part of the Stage 2 (Design) workflow.
 
 Reads the draft ADO hierarchy the Requirements Agent committed to
-docs/<request-id>/ado-work-items.json (main branch, forge-demo-apps), creates
-the real Epic -> Features -> User Stories in Azure DevOps via ado_helper.py,
-and writes the resulting numeric IDs back into that same file (main branch) --
-including a top-level "primary_user_story_id" key, which qa_agent.py's
-_resolve_parent_story_id() already looks for and silently no-ops on when it's
-absent.
+docs/<request-id>/ado-work-items.json (`pipeline-state` branch, forge-demo-apps
+-- moved off `main` in the Phase 4 step 4.8 retrofit once branch protection
+required a PR review for every push to `main` and no bypass was available;
+see CLAUDE.md's "Phase 4 -- Pipeline Wiring" section), creates the real
+Epic -> Features -> User Stories in Azure DevOps via ado_helper.py, and
+writes the resulting numeric IDs back into that same file on that same
+branch -- including a top-level "primary_user_story_id" key, which
+qa_agent.py's _resolve_parent_story_id() already looks for and silently
+no-ops on when it's absent.
+
+`pipeline-state` is a persistent, shared branch (unlike `design/<request-id>`/
+`feature/<request-id>`, which are created fresh per request) -- it already
+exists in forge-demo-apps as of this retrofit, so this script does not call
+create_branch() itself; doing so unconditionally would fail with "Reference
+already exists" on every run after the first.
 
 This is orchestration glue, not an agent: no Claude call happens here. Per
 Document 6, ADO items are created only once, only on requirements-approved --
@@ -59,7 +68,7 @@ def run_create_ado_items(
     real ADO IDs merged in).
     """
     path = _ado_items_path(request_id)
-    content = get_file_contents(path, branch="main")
+    content = get_file_contents(path, branch="pipeline-state")
     payload = json.loads(content)
 
     if "epic" not in payload or "features" not in payload:
@@ -140,13 +149,13 @@ def run_create_ado_items(
         return payload
 
     commit_files(
-        branch_name="main",
+        branch_name="pipeline-state",
         files={path: json.dumps(payload, indent=2)},
         commit_message=f"FORGE: create ADO work items for {request_id}",
     )
     logger.info(
         "ADO item creation complete for request %s -- %d item(s) created, "
-        "primary_user_story_id=%s, %s updated on main.",
+        "primary_user_story_id=%s, %s updated on pipeline-state.",
         request_id, len(created_summary), primary_user_story_id, path,
     )
     return payload
