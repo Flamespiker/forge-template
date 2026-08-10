@@ -43,6 +43,13 @@ units (`req-2026-01-document-api`, `req-2026-01-email-worker` deployed to
 `forge-staging`; PR #5 comment posted) — the frontend unit and a real runtime
 gap found on EmailWorker are still open, see below.
 
+**Step 4.10 (full pipeline dry-run, request-id `DRYRUN-2026-01`, tracking issue
+`forge-template#4`) is in progress, being run in a separate/parallel session**
+— not yet fully written back here (that session documents its own stages when
+it concludes). This session's own contribution is limited to recovering a
+stalled Implementation Coordinator run and spot-checking the result; see the
+"Step 4.10 — Implementation recovery" section at the end of this file for detail.
+
 **Phase 4 (Build Plan steps 4.1–4.9) — all seven `.github/workflows/*.yml`
 stubs rewritten with real triggers, guard clauses, and agent invocations**;
 committed and pushed directly to `main` 2026-08-06 (`8a702ee`). Full detail in
@@ -1239,3 +1246,96 @@ attempt hit a platform limitation, third attempt resolved it properly:**
 **Not done:**
 - A real end-to-end agent run through the new dispatch path (see above) —
   requires an actually-open PR, not yet created.
+
+---
+
+### Step 4.10 — Implementation recovery (DRYRUN-2026-01, cross-session)
+
+Step 4.10 is a full pipeline dry-run exercising Stages 0–6 end-to-end against
+a fresh intake (request-id `DRYRUN-2026-01`, tracking issue `forge-template#4`),
+being driven from a separate/parallel session. This section documents only
+what happened in *this* session: recovering a stalled Implementation
+Coordinator run and verifying the result. Confirmed with Mike 2026-08-10 that
+`DRYRUN-2026-01`/issue #4 are real and simply hadn't been written back here
+yet — the other session's full Step 4.10 status (Intake/Requirements/Design
+that presumably preceded this, and QA/Security/Deploy that follow it) lands
+here separately when that session concludes.
+
+**A distinct root cause from REQ-2026-01's incident, sharing only the recovery
+principle.** REQ-2026-01's earlier incident (see the `implementation_coordinator.py`
+entry above) was the *local* process/tracker getting killed mid-flight by the
+invoking shell tool's own timeout, while the remote Managed Agents session kept
+working independently. Today's failure was different: the
+`03-implementation.yml` Actions job ran to completion and explicitly failed —
+`managed_agents_wrapper.py`'s session-archive step exhausted its fixed 3-attempt
+exponential-backoff retry (2s/4s/8s) and gave up while Test Writer was still
+legitimately still working underneath. The top-level coordinator had already
+reported `idle`/`end_turn`, but a subagent thread was still active, so the
+archive call kept hitting the same "still running" rejection until the retry
+budget ran out — a genuinely slow-but-healthy session, not a killed process.
+The Managed Agents session itself reached real `idle` shortly after. Per the
+standing rule from REQ-2026-01, the recovery principle still applies even
+though the trigger differs: resume by reusing the known session ID, never
+re-invoke the coordinator.
+
+**Recovery script: `resume_implementation.py`** (repo root, one-off — not a
+permanent module), hardcoding the IDs recovered from the failed job's log:
+`session sesn_01XefEai7XEyGBgAMDxUJh3u`, coordinator `agent_01VMj1F7w1tsRe8wqQXjGcoc`,
+environment `env_01TkNm9Xy5z5ANEVwopaRViR`, 3 subagents. It re-runs only the
+tail end `run_implementation_coordinator()` would have: download the
+already-produced archive → extract → `create_branch()`/`commit_files()` →
+`open_pr()` → `post_comment()` → `archive_session()`.
+
+**Run verified 2026-08-06:**
+- Extracted 24 files from a 15,072-byte archive under
+  `services/DRYRUN-2026-01/` — a minimal .NET health-check API
+  (`HealthController`, `HealthCheckResponse`) + xUnit tests + Next.js
+  frontend, consistent with a deliberately small dry-run scope (vs.
+  REQ-2026-01's full DocumentApi/EmailWorker pair)
+- Committed to new branch `feature/DRYRUN-2026-01` (SHA `f99d2a01`) in
+  `forge-demo-apps`
+- Draft **PR #10** opened: "FORGE Implementation: DRYRUN-2026-01"
+- Comment posted to tracking issue `forge-template#4`
+- Session, environment, coordinator, and all 3 subagents archived cleanly —
+  no lingering billed resources, no fallback warning path triggered
+
+**PR #10 spot-checked against a real local checkout:** fetched
+`feature/DRYRUN-2026-01` into `forge-demo-apps-clone` (same local clone used
+for QA/Security's manual runs) and ran `dotnet test` directly against
+`services/DRYRUN-2026-01/backend.tests` — **3/3 passed, 0 failed**
+(`HealthCheckApi.Tests.dll`). Confirms the resumed archive's backend content
+actually builds and its tests actually run, not just that the commit
+succeeded.
+
+**Not exercised in this session:** QA/Security/Deploy stages for
+`DRYRUN-2026-01`, the frontend unit, and whatever Stage 0–2 work in the other
+session preceded this Implementation step. Full Step 4.10 status to be
+written back by that session when it concludes.
+
+### qa_agent.py — backend test directory resolution fix (found via DRYRUN-2026-01)
+
+**Root cause:** `_run_backend_tests()` hardcoded the backend test directory
+as `services/<request-id>/backend` — the API project's own folder — rather
+than the actual xUnit test project's location. Test Writer correctly places
+tests in a sibling folder (e.g. `backend.tests/`); neither Document 3 nor
+Document 7 mandates a specific layout, so the hardcoded path was simply
+wrong, not an enforcement of a documented convention.
+
+**Symptom:** the QA Agent reported "test suite failed to run (build/compile
+error)" for a backend suite that actually passes cleanly — confirmed via a
+local `dotnet test` run: 3/3 passed.
+
+**Fix:** added `_resolve_backend_test_dir()`, which globs for the actual
+`*.Tests.csproj` file under the service root instead of assuming a fixed
+path. Falls back to the old hardcoded behavior with a warning if no test
+project is found; warns (but proceeds) if multiple are found.
+
+**Verification:** re-ran QA against PR #10 after the fix — backend suite
+came back `ran: true`, 3/3 passed.
+
+**Committed and pushed to `main`:** `e2a123eb45476e501dfca0e0b628297a3f4153f2`.
+
+**Open follow-up, not yet done:** this may also be the root cause of
+REQ-2026-01's long-standing, previously-undiagnosed "QA backend TRX report
+failure" — worth checking that repo's structure against this same pattern to
+confirm, but not verified yet.
