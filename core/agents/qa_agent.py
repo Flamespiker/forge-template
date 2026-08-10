@@ -169,6 +169,52 @@ def _strip_ns(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+def _resolve_backend_test_dir(service_root: Path) -> tuple[str, str | None]:
+    """
+    Locate the backend test project's directory.
+
+    Neither Document 3 nor Document 7 mandates a folder layout for backend
+    tests -- only that xUnit is the required framework. Test Writer is free
+    to place the test project alongside the API code (services/<id>/backend/)
+    or in a sibling project (services/<id>/backend.tests/, or any other name
+    ending in *.Tests.csproj). Rather than assuming one layout -- which
+    previously caused a real backend suite to be reported as a build/compile
+    failure because dotnet test was run from the API project's own directory,
+    not the test project's -- search for the actual *.Tests.csproj file.
+
+    Returns:
+        (resolved_dir, warning) -- warning is None if exactly one test
+        project was found; otherwise it explains what happened, so the QA
+        report can surface it rather than fail silently on an assumption.
+    """
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+    for pattern in ("**/*.Tests.csproj", "**/*Tests.csproj"):
+        for path in sorted(service_root.glob(pattern)):
+            if path not in seen:
+                seen.add(path)
+                candidates.append(path)
+
+    if not candidates:
+        return str(service_root / "backend"), (
+            f"No *.Tests.csproj found anywhere under {service_root} -- falling "
+            "back to backend/ (the original, undocumented assumption). If the "
+            "test project exists elsewhere, this run will report a build/"
+            "compile failure rather than actually finding it."
+        )
+
+    if len(candidates) > 1:
+        chosen = candidates[0]
+        return str(chosen.parent), (
+            f"Multiple *.Tests.csproj files found under {service_root}: "
+            f"{[str(c) for c in candidates]} -- using the first match "
+            f"({chosen}). Consider whether the extra test project(s) are "
+            "intentional."
+        )
+
+    return str(candidates[0].parent), None
+
+
 def _run_backend_tests(backend_dir: str) -> TestSuiteResult:
     """
     Run `dotnet test` against the backend project and parse the TRX report.
@@ -455,8 +501,11 @@ def run_qa_agent(
             "counted. Refusing to proceed without it."
         )
 
-    backend_dir = str(Path(repo_path) / "services" / request_id / "backend")
-    frontend_dir = str(Path(repo_path) / "services" / request_id / "frontend")
+    service_root = Path(repo_path) / "services" / request_id
+    backend_dir, backend_dir_warning = _resolve_backend_test_dir(service_root)
+    if backend_dir_warning:
+        logger.warning(backend_dir_warning)
+    frontend_dir = str(service_root / "frontend")
 
     try:
         backend_result = _run_backend_tests(backend_dir)
