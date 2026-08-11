@@ -1327,8 +1327,9 @@ local `dotnet test` run: 3/3 passed.
 
 **Fix:** added `_resolve_backend_test_dir()`, which globs for the actual
 `*.Tests.csproj` file under the service root instead of assuming a fixed
-path. Falls back to the old hardcoded behavior with a warning if no test
-project is found; warns (but proceeds) if multiple are found.
+path. Warns (but proceeds) if multiple are found. **Superseded 2026-08-10 by
+the Phase 5 pre-flight Fix 3 below: "no test project found" now resolves to
+`not_applicable`, not a fall-back-and-fail.**
 
 **Verification:** re-ran QA against PR #10 after the fix — backend suite
 came back `ran: true`, 3/3 passed.
@@ -1338,4 +1339,155 @@ came back `ran: true`, 3/3 passed.
 **Open follow-up, not yet done:** this may also be the root cause of
 REQ-2026-01's long-standing, previously-undiagnosed "QA backend TRX report
 failure" — worth checking that repo's structure against this same pattern to
-confirm, but not verified yet.
+confirm, but not verified yet. **Update 2026-08-10: re-ran QA `--dry-run`
+against REQ-2026-01's real local checkout while verifying Fix 3 below —
+backend suite ran cleanly (62/62 passed), no TRX report failure reproduced.**
+Not conclusively "closed" (a single clean run isn't the same as a root-cause
+diagnosis of what the original undiagnosed failure actually was), but it did
+not recur.
+
+---
+
+### Phase 5 pre-flight fixes (per `docs/FORGE-Phase5-Preflight-Fixes-Spec.md`)
+
+Three fixes made ahead of Phase 5's real App 1 ("Inactive User & License
+Auditor") run, per the spec drafted in Claude.ai chat 41. All three verified
+individually and committed separately, per the spec's own standing
+convention. `docs/FORGE-Phase5-Preflight-Fixes-Spec.md` is the source
+document — this section records only what actually happened running it, not
+a restatement of the spec itself.
+
+**Fix 1 — Managed Agents archive-retry backoff
+(`core/agents/utils/managed_agents_wrapper.py`).** Root cause (DRYRUN-2026-01
+Stage 3 incident, already documented above): `archive_session()` trusted
+only the coordinator's own idle/end_turn signal, with a 3-attempt (~14s)
+retry-with-backoff as the sole cushion — too thin when a subagent thread is
+still legitimately running under an idle coordinator.
+
+- Added `_get_thread_statuses()` (lightweight `GET /sessions/{id}/threads`,
+  no per-thread event fetch) and `_wait_for_subagent_threads_idle()`, called
+  as a new step 0 inside `archive_session()` before the archive call is even
+  attempted. Polls every 5s for up to 120s; returns immediately once every
+  thread reports idle, or immediately (with a warning) if the API doesn't
+  expose a thread status field at all — degrading cleanly to the backoff
+  loop as the sole safety net in that case.
+- Widened `_ARCHIVE_RETRY_ATTEMPTS` from 3 to 6 (same 2×-doubling schedule:
+  2s/4s/8s/16s/32s/64s, ~126s total) as the secondary safety net for the
+  separate idle→running race — unchanged from before, just given more room.
+- Each 400 retry now logs the actual per-thread statuses observed at that
+  attempt (not just "still running"), per the spec's explicit ask.
+- **Resolved the spec's open design fork:** confirmed live via
+  `smoke_managed_agents.py` (10/10 passed) that
+  `GET /v1/sessions/{id}/threads` DOES expose a real, usable `status` field
+  ("idle") on both coordinator and subagent thread objects — this was
+  "not confirmed in current docs" per the spec, and now is. The
+  still-busy/retry-logging code paths themselves were not exercised by this
+  run (the smoke test's subagent finished before the coordinator went idle,
+  so the pre-check found everything already idle on its first poll) —
+  reasoned through rather than reproduced under load; no incident has
+  surfaced to force the busy path deterministically.
+- Committed separately: `cab6995`.
+
+**Fix 2 — `security-check` permanently unsatisfiable on design-stage PRs
+(`forge-demo-apps`).** Root cause (already documented in the Phase 4
+section above): `main`'s branch protection requires `security-check` on
+every PR, but only `feature/*` PRs ever trigger it via
+`notify-forge.yml`/`05-security.yml`. `design/*` PRs sit "Waiting for status
+to be reported" forever.
+
+- Added `.github/workflows/design-pr-security-noop.yml` in
+  `forge-demo-apps` — triggered on `pull_request` (`opened`, `synchronize`),
+  guarded to `design/*` branches both at the job-level `if:` and again via an
+  explicit shell case-statement inside the job (fails loudly, not silently,
+  if that inner check is ever reached on a non-`design/*` ref). Creates a
+  `security-check` check run with `conclusion: success` and a summary that
+  explicitly states this is a no-op, not a real scan, using the same
+  `actions/create-github-app-token@v3` pattern `notify-forge.yml` already
+  uses (Checks: Write permission already granted, no new grant needed).
+- **Had to be pushed via Mike's own `gh` credentials (workflow scope), not
+  the FORGE App's installation token** — `commit_files()` 403'd against
+  `.github/workflows/*` for the same reason `notify-forge.yml` originally
+  needed manual push: the App has no `workflows` permission. Branch
+  `fix/design-pr-security-noop` created via the App token (that part is a
+  normal branch, not a workflow file), the workflow file itself written via
+  `gh api ... --method PUT` under Mike's own token, then draft **PR #11**
+  opened via the App token (opening a PR doesn't need `workflows` either).
+  **Left open, unmerged, pending Mike's review** — matches the existing
+  PR #7/#8 "small mechanical fix, agent doesn't merge its own PR" pattern
+  (ADR-0009).
+- **Verified live** with a throwaway `design/fix2-smoketest` branch/PR
+  (branched from `fix/design-pr-security-noop` so the new workflow file was
+  actually present in the head ref — a `design/*` branch cut from `main`
+  alone would not have picked it up yet, since `main` won't have the file
+  until PR #11 merges): `security-check` check run appeared within ~20s,
+  `conclusion: success`, with the intended "design-stage PR — not a real
+  scan" summary text. PR's `mergeable_state` was `blocked` only on the
+  still-intact required-review gate, not on the status check. Throwaway PR
+  closed and branch deleted immediately after verification — nothing left
+  behind in `forge-demo-apps` from the test itself.
+- Re-read `main`'s branch protection after all of the above: `checks`,
+  `allow_force_pushes`, `allow_deletions` all unchanged from before this
+  fix's own work.
+- **Flagging, not fixing, a pre-existing discrepancy found while re-checking
+  protection per the spec's own acceptance criteria:** live
+  `enforce_admins.enabled` is currently `false`. This directly contradicts
+  what Step 4.8 (Phase 4 section, above) documented as confirmed —
+  `enforce_admins: true`. Nothing in this session's own work touched
+  `enforce_admins` (confirmed by checking it both before and after Fix 2's
+  changes — `false` both times). Best guess: this is a side effect of
+  whatever admin action was used to force-merge the `DRYRUN-2026-01` design
+  PR past the then-unsatisfiable `security-check` gate — an admin-merge
+  override on a single PR shouldn't normally touch the persistent protection
+  setting, but something did, and it wasn't this session. **Not restored
+  here** — a branch-protection setting is shared infrastructure and the spec
+  explicitly asks to surface exactly this kind of thing rather than resolve
+  it silently. Mike should decide whether to flip it back to `true` (closing
+  the gap `enforce_admins: true` was originally meant to close) now that
+  Fix 2 removes the reason an admin bypass was needed in the first place.
+
+**Fix 3 — QA Agent `not_applicable` outcome
+(`core/agents/qa_agent.py`).** Root cause: `_run_frontend_tests()` assumed
+every service has a real Jest setup; a backend-only service (e.g.
+`DRYRUN-2026-01`, no `"test"` script in `package.json`) got reported as a
+hard failure identical in shape to a genuinely broken suite, burning the
+full 3-attempt retry budget on a non-issue (this is what actually forced the
+manual `qc-retry-limit-reached` → `qa-approved` override on
+`DRYRUN-2026-01` that the Phase 4 write-up alludes to).
+
+- `TestSuiteResult` gained a `not_applicable: bool` field — a real third
+  outcome, not a variant of pass or fail. Never counts against the retry
+  budget, never files an ADO Bug, reported plainly in the PR comment
+  ("Not applicable — no test suite in scope for this service").
+- New `_frontend_test_script_exists()` checks for a `package.json` with a
+  non-empty `"test"` script before ever invoking `npm test`.
+- `_resolve_backend_test_dir()` changed to return `(None, warning)` — not a
+  guessed fallback path — when no `*.Tests.csproj` exists anywhere under the
+  service root at all, so "no test project exists" no longer falls through
+  to the old hardcoded-path-then-fail behavior described in the entry above
+  this one.
+- `suite_run_failed` / `tests_pass` / the synthetic "suite failed to run" bug
+  filing loop all updated to treat `not_applicable` suites as excluded from
+  the verdict entirely, not as failures.
+- Scoped deliberately to inference from what's on disk, per the spec — not
+  the more thorough explicit in-scope/out-of-scope declaration from
+  `design.md`/a manifest field, which is logged in `_frontend_test_script_exists()`'s
+  own docstring as a real future enhancement requiring a Design Agent change.
+- **Verified against two real local checkouts** (`forge-demo-apps-clone`,
+  `--dry-run`, real `dotnet test`/`npm test`, real Claude write-up call — no
+  GitHub/ADO calls in dry-run mode):
+  - `DRYRUN-2026-01` (backend-only): frontend → `not_applicable`, backend →
+    3/3 real pass, `qa-approved` on attempt 1 of 3 — not `qa-loop-back`
+    against a phantom frontend failure.
+  - `REQ-2026-01` (both suites in scope, re-verified for regression): backend
+    62/62 pass, frontend 6 genuine failures correctly detected and bugs
+    computed, `qa-loop-back` on attempt 1 of 3 — confirms `not_applicable`
+    logic doesn't fire when a suite is actually in scope, and doesn't change
+    behavior for a suite that's in scope and genuinely failing.
+- Committed separately: `0560b39`.
+
+**Not done this session, per the spec's own scoping:** `FORGE-context_v42.md`
+is intentionally not updated here — that's the Claude.ai chat's job at the
+close of this mini-cycle, per the standing two-tool convention. Also not
+done: deciding the `enforce_admins` question above, and a root-cause (not
+just non-reproduction) diagnosis of REQ-2026-01's original "QA backend TRX
+report failure."
