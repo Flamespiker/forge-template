@@ -164,32 +164,27 @@ def _extract_archive_to_file_dict(archive_bytes: bytes, expected_prefix: str) ->
         ValueError: If a member is outside expected_prefix in a way that leaves
             nothing usable, or if a member is not valid UTF-8.
         RuntimeError: If extraction yields no files at all.
-    """
-    # Observed on REQ-2026-02 (2026-08-11): the coordinator tarred the archive
-    # rooted at just "<request-id>/..." instead of the full "services/<request-id>/..."
-    # its own system prompt asked for. Remap rather than reject outright -- the
-    # intended content is still unambiguous -- but log it loudly; this is a real
-    # coordinator behavior deviation worth Mike knowing about, not a silent fix.
-    fallback_prefix = expected_prefix.rsplit("/", 1)[-1]
-    used_fallback = False
 
+    Note: REQ-2026-02 (2026-08-11) hit a case where the coordinator tarred the
+    archive rooted at just "<request-id>/..." instead of the full
+    "services/<request-id>/..." its own system prompt asked for. A remap
+    fallback was added and then deliberately REVERTED (same day) -- n=1, no
+    reproducibility test, and a standing auto-remap would quietly weaken this
+    guard for every future run based on one unproven hypothesis about why it
+    happened. Strict rejection stays the behavior. If this recurs, that's real
+    evidence -- fix it then, with data, not a guess now. See CLAUDE.md.
+    """
     files: dict[str, str] = {}
     with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as tar:
         for member in tar.getmembers():
             if not member.isfile():
                 continue
             path = member.name.lstrip("./")
-            if path == expected_prefix or path.startswith(expected_prefix + "/"):
-                normalized_path = path
-            elif path.startswith(fallback_prefix + "/"):
-                normalized_path = expected_prefix + path[len(fallback_prefix):]
-                used_fallback = True
-            else:
+            if not (path == expected_prefix or path.startswith(expected_prefix + "/")):
                 logger.warning(
-                    "Archive member '%s' is outside expected prefix '%s' (and "
-                    "the fallback '%s') -- skipping (coordinator may have "
-                    "tarred the wrong working directory).",
-                    path, expected_prefix, fallback_prefix,
+                    "Archive member '%s' is outside expected prefix '%s' -- skipping "
+                    "(coordinator may have tarred the wrong working directory).",
+                    path, expected_prefix,
                 )
                 continue
             extracted = tar.extractfile(member)
@@ -197,23 +192,13 @@ def _extract_archive_to_file_dict(archive_bytes: bytes, expected_prefix: str) ->
                 continue
             content_bytes = extracted.read()
             try:
-                files[normalized_path] = content_bytes.decode("utf-8")
+                files[path] = content_bytes.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Archive member '{path}' is not valid UTF-8 -- commit_files() "
                     "only supports UTF-8 text content. Binary assets should not be "
                     "part of the generated implementation."
                 ) from exc
-
-    if used_fallback:
-        logger.warning(
-            "Archive was rooted at '%s' instead of the expected '%s' -- the "
-            "coordinator's packaging deviated from its system prompt "
-            "instructions (first observed on REQ-2026-02). Paths were remapped "
-            "rather than rejected. This is a real coordinator behavior gap, "
-            "not expected/normal -- worth root-causing separately.",
-            fallback_prefix, expected_prefix,
-        )
 
     if not files:
         raise RuntimeError(
