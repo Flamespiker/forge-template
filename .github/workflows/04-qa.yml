@@ -110,6 +110,18 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install frontend dependencies (if a frontend unit exists)
+        if: steps.guard.outputs.proceed == 'true'
+        working-directory: ${{ github.workspace }}/monorepo-checkout
+        run: |
+          request_id="${HEAD_REF#feature/}"
+          frontend_dir="services/$request_id/frontend"
+          if [ -f "$frontend_dir/package.json" ]; then
+            npm install --prefix "$frontend_dir"
+          else
+            echo "No frontend package.json at $frontend_dir -- skipping npm install (backend-only request)."
+          fi
+
       - name: Run QA Agent
         id: run_agent
         if: steps.guard.outputs.proceed == 'true'
