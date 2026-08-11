@@ -61,6 +61,10 @@ from core.agents.utils.managed_agents_wrapper import (
     run_implementation_stage,
     list_session_output_files,
     download_file_content,
+    get_session_resource_ids,
+    get_thread_statuses,
+    archive_session,
+    SessionStillRunningError,
 )
 
 logger = logging.getLogger(__name__)
@@ -161,17 +165,31 @@ def _extract_archive_to_file_dict(archive_bytes: bytes, expected_prefix: str) ->
             nothing usable, or if a member is not valid UTF-8.
         RuntimeError: If extraction yields no files at all.
     """
+    # Observed on REQ-2026-02 (2026-08-11): the coordinator tarred the archive
+    # rooted at just "<request-id>/..." instead of the full "services/<request-id>/..."
+    # its own system prompt asked for. Remap rather than reject outright -- the
+    # intended content is still unambiguous -- but log it loudly; this is a real
+    # coordinator behavior deviation worth Mike knowing about, not a silent fix.
+    fallback_prefix = expected_prefix.rsplit("/", 1)[-1]
+    used_fallback = False
+
     files: dict[str, str] = {}
     with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as tar:
         for member in tar.getmembers():
             if not member.isfile():
                 continue
             path = member.name.lstrip("./")
-            if not (path == expected_prefix or path.startswith(expected_prefix + "/")):
+            if path == expected_prefix or path.startswith(expected_prefix + "/"):
+                normalized_path = path
+            elif path.startswith(fallback_prefix + "/"):
+                normalized_path = expected_prefix + path[len(fallback_prefix):]
+                used_fallback = True
+            else:
                 logger.warning(
-                    "Archive member '%s' is outside expected prefix '%s' -- skipping "
-                    "(coordinator may have tarred the wrong working directory).",
-                    path, expected_prefix,
+                    "Archive member '%s' is outside expected prefix '%s' (and "
+                    "the fallback '%s') -- skipping (coordinator may have "
+                    "tarred the wrong working directory).",
+                    path, expected_prefix, fallback_prefix,
                 )
                 continue
             extracted = tar.extractfile(member)
@@ -179,7 +197,7 @@ def _extract_archive_to_file_dict(archive_bytes: bytes, expected_prefix: str) ->
                 continue
             content_bytes = extracted.read()
             try:
-                files[path] = content_bytes.decode("utf-8")
+                files[normalized_path] = content_bytes.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Archive member '{path}' is not valid UTF-8 -- commit_files() "
@@ -187,12 +205,250 @@ def _extract_archive_to_file_dict(archive_bytes: bytes, expected_prefix: str) ->
                     "part of the generated implementation."
                 ) from exc
 
+    if used_fallback:
+        logger.warning(
+            "Archive was rooted at '%s' instead of the expected '%s' -- the "
+            "coordinator's packaging deviated from its system prompt "
+            "instructions (first observed on REQ-2026-02). Paths were remapped "
+            "rather than rejected. This is a real coordinator behavior gap, "
+            "not expected/normal -- worth root-causing separately.",
+            fallback_prefix, expected_prefix,
+        )
+
     if not files:
         raise RuntimeError(
             f"Extracted archive contained no files under expected prefix "
             f"'{expected_prefix}' -- nothing to commit."
         )
     return files
+
+
+# Deliberately conservative -- comfortably below every real run logged in
+# docs/FORGE-pipeline-cost-log.md (smallest so far: DRYRUN-2026-01's 24 files /
+# 15,072-byte archive) while still catching a genuinely degenerate archive
+# (e.g. a single stub file from a session that errored out mid-packaging).
+_MIN_ARCHIVE_FILES = 3
+_MIN_ARCHIVE_BYTES = 500
+
+
+def _sanity_check_extracted_files(
+    files_to_commit: dict[str, str], service_root: str, tasks_md: str
+) -> None:
+    """
+    Guard against committing a partial/truncated archive silently.
+
+    Two checks, deliberately NOT hardcoding "every request must have both a
+    backend and a frontend unit" -- some requests are legitimately backend-only
+    (e.g. DRYRUN-2026-01), and that's not a failure:
+
+    1. Minimum total file count / byte size -- catches an archive that's
+       trivially too small to be a real implementation at all.
+    2. For each unit tasks.md actually calls for (detected by a simple
+       case-insensitive substring check -- tasks.md's own section headers are
+       "Backend" / "Frontend" per the coordinator's delegation, see
+       _COORDINATOR_SYSTEM_PROMPT), require at least 2 files under
+       services/<request-id>/<unit>/ in the archive. A unit tasks.md doesn't
+       mention isn't checked at all -- its absence is expected, not a defect.
+
+    Raises:
+        RuntimeError: If either check fails. Treat as a failed recovery/run --
+            do not commit the extracted files.
+    """
+    total_files = len(files_to_commit)
+    total_bytes = sum(len(content) for content in files_to_commit.values())
+    if total_files < _MIN_ARCHIVE_FILES or total_bytes < _MIN_ARCHIVE_BYTES:
+        raise RuntimeError(
+            f"Extracted archive looks too small to be a real implementation: "
+            f"{total_files} file(s), {total_bytes} byte(s) total (minimums: "
+            f"{_MIN_ARCHIVE_FILES} files / {_MIN_ARCHIVE_BYTES} bytes). "
+            "Treating this as a failed/truncated result -- refusing to commit."
+        )
+
+    for unit in ("backend", "frontend"):
+        if unit not in tasks_md.lower():
+            continue
+        prefix = f"{service_root}/{unit}/"
+        present = [p for p in files_to_commit if p.startswith(prefix)]
+        if len(present) < 2:
+            raise RuntimeError(
+                f"tasks.md calls for a {unit} unit, but the extracted archive "
+                f"has only {len(present)} file(s) under {prefix} -- looks like "
+                "a truncated/partial archive. Refusing to commit."
+            )
+
+
+def _commit_and_open_pr(
+    request_id: str,
+    service_root: str,
+    session_id: str,
+    issue_number: int,
+    files_to_commit: dict[str, str],
+    recovered: bool = False,
+) -> dict:
+    """
+    Shared tail end for both the normal happy path and a manual session
+    recovery: commit files_to_commit to feature/<request_id>, open the draft
+    PR, and post the tracking-issue comment. Deliberately factored out so
+    recover_implementation_session() doesn't duplicate this logic.
+
+    Returns:
+        Dict with "pr_number" and "pr_url".
+    """
+    branch_name = f"feature/{request_id}"
+    create_branch(branch_name, from_branch="main")
+    commit_files(
+        branch_name=branch_name,
+        files=files_to_commit,
+        commit_message=f"FORGE Implementation Coordinator: implement {request_id}",
+    )
+
+    owner = os.environ.get("FORGE_GITHUB_OWNER", "")
+    source_repo = os.environ.get("FORGE_SOURCE_REPO", "forge-template")
+    # NOTE: must stay qualified (owner/repo#N), not bare #N -- workflow_glue.py's
+    # resolve_tracking_issue() greps the PR body for "<source_repo>#N" to find
+    # the tracking issue from 04-qa.yml/05-security.yml's repository_dispatch
+    # payload, which only carries a PR number/SHA, never the tracking issue.
+    # A bare "#N" broke this on the DRYRUN-2026-01 recovery.
+    tracking_issue_ref = f"{owner}/{source_repo}#{issue_number}" if owner else f"#{issue_number}"
+
+    recovery_note = (
+        "\n\n_Recovered manually from a session that outlived the automated "
+        "job's completion-wait ceiling -- the session itself finished "
+        "normally on its own; no implementation work was lost or duplicated._"
+        if recovered else ""
+    )
+
+    pr = open_pr(
+        title=f"FORGE Implementation: {request_id}",
+        body=(
+            f"Implementation for {request_id} ({service_root}), generated "
+            "by the FORGE Implementation Coordinator (Backend + Frontend + Test "
+            "Writer subagents via Anthropic Managed Agents -- ADR-0010).\n\n"
+            f"Related FORGE tracking issue: {tracking_issue_ref}\n\n"
+            f"Managed Agents session: `{session_id}` -- per-subagent audit trail in "
+            f"the Claude Console: {_CONSOLE_SESSION_URL_PREFIX}{session_id}\n\n"
+            "Merge to approve (Document 6 Gate 3)."
+            f"{recovery_note}"
+        ),
+        head_branch=branch_name,
+        base_branch="main",
+        draft=True,
+    )
+
+    recovered_note_comment = (
+        "**Note:** this PR was recovered manually from a session that "
+        "outlived the automated job's completion-wait ceiling -- the session "
+        "finished normally on its own; nothing was lost or duplicated.\n\n"
+        if recovered else ""
+    )
+    comment_body = (
+        f"<!-- forge:agent-comment stage=implementation request_id={request_id} -->\n"
+        f"## 🛠️ FORGE Implementation — Draft Ready for Review"
+        f"{' (recovered)' if recovered else ''}\n\n"
+        f"The Implementation Coordinator ran Backend, Frontend, and Test Writer as "
+        f"subagents (Managed Agents session `{session_id}`), committed the result "
+        f"to `{service_root}/` on branch `{branch_name}`, and opened a draft PR: "
+        f"{pr['html_url']}\n\n"
+        f"Per-subagent audit trail: {_CONSOLE_SESSION_URL_PREFIX}{session_id}\n\n"
+        "---\n"
+        f"{recovered_note_comment}"
+        "QA and Security are already running in parallel -- both trigger "
+        "automatically now that this PR is open, and will post their own results "
+        "directly on it. Review the diff; mark it ready for review and merge when "
+        "you're satisfied and QA/Security are clear."
+    )
+    post_comment(issue_number, comment_body)
+    logger.info(
+        "Implementation %s for request %s -- PR #%s opened, summary posted to issue #%s.",
+        "recovery complete" if recovered else "Coordinator complete",
+        request_id, pr["number"], issue_number,
+    )
+    return {"pr_number": pr["number"], "pr_url": pr["html_url"]}
+
+
+def recover_implementation_session(
+    session_id: str,
+    issue_number: int,
+    request_id: str,
+    dry_run: bool = False,
+) -> dict:
+    """
+    Recover a session left alive by a SessionStillRunningError (or one that
+    outlived a killed local process, per the REQ-2026-01/DRYRUN-2026-01
+    incidents) -- WITHOUT re-invoking the coordinator, which would create a
+    duplicate, separately-billed session on top of one that may still be
+    working or may have already finished on its own.
+
+    Derives coordinator_id/environment_id/subagent_ids straight from the
+    session_id via get_session_resource_ids() -- no need to dig the
+    managed_agents_session_start log line out of a GitHub Actions run.
+
+    Checks live thread status directly. If any thread is still busy, reports
+    status and returns without touching the monorepo or GitHub at all --
+    "not ready yet" is a normal, expected outcome here, not an error.
+
+    If every thread is idle, sanity-checks the output archive
+    (_sanity_check_extracted_files()) before committing anything, then runs
+    the same commit/PR/comment sequence the happy path uses, and finally
+    archives the session (left alive specifically so this recovery could
+    reach it).
+
+    Returns:
+        Dict with "outcome": "still_running" (+ "thread_statuses") or
+        "recovered" (+ "pr_number", "pr_url").
+    """
+    ids = get_session_resource_ids(session_id)
+    coordinator_id = ids["coordinator_id"]
+    environment_id = ids["environment_id"]
+    subagent_ids = ids["subagent_ids"]
+
+    threads = get_thread_statuses(session_id)
+    statuses = {t["agent_name"]: t["status"] for t in threads}
+    busy = {name: s for name, s in statuses.items() if s in ("running", "rescheduling")}
+    if busy:
+        logger.info(
+            "Session %s is not yet fully idle -- %d thread(s) still busy: %s. "
+            "Not touching the monorepo or GitHub. Check back later.",
+            session_id, len(busy), busy,
+        )
+        return {"outcome": "still_running", "thread_statuses": statuses}
+
+    logger.info("Session %s: all threads idle (%s). Proceeding with recovery.", session_id, statuses)
+
+    service_root = f"services/{request_id}"
+    tasks_md = get_file_contents(f"docs/{request_id}/tasks.md", branch="main")
+
+    output_files = list_session_output_files(session_id)
+    archive_meta = next((f for f in output_files if f.get("filename") == _ARCHIVE_FILENAME), None)
+    if archive_meta is None:
+        raise RuntimeError(
+            f"Session {session_id} is idle but produced no '{_ARCHIVE_FILENAME}' in "
+            f"/mnt/session/outputs/. Files present: {[f.get('filename') for f in output_files]}. "
+            "This session genuinely failed -- not recoverable by this tool."
+        )
+    logger.info("Found archive: %s", archive_meta)
+    archive_bytes = download_file_content(archive_meta["id"])
+    files_to_commit = _extract_archive_to_file_dict(archive_bytes, expected_prefix=service_root)
+    _sanity_check_extracted_files(files_to_commit, service_root, tasks_md)
+    logger.info(
+        "Archive sanity check passed: %d file(s), %d byte(s) total.",
+        len(files_to_commit), sum(len(c) for c in files_to_commit.values()),
+    )
+
+    if dry_run:
+        print("=" * 20, "Recovery dry run -- would commit", "=" * 20)
+        for path in sorted(files_to_commit):
+            print(f"  {path} ({len(files_to_commit[path])} chars)")
+        return {"outcome": "recovered", "pr_number": None, "pr_url": None}
+
+    pr_result = _commit_and_open_pr(
+        request_id, service_root, session_id, issue_number, files_to_commit, recovered=True
+    )
+
+    archive_session(coordinator_id, environment_id, session_id, subagent_ids)
+    logger.info("Session %s and all associated resources archived.", session_id)
+
+    return {"outcome": "recovered", **pr_result}
 
 
 def run_implementation_coordinator(
@@ -247,6 +503,44 @@ def run_implementation_coordinator(
             )
         archive_bytes = download_file_content(archive_meta["id"])
         files_to_commit = _extract_archive_to_file_dict(archive_bytes, expected_prefix=service_root)
+        _sanity_check_extracted_files(files_to_commit, service_root, tasks_md)
+
+    except SessionStillRunningError as exc:
+        # NOT a failure -- the coordinator's own turn ended, but real completion
+        # (every subagent thread idle) hasn't happened within the wait ceiling.
+        # Real Stage 3 runs have taken 37-55 minutes (docs/FORGE-pipeline-cost-log.md);
+        # this is expected to fire occasionally on a slow-but-healthy run, not just
+        # a stuck one. The session was left alive by wait_for_all_threads_idle() --
+        # do not archive it here, do not treat this as requiring investigation.
+        logger.warning(
+            "Implementation Coordinator session %s for request %s is still "
+            "running past the completion-wait ceiling -- not a failure, "
+            "leaving the session alive. Thread statuses: %s",
+            exc.session_id, resolved_request_id, exc.thread_statuses,
+        )
+        if not dry_run:
+            still_running_body = (
+                "⏳ **FORGE Implementation Coordinator is still running.** This is "
+                "expected for a real two-service build — recent runs have taken "
+                "37-55 minutes — and is **not a failure**.\n\n"
+                f"Managed Agents session: `{exc.session_id}` -- see the Claude "
+                f"Console ({_CONSOLE_SESSION_URL_PREFIX}{exc.session_id}) for the "
+                "live per-subagent trace.\n\n"
+                f"Current per-thread status: `{exc.thread_statuses}`\n\n"
+                "No action is needed yet. The session was left alive (not "
+                "archived) — check back shortly. If it's still running well "
+                "past an hour, an Orchestration Manager should use the "
+                "recovery tool against this session ID rather than re-applying "
+                "`design-approved` (which would create a duplicate, "
+                "separately-billed session on top of this one)."
+            )
+            try:
+                post_comment(issue_number, still_running_body)
+            except Exception:
+                logger.exception(
+                    "Also failed to post 'still running' comment to issue #%s", issue_number
+                )
+        raise
 
     except Exception as exc:
         logger.exception(
@@ -289,55 +583,10 @@ def run_implementation_coordinator(
         )
         return {"session_id": session_id, "files": list(files_to_commit)}
 
-    branch_name = f"feature/{resolved_request_id}"
-    create_branch(branch_name, from_branch="main")
-    commit_files(
-        branch_name=branch_name,
-        files=files_to_commit,
-        commit_message=f"FORGE Implementation Coordinator: implement {resolved_request_id}",
+    pr_result = _commit_and_open_pr(
+        resolved_request_id, service_root, session_id, issue_number, files_to_commit
     )
-
-    owner = os.environ.get("FORGE_GITHUB_OWNER", "")
-    source_repo = os.environ.get("FORGE_SOURCE_REPO", "forge-template")
-    tracking_issue_ref = f"{owner}/{source_repo}#{issue_number}" if owner else f"#{issue_number}"
-
-    pr = open_pr(
-        title=f"FORGE Implementation: {resolved_request_id}",
-        body=(
-            f"Implementation for {resolved_request_id} ({service_root}), generated "
-            "by the FORGE Implementation Coordinator (Backend + Frontend + Test "
-            "Writer subagents via Anthropic Managed Agents -- ADR-0010).\n\n"
-            f"Related FORGE tracking issue: {tracking_issue_ref}\n\n"
-            f"Managed Agents session: `{session_id}` -- per-subagent audit trail in "
-            f"the Claude Console: {_CONSOLE_SESSION_URL_PREFIX}{session_id}\n\n"
-            "Merge to approve (Document 6 Gate 3)."
-        ),
-        head_branch=branch_name,
-        base_branch="main",
-        draft=True,
-    )
-
-    comment_body = (
-        f"<!-- forge:agent-comment stage=implementation request_id={resolved_request_id} -->\n"
-        "## 🛠️ FORGE Implementation — Draft Ready for Review\n\n"
-        f"The Implementation Coordinator ran Backend, Frontend, and Test Writer as "
-        f"subagents (Managed Agents session `{session_id}`), committed the result "
-        f"to `{service_root}/` on branch `{branch_name}`, and opened a draft PR: "
-        f"{pr['html_url']}\n\n"
-        f"Per-subagent audit trail: {_CONSOLE_SESSION_URL_PREFIX}{session_id}\n\n"
-        "---\n"
-        "QA and Security are already running in parallel -- both trigger "
-        "automatically now that this PR is open, and will post their own results "
-        "directly on it. Review the diff; mark it ready for review and merge when "
-        "you're satisfied and QA/Security are clear."
-    )
-    post_comment(issue_number, comment_body)
-    logger.info(
-        "Implementation Coordinator complete for request %s -- PR #%s opened, "
-        "summary posted to issue #%s.",
-        resolved_request_id, pr["number"], issue_number,
-    )
-    return {"session_id": session_id, "pr_number": pr["number"], "files": list(files_to_commit)}
+    return {"session_id": session_id, "pr_number": pr_result["pr_number"], "files": list(files_to_commit)}
 
 
 def main() -> None:
@@ -347,7 +596,35 @@ def main() -> None:
     parser.add_argument("--issue-number", required=True, type=int, help="FORGE tracking issue number in forge-template")
     parser.add_argument("--request-id", default=None, help="FORGE request ID (required for a real run)")
     parser.add_argument("--dry-run", action="store_true", help="Run the real session but skip committing/posting")
+    parser.add_argument(
+        "--recover-session",
+        default=None,
+        metavar="SESSION_ID",
+        help=(
+            "Recover an existing session left alive by a SessionStillRunningError "
+            "(or a killed local process) instead of starting a new coordinator run. "
+            "Requires --request-id. Never re-invokes the coordinator."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.recover_session:
+        if not args.request_id:
+            parser.error("--request-id is required with --recover-session")
+        try:
+            result = recover_implementation_session(
+                session_id=args.recover_session,
+                issue_number=args.issue_number,
+                request_id=args.request_id,
+                dry_run=args.dry_run,
+            )
+        except Exception:
+            logger.exception("Recovery failed for session %s", args.recover_session)
+            sys.exit(1)
+        print(f"Recovery outcome: {result['outcome']}")
+        if result["outcome"] == "still_running":
+            sys.exit(0)  # a successful check reporting "not ready yet" is not a failure
+        return
 
     try:
         run_implementation_coordinator(
@@ -355,6 +632,14 @@ def main() -> None:
             request_id=args.request_id,
             dry_run=args.dry_run,
         )
+    except SessionStillRunningError:
+        # Distinguishable from a real failure (sys.exit(1) below) -- exit code
+        # 75 is an arbitrary but documented convention (nothing in POSIX/GitHub
+        # Actions assigns it a reserved meaning) so anything grepping Actions
+        # job exit codes can tell "still working, check back" apart from
+        # "genuinely failed". The tracking-issue comment posted above is the
+        # real human-facing signal; this exit code is for tooling.
+        sys.exit(75)
     except Exception:
         sys.exit(1)
 

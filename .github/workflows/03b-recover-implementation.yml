@@ -1,0 +1,76 @@
+# FORGE Stage 3 — Implementation Recovery (manual only)
+#
+# For a session left alive by a SessionStillRunningError (03-implementation.yml
+# exceeded its completion-wait ceiling while the session was still legitimately
+# working) or one orphaned by a killed local process (the REQ-2026-01/
+# DRYRUN-2026-01 incidents, documented in CLAUDE.md). Never re-invokes the
+# coordinator -- that would create a duplicate, separately-billed session on
+# top of one that may still be working or may have already finished.
+#
+# Deliberately workflow_dispatch ONLY -- no automatic trigger, no polling, no
+# schedule. A human deciding "it's been long enough, let's check" is the right
+# amount of automation here: auto-recovering without anyone looking would
+# remove the one checkpoint that has already caught real issues in past manual
+# recoveries (a bare-#N tracking-issue reference, an unverified archive).
+#
+# If the session isn't idle yet, core.agents.implementation_coordinator
+# --recover-session reports status and exits 0 without touching the monorepo
+# or GitHub -- re-run this workflow later rather than treating that as a
+# failure.
+
+name: FORGE Stage 3 — Implementation Recovery (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_id:
+        description: "Managed Agents session ID to recover (sesn_...)"
+        required: true
+        type: string
+      issue_number:
+        description: "FORGE tracking issue number in forge-template"
+        required: true
+        type: number
+      request_id:
+        description: "FORGE request ID (e.g. REQ-2026-02) -- determines services/<request-id> and feature/<request-id>"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run -- check status / sanity-check the archive but do not commit, open a PR, or archive the session"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORGE_APP_ID: ${{ secrets.FORGE_APP_ID }}
+      FORGE_APP_PRIVATE_KEY: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+      FORGE_GITHUB_OWNER: Flamespiker
+      FORGE_TARGET_REPO: forge-demo-apps
+      FORGE_SOURCE_REPO: forge-template
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Recover session
+        run: |
+          python -m core.agents.implementation_coordinator \
+            --issue-number "${{ inputs.issue_number }}" \
+            --request-id "${{ inputs.request_id }}" \
+            --recover-session "${{ inputs.session_id }}" \
+            ${{ inputs.dry_run && '--dry-run' || '' }}
