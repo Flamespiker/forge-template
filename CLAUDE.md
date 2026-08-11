@@ -1679,33 +1679,71 @@ exactly what the sanity checks/format checks exist for, not hypothetical:**
    reuses the same qualified-format logic as the original happy path — PR
    #15's body confirmed to contain `Flamespiker/forge-template#5` before
    relying on it.
-2. **Archive rooted at the wrong prefix.** REQ-2026-02's archive was tarred
-   as `REQ-2026-02/...`, not the `services/REQ-2026-02/...` the coordinator's
-   own system prompt asked for — `_extract_archive_to_file_dict()`'s
-   existing prefix guard correctly rejected every member on the first dry
-   run rather than silently committing to a wrong (or, worse, silently
-   accepted-empty) path. Fixed by adding a fallback: if no member matches
-   the full expected prefix but members match just the trailing `<request-id>`
-   segment, remap `<request-id>/...` → `services/<request-id>/...` rather
-   than failing outright, with a loud warning that this is a real coordinator
-   packaging deviation, not normal — **root cause not diagnosed, just worked
-   around; worth a closer look if it recurs on a future request.**
+2. **Archive rooted at the wrong prefix — OPEN, unconfirmed root cause, guard
+   reverted to strict.** REQ-2026-02's archive was tarred as `REQ-2026-02/...`,
+   not the `services/REQ-2026-02/...` the coordinator's own system prompt
+   asked for — `_extract_archive_to_file_dict()`'s existing prefix guard
+   correctly rejected every member on the first dry run rather than silently
+   committing to a wrong path. A remap fallback was added same-session to
+   unblock the recovery, then **deliberately reverted the same day** once
+   reviewed: it was a standing, general loosening of the guard for every
+   future run (both the recovery path and the normal happy path), based on
+   a single occurrence with no reproducibility test (n=1) and only a
+   plausible-but-unverified hypothesis for why it happened (the system
+   prompt's packaging command is a path relative to the coordinator's shell
+   cwd at the time, which is never explicitly pinned to the sandbox root —
+   plausible if the coordinator or a subagent `cd`'d into `services/` at
+   some point before packaging, but not confirmed). `_extract_archive_to_file_dict()`
+   is back to hard-failing on any prefix mismatch, for both callers.
+   **Logged as an open item, not a closed finding — if this recurs, that's
+   real evidence to act on with a proper fix, not a reason to bring the
+   fallback back on a guess.**
 
 **REQ-2026-02 recovered for real using the new tool** (not a synthetic
 test — this was the live incident): dry run first (confirmed 69 files, all
-correctly remapped and sanity-checked) → real run → committed to
-`feature/REQ-2026-02` (69 files) → draft **PR
-[#15](https://github.com/Flamespiker/forge-demo-apps/pull/15)** opened →
-comment posted to issue #5 → session + environment + coordinator + all 3
-subagents archived cleanly. QA and Security both fired automatically via the
-existing `repository_dispatch` wiring the moment the PR opened (no
+correctly remapped and sanity-checked, back when the now-reverted fallback
+was still in place) → real run → committed to `feature/REQ-2026-02` (69
+files) → draft **PR [#15](https://github.com/Flamespiker/forge-demo-apps/pull/15)**
+opened → comment posted to issue #5 → session + environment + coordinator +
+all 3 subagents archived cleanly. QA and Security both fired automatically
+via the existing `repository_dispatch` wiring the moment the PR opened (no
 special-casing needed for a recovered PR) — **QA came back `qa-loop-back`
-(real backend/frontend build/compile errors, attempt 1 of 3)**, **Security
-came back `security-approved`** (0 Critical, 7 Medium — Semgrep flagging a
-mutable GitHub Actions tag reference in the generated `backend-ci.yml`/
-`frontend-ci.yml`, not an application code issue). Both are genuine pipeline
-output for a freshly generated app, not something this session's own fix
-should have prevented or was asked to fix.
+(real backend/frontend build/compile errors, attempt 1 of 3, unexamined —
+separate app-code work for Mike)**, **Security initially came back
+`security-approved`** with 0 Critical / 7 Medium (Semgrep flagging a mutable
+GitHub Actions tag reference in the generated `backend-ci.yml`/`frontend-ci.yml`).
+
+**CI workflow scope creep — OPEN, confirmed second occurrence of the same
+coordinator behavior, not fixed at the root.** REQ-2026-01 already had this
+exact issue (unrequested `services/REQ-2026-01/backend/.github/workflows/ci.yml`,
+dead weight since GitHub only discovers workflows at the true repo root,
+`git rm`'d before merge). Checked whether REQ-2026-02's two Semgrep-flagged
+files were the same pattern: confirmed via `gh api .../pulls/15/files` —
+both `services/REQ-2026-02/.github/workflows/{backend-ci.yml,frontend-ci.yml}`
+were nested under the service directory, never discoverable by GitHub
+Actions, and nothing in the coordinator's or any subagent's system prompt
+asks for CI workflow files at all. **Two occurrences now — this is a real
+recurring coordinator behavior pattern, not a one-off, though the
+underlying cause (why the model keeps generating these unprompted) has
+still never been diagnosed, only removed after the fact both times.**
+Removed both files from PR #15 (`delete_files()`, new addition to
+`github_helper.py` — no prior stage needed to delete a monorepo file
+before this) and posted a PR comment making explicit that this is dead-code
+cleanup, not a security fix: Security's 7 Medium findings against those two
+files are moot as a side effect of the files being gone, not because they
+were investigated or remediated in place. Confirmed, not assumed: the
+deletion commit fired `notify-forge.yml`'s `synchronize` trigger, both
+QA/Security re-ran automatically, and Security came back genuinely clean
+(`✅ Clear`, `security-approved` re-applied).
+
+**Side effect worth flagging: the cleanup commit also consumed one of QA's
+3 retry attempts.** `qa_agent.py` counts attempts from prior PR comments,
+so this synchronize-triggered re-run counted as "attempt 2 of 3" against
+the exact same real backend/frontend build error the CI-file deletion had
+nothing to do with — Mike now has one fewer real retry attempt on this PR
+than if the cleanup had been deferred until after a real fix, or done in a
+way that didn't re-trigger QA. Not reverted or worked around this session;
+flagging so it's a known cost of the cleanup, not a surprise later.
 
 **Real cost data pulled for REQ-2026-02 and logged in
 `docs/FORGE-pipeline-cost-log.md`:** `GET /sessions/{id}`'s own `usage`
@@ -1714,23 +1752,41 @@ the "not yet confirmed" item from chat 28) at 6,684,549 cache-read tokens,
 138,996 output tokens, 2,218.4 active seconds, `list_cost.amount: "663"`
 (units not cross-checked against the Console, read as ~$6.63).
 
-**Not done this session, flagged rather than resolved:**
-- `SessionStillRunningError`'s propagation through a *fresh* `run_implementation_stage()`
-  call (as opposed to the recovery path, which calls
-  `wait_for_all_threads_idle()`/`archive_session()` directly) was not
+**Resolved by the end of this session (follow-up to the initial report):**
+- `design-approved` cleared from issue #5 (`gh issue edit ... --remove-label`)
+  — it was left applied after the manual recovery since the workflow step
+  that normally clears it never ran (the automated `03-implementation.yml`
+  job had already failed before that point, and the recovery tool doesn't
+  touch trigger labels). Confirmed via a follow-up label read: only
+  `qa-loop-back`/`security-approved` remain.
+- The archive-prefix auto-remap fallback was reverted to strict rejection
+  (see above) — this was raised as "loosened general behavior on a guess,"
+  Mike's call was to revert, done.
+- The four completion-detection/recovery-tool commits, the revert commit,
+  and the `delete_files()` commit were all pushed to `main` (see commit list
+  below) — not left local-only.
+
+**Still genuinely open, logged as open items rather than closed findings —
+neither is fixed at the root:**
+- **Archive-prefix deviation:** guard is strict again, but *why* the
+  coordinator rooted the archive wrong on REQ-2026-02 is still just a
+  hypothesis (system prompt's packaging command is cwd-relative, never
+  pinned to the sandbox root) — not confirmed, not reproduced. If it
+  recurs, that's the signal to actually investigate, not guess again.
+- **CI workflow scope creep:** two occurrences now (REQ-2026-01,
+  REQ-2026-02), both manually `git rm`/`delete_files()`'d after the fact.
+  The coordinator/subagent system prompts still don't ask for CI files and
+  nothing was changed in them this session to stop a third occurrence —
+  this is a confirmed recurring pattern with no root-cause fix yet, only a
+  cleanup response that's now been applied twice.
+- `SessionStillRunningError`'s propagation through a *fresh*
+  `run_implementation_stage()` call (as opposed to the recovery path, which
+  calls `wait_for_all_threads_idle()`/`archive_session()` directly) was not
   exercised live — reproducing it deliberately would mean spending on a new
   real Stage 3 session just to hit the timing window. Reasoned through, not
   reproduced under load, same honesty standard the original Fix 1 held
   itself to.
-- The archive-prefix deviation's actual root cause (something about how the
-  coordinator's `tar` invocation resolved its working directory this run)
-  was not diagnosed — only worked around.
-- `design-approved` was left applied on issue #5 after the manual recovery —
-  the workflow step that normally clears it never ran (the automated
-  `03-implementation.yml` job had already failed before this point; the
-  recovery tool doesn't touch trigger labels). Harmless (nothing re-triggers
-  off a label that's already been actioned) but visually stale; Mike's call
-  whether to clear it.
-- QA's `qa-loop-back` result on PR #15 (real backend/frontend build errors)
-  is unexamined — out of scope for this session's own brief (fixing Stage 3
-  completion detection, not the generated app).
+- QA's `qa-loop-back` result on PR #15 (real backend/frontend build errors,
+  now at attempt 2 of 3 after the CI-file-cleanup commit consumed one
+  attempt) is unexamined — separate app-code work for Mike, out of scope
+  for this session's own brief.
