@@ -58,7 +58,13 @@ without re-testing against the live API):
      archive_session() accepts a coordinator_id and an optional subagent_ids list.
 
   8. Archive race condition — a session can flip from "idle" back to "running" briefly.
-     archive_session() wraps the session archive call in a retry-with-backoff loop.
+     archive_session() wraps the session archive call in a retry-with-backoff loop
+     (6 attempts, 2s/4s/8s/16s/32s/64s, ~126s total as of Phase 5 pre-flight Fix 1 —
+     widened from the original 3 attempts/~14s after the DRYRUN-2026-01 incident
+     where a subagent thread was still legitimately running under an idle
+     coordinator). archive_session() also polls subagent thread status first
+     (_wait_for_subagent_threads_idle()) as the primary gate, treating the backoff
+     loop above as a secondary safety net for the separate idle->running race.
 
   9. Model split per ADR-0010:
      - Coordinator: Opus tier (higher reasoning for synthesis and integration)
@@ -98,8 +104,32 @@ _DEFAULT_SUBAGENT_MODEL = "claude-sonnet-4-6"
 
 _DEFAULT_POLL_INTERVAL = 10       # seconds between status polls
 _DEFAULT_TIMEOUT = 14400          # 4 hours — generous for a full implementation run
-_ARCHIVE_RETRY_ATTEMPTS = 3
+
+# Widened from 3 attempts / 2s-4s-8s (~14s total) after the DRYRUN-2026-01 Stage 3
+# incident: the coordinator reported idle/end_turn while the Test Writer subagent
+# thread was still legitimately executing underneath, and the old budget was
+# exhausted before the session actually finished. 6 attempts on the same doubling
+# schedule (2s/4s/8s/16s/32s/64s, ~126s total) gives a slow-but-healthy session
+# more room, on top of the thread-status pre-check below (Phase 5 pre-flight Fix 1).
+_ARCHIVE_RETRY_ATTEMPTS = 6
 _ARCHIVE_RETRY_BASE_DELAY = 2.0   # seconds; doubles on each retry (exponential backoff)
+
+# Pre-archive gate: wait for subagent threads to report idle before even
+# attempting the archive call, rather than relying solely on the backoff retry
+# above to paper over the gap. See _wait_for_subagent_threads_idle().
+_THREAD_POLL_INTERVAL = 5.0
+_THREAD_POLL_TIMEOUT = 120.0
+
+# NOT CONFIRMED against Anthropic reference docs whether GET /sessions/{id}/threads
+# exposes a per-thread status field, or what vocabulary it uses if so. Assumed to
+# reuse the same {idle, running, rescheduling, terminated} enum documented for
+# session-level status (CLAUDE.md), since threads are sub-resources of a session.
+# If a thread has no "status" key at all, _wait_for_subagent_threads_idle() treats
+# the signal as unavailable and falls back to the retry-backoff above as the only
+# safety net — flagged as an open design fork in the Phase 5 pre-flight fixes spec.
+_THREAD_IDLE_STATUSES = {"idle"}
+_THREAD_BUSY_STATUSES = {"running", "rescheduling"}
+_THREAD_FATAL_STATUSES = {"terminated"}
 
 
 def _headers() -> dict[str, str]:
@@ -458,6 +488,100 @@ def download_file_content(file_id: str) -> bytes:
     return response.content
 
 
+def _get_thread_statuses(session_id: str) -> list[dict]:
+    """
+    Lightweight per-thread status listing: GET /v1/sessions/{sid}/threads only,
+    with no per-thread event fetch. get_subagent_audit_trail() is too expensive
+    to call in a tight pre-archive polling loop — it fetches every event for
+    every thread on every call.
+    """
+    threads_resp = _get(f"sessions/{session_id}/threads?limit=100")
+    threads = threads_resp.get("data", [])
+    return [
+        {
+            "thread_id": t["id"],
+            "agent_name": t.get("agent", {}).get("name", "unknown"),
+            "status": t.get("status"),
+        }
+        for t in threads
+    ]
+
+
+def _wait_for_subagent_threads_idle(
+    session_id: str,
+    timeout_seconds: float = _THREAD_POLL_TIMEOUT,
+    poll_interval: float = _THREAD_POLL_INTERVAL,
+) -> None:
+    """
+    Pre-archive gate (Phase 5 pre-flight Fix 1): wait for every subagent thread
+    to report an idle-like status before attempting to archive the session.
+
+    Fix for the DRYRUN-2026-01 Stage 3 incident — coordinator-level idle does
+    not imply subagent-level idle; a subagent can legitimately keep working
+    after the coordinator's own turn ends. Polls short-interval / generous-total
+    rather than trusting only the coordinator's idle signal.
+
+    If the threads endpoint doesn't expose a usable status field, this checks
+    once, logs a warning, and returns immediately — degrading to the
+    exponential-backoff retry in archive_session() as the sole safety net.
+    Never blocks forever: if threads stay busy past timeout_seconds, logs a
+    warning and returns anyway (bounded wait), leaving the archive-call retry
+    loop as the backstop for a genuinely stuck session.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    checked_status_field = False
+
+    while time.monotonic() < deadline:
+        threads = _get_thread_statuses(session_id)
+        if not threads:
+            return  # nothing to gate on
+
+        statuses = {t["agent_name"]: t["status"] for t in threads}
+
+        if not checked_status_field:
+            checked_status_field = True
+            if all(s is None for s in statuses.values()):
+                logger.warning(
+                    "Thread status field not present on GET /sessions/%s/threads "
+                    "response (statuses: %s) -- cannot gate archive on real "
+                    "subagent state. Falling back to the archive-call "
+                    "retry-with-backoff as the only safety net. Raw threads: %s",
+                    session_id, statuses, threads,
+                )
+                return
+
+        fatal = {name: s for name, s in statuses.items() if s in _THREAD_FATAL_STATUSES}
+        if fatal:
+            logger.warning(
+                "Thread(s) reached 'terminated' status before archive: %s -- "
+                "not waiting on these, they will never become idle.",
+                fatal,
+            )
+
+        busy = {name: s for name, s in statuses.items() if s in _THREAD_BUSY_STATUSES}
+        if not busy:
+            logger.info(
+                "All subagent thread(s) report idle before archive attempt "
+                "for session %s: %s", session_id, statuses,
+            )
+            return
+
+        remaining = deadline - time.monotonic()
+        logger.info(
+            "Archive pre-check for session %s: %d thread(s) still busy, "
+            "waiting up to %.0fs more: %s",
+            session_id, len(busy), max(remaining, 0), busy,
+        )
+        time.sleep(poll_interval)
+
+    logger.warning(
+        "Subagent thread(s) for session %s did not report idle within %.0fs "
+        "pre-archive poll window -- proceeding to the archive call anyway; "
+        "the retry-with-backoff loop is the remaining safety net.",
+        session_id, timeout_seconds,
+    )
+
+
 def archive_session(
     coordinator_id: str,
     environment_id: str,
@@ -469,8 +593,12 @@ def archive_session(
 
     Archive order: session → environment → coordinator agent → each subagent agent.
 
-    The session archive call is wrapped in retry-with-backoff because a session can
-    transiently flip from "idle" back to "running" briefly after the poller sees it idle.
+    Before the session archive call, waits for subagent threads to report idle
+    (_wait_for_subagent_threads_idle() — Phase 5 pre-flight Fix 1) so a slow-but-
+    healthy session isn't killed by an arbitrarily short timer. The session
+    archive call itself is then still wrapped in retry-with-backoff, because a
+    session can transiently flip from "idle" back to "running" briefly even
+    after threads report idle (the known race condition, unrelated to Fix 1).
     This is retryable, not a hard failure.
 
     Args:
@@ -484,7 +612,12 @@ def archive_session(
     Raises:
         RuntimeError: If the session archive fails after all retries.
     """
-    # 1. Archive session with retry-with-backoff.
+    # 0. Wait for subagent threads to catch up to the coordinator's own idle
+    #    status before attempting to archive at all (Phase 5 pre-flight Fix 1).
+    _wait_for_subagent_threads_idle(session_id)
+
+    # 1. Archive session with retry-with-backoff (secondary safety net — the
+    #    session can still transiently flip idle -> running even after step 0).
     last_error: Exception | None = None
     for attempt in range(1, _ARCHIVE_RETRY_ATTEMPTS + 1):
         try:
@@ -493,10 +626,15 @@ def archive_session(
         except requests.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 400:
                 delay = _ARCHIVE_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                try:
+                    observed_statuses = _get_thread_statuses(session_id)
+                except Exception as status_err:
+                    observed_statuses = f"<unavailable: {status_err}>"
                 logger.warning(
                     "Session archive attempt %d/%d failed (status 400 — likely transient "
-                    "'running' state). Retrying in %.1fs...",
-                    attempt, _ARCHIVE_RETRY_ATTEMPTS, delay,
+                    "'running' state). Thread statuses at this attempt: %s. Retrying in "
+                    "%.1fs...",
+                    attempt, _ARCHIVE_RETRY_ATTEMPTS, observed_statuses, delay,
                 )
                 last_error = exc
                 time.sleep(delay)
