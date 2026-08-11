@@ -147,7 +147,13 @@ class TestSuiteResult:
     failed: int
     total: int
     failures: list[TestFailure]
-    run_failure_message: str | None = None  # set when ran=False
+    run_failure_message: str | None = None  # set when ran=False and not_applicable=False
+    # A real third outcome (Phase 5 pre-flight Fix 3), not a variant of pass or
+    # fail: set when this suite was never in scope for this service (no test
+    # project/script found on disk), as opposed to being in scope and crashing.
+    # Does not count against the retry budget and never files an ADO Bug --
+    # see run_qa_agent()'s suite_run_failed / bug-filing logic below.
+    not_applicable: bool = False
 
 
 def _run_shell(command: list[str], cwd: str) -> subprocess.CompletedProcess:
@@ -169,7 +175,7 @@ def _strip_ns(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-def _resolve_backend_test_dir(service_root: Path) -> tuple[str, str | None]:
+def _resolve_backend_test_dir(service_root: Path) -> tuple[str | None, str | None]:
     """
     Locate the backend test project's directory.
 
@@ -183,9 +189,12 @@ def _resolve_backend_test_dir(service_root: Path) -> tuple[str, str | None]:
     not the test project's -- search for the actual *.Tests.csproj file.
 
     Returns:
-        (resolved_dir, warning) -- warning is None if exactly one test
-        project was found; otherwise it explains what happened, so the QA
-        report can surface it rather than fail silently on an assumption.
+        (resolved_dir, warning). resolved_dir is None when no *.Tests.csproj
+        exists anywhere under service_root at all -- callers must treat that
+        as backend testing being out of scope for this service (Phase 5
+        pre-flight Fix 3's not_applicable outcome), not as a build/compile
+        failure to run against a guessed path. warning is None only when
+        exactly one test project was found unambiguously.
     """
     seen: set[Path] = set()
     candidates: list[Path] = []
@@ -196,11 +205,11 @@ def _resolve_backend_test_dir(service_root: Path) -> tuple[str, str | None]:
                 candidates.append(path)
 
     if not candidates:
-        return str(service_root / "backend"), (
-            f"No *.Tests.csproj found anywhere under {service_root} -- falling "
-            "back to backend/ (the original, undocumented assumption). If the "
-            "test project exists elsewhere, this run will report a build/"
-            "compile failure rather than actually finding it."
+        return None, (
+            f"No *.Tests.csproj found anywhere under {service_root} -- treating "
+            "backend testing as not applicable (out of scope) for this service, "
+            "rather than guessing a path and reporting a false build/compile "
+            "failure."
         )
 
     if len(candidates) > 1:
@@ -299,6 +308,31 @@ def _parse_trx(trx_path: Path) -> TestSuiteResult:
         suite="backend", ran=True, passed=passed, failed=failed, total=total,
         failures=failures,
     )
+
+
+def _frontend_test_script_exists(frontend_dir: str) -> bool:
+    """
+    Phase 5 pre-flight Fix 3: a service where the frontend suite was never in
+    scope (e.g. DRYRUN-2026-01, backend-only) has no "test" script in
+    package.json -- running `npm test` against it burned QA's full retry
+    budget on a non-issue in that run. Checked here so run_qa_agent() can
+    record `not_applicable` instead of attempting the run at all.
+
+    Scoped deliberately to inference from what's on disk (missing
+    package.json / missing "test" script), not a more thorough explicit
+    in-scope/out-of-scope declaration sourced from design.md or a manifest
+    field -- that's a real future enhancement (would also need a Design Agent
+    change) but out of scope for this fix.
+    """
+    package_json_path = Path(frontend_dir) / "package.json"
+    if not package_json_path.exists():
+        return False
+    try:
+        package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    test_script = package_json.get("scripts", {}).get("test")
+    return bool(test_script and test_script.strip())
 
 
 def _run_frontend_tests(frontend_dir: str) -> TestSuiteResult:
@@ -454,18 +488,23 @@ _SYSTEM_PROMPT = """You are the FORGE QA Agent for Legal Aid Alberta's software 
 pipeline, writing the human-facing test report comment for a feature PR.
 
 You will be given already-computed, deterministic test results: pass/fail counts per \
-suite (backend/frontend), the list of failing tests with their (already-decided, fixed-\
-mapping) severities, whether any ADO Bug tickets were filed for them, the current QA \
-retry attempt number, and the retry outcome (approved / looped back / retry limit \
-reached).
+suite (backend/frontend), whether a suite is "not_applicable" (never in scope for this \
+service — no test project/script found, distinct from a suite that ran and failed), \
+the list of failing tests with their (already-decided, fixed-mapping) severities, \
+whether any ADO Bug tickets were filed for them, the current QA retry attempt number, \
+and the retry outcome (approved / looped back / retry limit reached).
 
-Do NOT re-judge pass/fail status or severity — these are already decided by \
-deterministic code and must be reported exactly as given, not reinterpreted.
+Do NOT re-judge pass/fail status, severity, or applicability — these are already \
+decided by deterministic code and must be reported exactly as given, not reinterpreted.
 
 Your job is only to write a clear, well-organized Markdown test report comment for a \
 human reviewer (the QA Reviewer, per Document 6 Gate 4). Include:
 - A one-line overall verdict (pass / fail / retry limit reached).
-- Pass/fail/total counts per suite.
+- Pass/fail/total counts per suite. For any suite marked not_applicable, state plainly \
+that it is "Not applicable — no test suite in scope for this service" rather than \
+reporting it as passed, failed, or skipped-without-explanation — this must read as a \
+deliberate scope decision, not a silently skipped check. Do not count a not_applicable \
+suite toward the overall pass/fail verdict.
 - If there are failures: a short table or list of failed tests with severity and a \
 link/reference to the filed ADO Bug (if one was filed).
 - If the retry limit was reached, a clear note telling the Orchestration Manager to \
@@ -508,11 +547,30 @@ def run_qa_agent(
     frontend_dir = str(service_root / "frontend")
 
     try:
-        backend_result = _run_backend_tests(backend_dir)
-        frontend_result = _run_frontend_tests(frontend_dir)
+        if backend_dir is None:
+            backend_result = TestSuiteResult(
+                suite="backend", ran=False, passed=0, failed=0, total=0,
+                failures=[], not_applicable=True,
+            )
+        else:
+            backend_result = _run_backend_tests(backend_dir)
+
+        if _frontend_test_script_exists(frontend_dir):
+            frontend_result = _run_frontend_tests(frontend_dir)
+        else:
+            frontend_result = TestSuiteResult(
+                suite="frontend", ran=False, passed=0, failed=0, total=0,
+                failures=[], not_applicable=True,
+            )
 
         all_failures = list(backend_result.failures) + list(frontend_result.failures)
-        suite_run_failed = not backend_result.ran or not frontend_result.ran
+        # not_applicable suites are a real third outcome (Phase 5 pre-flight
+        # Fix 3) -- they must never make suite_run_failed true, or an
+        # out-of-scope suite gets treated identically to a genuinely broken one.
+        suite_run_failed = (
+            (not backend_result.ran and not backend_result.not_applicable)
+            or (not frontend_result.ran and not frontend_result.not_applicable)
+        )
         tests_pass = (
             not suite_run_failed
             and backend_result.failed == 0
@@ -573,7 +631,7 @@ def run_qa_agent(
         # Also file a single synthetic Bug per suite that failed to even run
         # (build/compile error) — distinct from a per-test failure.
         for suite_result in (backend_result, frontend_result):
-            if suite_result.ran or suite_result.run_failure_message is None:
+            if suite_result.ran or suite_result.not_applicable or suite_result.run_failure_message is None:
                 continue
             title = f"QA: [{suite_result.suite}] test suite failed to run (build/compile error)"[:250]
             description = (
@@ -601,6 +659,7 @@ def run_qa_agent(
         summary_for_model = {
             "backend": {
                 "ran": backend_result.ran,
+                "not_applicable": backend_result.not_applicable,
                 "passed": backend_result.passed,
                 "failed": backend_result.failed,
                 "total": backend_result.total,
@@ -608,6 +667,7 @@ def run_qa_agent(
             },
             "frontend": {
                 "ran": frontend_result.ran,
+                "not_applicable": frontend_result.not_applicable,
                 "passed": frontend_result.passed,
                 "failed": frontend_result.failed,
                 "total": frontend_result.total,
