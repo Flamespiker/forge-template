@@ -548,6 +548,80 @@ def commit_files(
     return new_commit
 
 
+def delete_files(
+    branch_name: str,
+    paths: list[str],
+    commit_message: str,
+) -> dict:
+    """
+    Delete one or more files from a branch in the monorepo via the Git Data API.
+
+    Mirrors commit_files()'s tree/commit/ref-update sequence exactly, except
+    each tree entry has sha=None -- the Git Trees API's documented way to
+    remove a path from a tree relative to base_tree, rather than add/update it.
+
+    Added for the REQ-2026-01/REQ-2026-02 dead-weight-CI-file cleanup pattern
+    (Implementation Coordinator subagents generating unrequested, non-
+    functional nested .github/workflows/*.yml files that GitHub never
+    discovers outside the true repo root) -- no prior FORGE stage needed to
+    delete a file from the monorepo before this.
+
+    Args:
+        branch_name:    Target branch (must already exist in the monorepo).
+        paths:          Repo-relative file paths to remove.
+        commit_message: Commit message string.
+
+    Returns:
+        The created commit object from the GitHub API (includes sha, html_url, etc.).
+    """
+    token = get_installation_token()
+    headers = _auth_headers(token)
+    base_url = _repo_url()
+
+    ref_resp = requests.get(f"{base_url}/git/ref/heads/{branch_name}", headers=headers, timeout=15)
+    ref_resp.raise_for_status()
+    head_sha = ref_resp.json()["object"]["sha"]
+
+    commit_resp = requests.get(f"{base_url}/git/commits/{head_sha}", headers=headers, timeout=15)
+    commit_resp.raise_for_status()
+    base_tree_sha = commit_resp.json()["tree"]["sha"]
+
+    tree_items = [{"path": path, "mode": "100644", "type": "blob", "sha": None} for path in paths]
+
+    tree_resp = requests.post(
+        f"{base_url}/git/trees",
+        headers=headers,
+        json={"base_tree": base_tree_sha, "tree": tree_items},
+        timeout=15,
+    )
+    tree_resp.raise_for_status()
+    new_tree_sha = tree_resp.json()["sha"]
+
+    new_commit_resp = requests.post(
+        f"{base_url}/git/commits",
+        headers=headers,
+        json={"message": commit_message, "tree": new_tree_sha, "parents": [head_sha]},
+        timeout=15,
+    )
+    new_commit_resp.raise_for_status()
+    new_commit = new_commit_resp.json()
+    new_commit_sha = new_commit["sha"]
+
+    update_resp = requests.patch(
+        f"{base_url}/git/refs/heads/{branch_name}",
+        headers=headers,
+        json={"sha": new_commit_sha},
+        timeout=15,
+    )
+    update_resp.raise_for_status()
+
+    logger.info(
+        "Deleted %d file(s) from '%s' (SHA %s): %s",
+        len(paths), branch_name, new_commit_sha[:8], commit_message,
+    )
+    return new_commit
+
+
 def get_pr(pr_number: int) -> dict:
     """
     Retrieve a pull request object from the target monorepo (forge-demo-apps).
