@@ -57,14 +57,31 @@ without re-testing against the live API):
   7. Archive order: session → environment → coordinator agent → each subagent agent.
      archive_session() accepts a coordinator_id and an optional subagent_ids list.
 
-  8. Archive race condition — a session can flip from "idle" back to "running" briefly.
-     archive_session() wraps the session archive call in a retry-with-backoff loop
-     (6 attempts, 2s/4s/8s/16s/32s/64s, ~126s total as of Phase 5 pre-flight Fix 1 —
-     widened from the original 3 attempts/~14s after the DRYRUN-2026-01 incident
-     where a subagent thread was still legitimately running under an idle
-     coordinator). archive_session() also polls subagent thread status first
-     (_wait_for_subagent_threads_idle()) as the primary gate, treating the backoff
-     loop above as a secondary safety net for the separate idle->running race.
+  8. Completion detection vs. archive retry — these are two DIFFERENT problems,
+     deliberately handled by two different mechanisms (post-REQ-2026-02 fix;
+     superseded the Phase 5 pre-flight Fix 1 design below):
+       - "Is the coordinator + every subagent actually done?" is answered by
+         wait_for_all_threads_idle() polling GET /sessions/{id}/threads on a
+         real, data-informed ceiling (see _COMPLETION_POLL_TIMEOUT) until every
+         thread reports idle. This is the ONLY real waiting mechanism for
+         completion. If the ceiling is exceeded, it raises
+         SessionStillRunningError rather than proceeding — the session is left
+         alive (not archived), because a 400 from the archive call in that state
+         isn't new information, it's an expected consequence of asking too
+         early. Confirmed on REQ-2026-02 (2026-08-11): the coordinator's own
+         session-level status went idle in <1s of sending the initial message,
+         but real completion (all subagent threads idle, implementation.tar.gz
+         produced) took ~37 minutes. REQ-2026-01 took 38.5 min (dry run) / 55.2
+         min (real) per docs/FORGE-pipeline-cost-log.md — all consistent with
+         each other, none of which the old ~246s total budget (120s pre-check +
+         6-attempt/~126s archive backoff) ever had a chance of covering.
+       - "The archive API call itself intermittently 400s even on an
+         already-idle session" (the separate idle->running flip race documented
+         in the Phase 2.9 build notes) is a genuinely transient API hiccup, not
+         a completion-detection problem. archive_session() retries this with a
+         SMALL backoff (_ARCHIVE_RETRY_ATTEMPTS, now 3 — reduced from 6, since
+         it no longer needs to double as the real wait mechanism) only after
+         wait_for_all_threads_idle() has already confirmed every thread idle.
 
   9. Model split per ADR-0010:
      - Coordinator: Opus tier (higher reasoning for synthesis and integration)
@@ -105,31 +122,71 @@ _DEFAULT_SUBAGENT_MODEL = "claude-sonnet-4-6"
 _DEFAULT_POLL_INTERVAL = 10       # seconds between status polls
 _DEFAULT_TIMEOUT = 14400          # 4 hours — generous for a full implementation run
 
-# Widened from 3 attempts / 2s-4s-8s (~14s total) after the DRYRUN-2026-01 Stage 3
-# incident: the coordinator reported idle/end_turn while the Test Writer subagent
-# thread was still legitimately executing underneath, and the old budget was
-# exhausted before the session actually finished. 6 attempts on the same doubling
-# schedule (2s/4s/8s/16s/32s/64s, ~126s total) gives a slow-but-healthy session
-# more room, on top of the thread-status pre-check below (Phase 5 pre-flight Fix 1).
-_ARCHIVE_RETRY_ATTEMPTS = 6
-_ARCHIVE_RETRY_BASE_DELAY = 2.0   # seconds; doubles on each retry (exponential backoff)
+# Small and purely for absorbing the known idle->running archive-call race
+# (Phase 2.9 build notes) on a session already CONFIRMED idle by
+# wait_for_all_threads_idle() below. This is no longer doing the real waiting —
+# that used to be true (6 attempts/~126s, widened from 3/~14s after the
+# DRYRUN-2026-01 incident) and was the root cause of the REQ-2026-02 incident:
+# retrying an archive call that keeps 400ing while a thread is genuinely still
+# running isn't new information every time, it's the same premature request
+# repeated. Reduced back down now that real completion detection lives
+# elsewhere.
+_ARCHIVE_RETRY_ATTEMPTS = 3
+_ARCHIVE_RETRY_BASE_DELAY = 2.0   # seconds; doubles on each retry (2s/4s/8s, ~14s total)
 
-# Pre-archive gate: wait for subagent threads to report idle before even
-# attempting the archive call, rather than relying solely on the backoff retry
-# above to paper over the gap. See _wait_for_subagent_threads_idle().
-_THREAD_POLL_INTERVAL = 5.0
-_THREAD_POLL_TIMEOUT = 120.0
+# The real completion-wait ceiling for wait_for_all_threads_idle() — the ONE
+# mechanism that decides whether the whole multi-agent stage is actually done.
+# Chosen with headroom over real observed durations (docs/FORGE-pipeline-cost-log.md):
+# REQ-2026-01 38.5 min (dry run) / 55.2 min (real); REQ-2026-02 ~37 min (real).
+# 90 minutes gives ~1.6x headroom over the largest observed run so far.
+# Overridable via env for when more data comes in without a code change.
+_COMPLETION_POLL_INTERVAL = 15.0
+_COMPLETION_POLL_TIMEOUT = float(
+    os.environ.get("FORGE_IMPLEMENTATION_COMPLETION_TIMEOUT", 90 * 60)
+)
 
-# NOT CONFIRMED against Anthropic reference docs whether GET /sessions/{id}/threads
-# exposes a per-thread status field, or what vocabulary it uses if so. Assumed to
-# reuse the same {idle, running, rescheduling, terminated} enum documented for
-# session-level status (CLAUDE.md), since threads are sub-resources of a session.
-# If a thread has no "status" key at all, _wait_for_subagent_threads_idle() treats
-# the signal as unavailable and falls back to the retry-backoff above as the only
-# safety net — flagged as an open design fork in the Phase 5 pre-flight fixes spec.
+# CONFIRMED live (Phase 5 pre-flight Fix 1's smoke test, and again directly via
+# a manual read-only poll during the REQ-2026-02 incident): GET
+# /sessions/{id}/threads DOES expose a real per-thread "status" field using the
+# same {idle, running, rescheduling, terminated} vocabulary as session-level
+# status. The "field might not exist" branch in wait_for_all_threads_idle()
+# below is retained as a defensive fallback only — it is not expected to
+# trigger on the current API.
 _THREAD_IDLE_STATUSES = {"idle"}
 _THREAD_BUSY_STATUSES = {"running", "rescheduling"}
 _THREAD_FATAL_STATUSES = {"terminated"}
+
+
+class SessionStillRunningError(RuntimeError):
+    """
+    Raised by wait_for_all_threads_idle() when a session's subagent threads have
+    not all reported idle within the completion-wait ceiling.
+
+    This is NOT a failure — see the module docstring note 8. The session is left
+    alive (not archived) so it can be resumed by session ID later (via the
+    recovery tool) instead of being force-archived mid-work or silently
+    re-run as a duplicate, separately-billed session.
+
+    Carries session_id and the last-observed per-thread status dict so a caller
+    can report exactly what's still running without a second API round-trip.
+    run_implementation_stage() additionally attaches coordinator_id,
+    environment_id, and subagent_ids before re-raising, since
+    wait_for_all_threads_idle() itself only knows the session_id.
+    """
+
+    def __init__(self, session_id: str, thread_statuses: dict[str, str]):
+        self.session_id = session_id
+        self.thread_statuses = thread_statuses
+        self.coordinator_id: str | None = None
+        self.environment_id: str | None = None
+        self.subagent_ids: list[str] | None = None
+        super().__init__(
+            f"Session {session_id} has not reached full completion (all threads "
+            f"idle) within the {_COMPLETION_POLL_TIMEOUT:.0f}s wait ceiling. "
+            f"Current thread statuses: {thread_statuses}. The session was left "
+            "alive, not archived — resume by session ID (recovery tool) rather "
+            "than re-invoking the coordinator."
+        )
 
 
 def _headers() -> dict[str, str]:
@@ -488,12 +545,41 @@ def download_file_content(file_id: str) -> bytes:
     return response.content
 
 
-def _get_thread_statuses(session_id: str) -> list[dict]:
+def get_session_resource_ids(session_id: str) -> dict[str, Any]:
+    """
+    Derive coordinator_id, environment_id, and subagent_ids directly from
+    GET /sessions/{id} -- confirmed live (2026-08-11) to carry
+    agent.id (coordinator), agent.multiagent.agents[].id (subagents), and
+    environment_id. Lets a recovery tool work from a session_id alone rather
+    than requiring someone to dig the managed_agents_session_start log line
+    out of a (possibly long-gone) GitHub Actions run.
+
+    Also returns the raw "status" (session-level, NOT a reliable completion
+    signal for a multi-agent coordinator — see wait_for_all_threads_idle())
+    and "usage" (token/cost data — confirmed live to be present here, closing
+    an open question in docs/FORGE-pipeline-cost-log.md about whether this
+    endpoint exposes cost without a Console visit).
+    """
+    session = _get(f"sessions/{session_id}")
+    agent = session.get("agent", {})
+    subagent_ids = [a["id"] for a in agent.get("multiagent", {}).get("agents", [])]
+    return {
+        "coordinator_id": agent.get("id"),
+        "environment_id": session.get("environment_id"),
+        "subagent_ids": subagent_ids,
+        "status": session.get("status"),
+        "usage": session.get("usage"),
+    }
+
+
+def get_thread_statuses(session_id: str) -> list[dict]:
     """
     Lightweight per-thread status listing: GET /v1/sessions/{sid}/threads only,
     with no per-thread event fetch. get_subagent_audit_trail() is too expensive
-    to call in a tight pre-archive polling loop — it fetches every event for
-    every thread on every call.
+    to call in a tight completion-polling loop — it fetches every event for
+    every thread on every call. Public (not prefixed) because the recovery
+    tool needs a direct, on-demand status check independent of the polling
+    loop below.
     """
     threads_resp = _get(f"sessions/{session_id}/threads?limit=100")
     threads = threads_resp.get("data", [])
@@ -507,32 +593,37 @@ def _get_thread_statuses(session_id: str) -> list[dict]:
     ]
 
 
-def _wait_for_subagent_threads_idle(
+def wait_for_all_threads_idle(
     session_id: str,
-    timeout_seconds: float = _THREAD_POLL_TIMEOUT,
-    poll_interval: float = _THREAD_POLL_INTERVAL,
+    timeout_seconds: float = _COMPLETION_POLL_TIMEOUT,
+    poll_interval: float = _COMPLETION_POLL_INTERVAL,
 ) -> None:
     """
-    Pre-archive gate (Phase 5 pre-flight Fix 1): wait for every subagent thread
-    to report an idle-like status before attempting to archive the session.
+    The one real completion signal for a multi-agent Stage 3 session: block
+    until every thread (coordinator + all subagents) reports idle.
 
-    Fix for the DRYRUN-2026-01 Stage 3 incident — coordinator-level idle does
-    not imply subagent-level idle; a subagent can legitimately keep working
-    after the coordinator's own turn ends. Polls short-interval / generous-total
-    rather than trusting only the coordinator's idle signal.
+    Fix for the DRYRUN-2026-01 / REQ-2026-02 Stage 3 incidents — coordinator-
+    level session status can go idle in under a second (just the coordinator's
+    first turn ending after kicking off delegation), long before the actual
+    multi-agent work is done. Real completion has been observed at 37-55
+    minutes for a real two-service build (docs/FORGE-pipeline-cost-log.md) —
+    this polls on a real ceiling informed by that data, not a guess.
 
-    If the threads endpoint doesn't expose a usable status field, this checks
-    once, logs a warning, and returns immediately — degrading to the
-    exponential-backoff retry in archive_session() as the sole safety net.
-    Never blocks forever: if threads stay busy past timeout_seconds, logs a
-    warning and returns anyway (bounded wait), leaving the archive-call retry
-    loop as the backstop for a genuinely stuck session.
+    Raises SessionStillRunningError (not a failure — see its docstring) if the
+    ceiling is reached with threads still busy. Callers must NOT proceed to
+    archive the session in that case.
+
+    If the threads endpoint doesn't expose a usable status field at all, this
+    checks once, logs a warning, and returns immediately — there is nothing to
+    gate on. Not expected to trigger on the current API (see the
+    _THREAD_IDLE_STATUSES comment above), retained as a defensive fallback.
     """
     deadline = time.monotonic() + timeout_seconds
     checked_status_field = False
+    last_logged_statuses: dict[str, str] | None = None
 
     while time.monotonic() < deadline:
-        threads = _get_thread_statuses(session_id)
+        threads = get_thread_statuses(session_id)
         if not threads:
             return  # nothing to gate on
 
@@ -543,9 +634,9 @@ def _wait_for_subagent_threads_idle(
             if all(s is None for s in statuses.values()):
                 logger.warning(
                     "Thread status field not present on GET /sessions/%s/threads "
-                    "response (statuses: %s) -- cannot gate archive on real "
-                    "subagent state. Falling back to the archive-call "
-                    "retry-with-backoff as the only safety net. Raw threads: %s",
+                    "response (statuses: %s) -- cannot gate completion on real "
+                    "subagent state. Treating as unknown/idle rather than "
+                    "blocking forever. Raw threads: %s",
                     session_id, statuses, threads,
                 )
                 return
@@ -553,33 +644,31 @@ def _wait_for_subagent_threads_idle(
         fatal = {name: s for name, s in statuses.items() if s in _THREAD_FATAL_STATUSES}
         if fatal:
             logger.warning(
-                "Thread(s) reached 'terminated' status before archive: %s -- "
-                "not waiting on these, they will never become idle.",
+                "Thread(s) reached 'terminated' status: %s -- not waiting on "
+                "these, they will never become idle.",
                 fatal,
             )
 
         busy = {name: s for name, s in statuses.items() if s in _THREAD_BUSY_STATUSES}
         if not busy:
             logger.info(
-                "All subagent thread(s) report idle before archive attempt "
-                "for session %s: %s", session_id, statuses,
+                "All thread(s) report idle for session %s: %s", session_id, statuses,
             )
             return
 
-        remaining = deadline - time.monotonic()
-        logger.info(
-            "Archive pre-check for session %s: %d thread(s) still busy, "
-            "waiting up to %.0fs more: %s",
-            session_id, len(busy), max(remaining, 0), busy,
-        )
+        if statuses != last_logged_statuses:
+            remaining = deadline - time.monotonic()
+            logger.info(
+                "Completion poll for session %s: %d thread(s) still busy, "
+                "waiting up to %.0fs more: %s",
+                session_id, len(busy), max(remaining, 0), busy,
+            )
+            last_logged_statuses = statuses
         time.sleep(poll_interval)
 
-    logger.warning(
-        "Subagent thread(s) for session %s did not report idle within %.0fs "
-        "pre-archive poll window -- proceeding to the archive call anyway; "
-        "the retry-with-backoff loop is the remaining safety net.",
-        session_id, timeout_seconds,
-    )
+    final_threads = get_thread_statuses(session_id)
+    final_statuses = {t["agent_name"]: t["status"] for t in final_threads}
+    raise SessionStillRunningError(session_id, final_statuses)
 
 
 def archive_session(
@@ -593,13 +682,13 @@ def archive_session(
 
     Archive order: session → environment → coordinator agent → each subagent agent.
 
-    Before the session archive call, waits for subagent threads to report idle
-    (_wait_for_subagent_threads_idle() — Phase 5 pre-flight Fix 1) so a slow-but-
-    healthy session isn't killed by an arbitrarily short timer. The session
-    archive call itself is then still wrapped in retry-with-backoff, because a
-    session can transiently flip from "idle" back to "running" briefly even
-    after threads report idle (the known race condition, unrelated to Fix 1).
-    This is retryable, not a hard failure.
+    Before attempting the archive call, confirms real completion via
+    wait_for_all_threads_idle() — this is a hard precondition, not a nicety:
+    if it raises SessionStillRunningError, this function does NOT catch it and
+    does NOT attempt to archive anything. Only once every thread is confirmed
+    idle does the small archive-retry loop run, purely to absorb the separate,
+    genuinely transient idle->running API race documented in the Phase 2.9
+    build notes (module docstring note 8).
 
     Args:
         coordinator_id:  Coordinator agent ID from create_agent_session().
@@ -610,11 +699,14 @@ def archive_session(
                          are no subagents (e.g. smoke test with subagent_configs=[]).
 
     Raises:
-        RuntimeError: If the session archive fails after all retries.
+        SessionStillRunningError: If threads are not all idle within the
+            completion-wait ceiling — the session is left alive, untouched.
+        RuntimeError: If the session archive call itself fails after all retries
+            despite every thread being confirmed idle.
     """
-    # 0. Wait for subagent threads to catch up to the coordinator's own idle
-    #    status before attempting to archive at all (Phase 5 pre-flight Fix 1).
-    _wait_for_subagent_threads_idle(session_id)
+    # 0. Confirm real completion. Not caught here — a still-running session
+    #    must never reach the archive call below.
+    wait_for_all_threads_idle(session_id)
 
     # 1. Archive session with retry-with-backoff (secondary safety net — the
     #    session can still transiently flip idle -> running even after step 0).
@@ -627,7 +719,7 @@ def archive_session(
             if exc.response is not None and exc.response.status_code == 400:
                 delay = _ARCHIVE_RETRY_BASE_DELAY * (2 ** (attempt - 1))
                 try:
-                    observed_statuses = _get_thread_statuses(session_id)
+                    observed_statuses = get_thread_statuses(session_id)
                 except Exception as status_err:
                     observed_statuses = f"<unavailable: {status_err}>"
                 logger.warning(
@@ -687,9 +779,21 @@ def run_implementation_stage(
 
     Returns:
         Dict with keys:
-            "session_id"    — for logging/linking to Claude Console
-            "audit_trail"   — raw per-subagent events from the API
-            "final_status"  — the session status dict at completion
+            "session_id"      — for logging/linking to Claude Console
+            "coordinator_id", "environment_id", "subagent_ids" — echoed from
+                                 create_agent_session(), useful to a caller that
+                                 needs to report or recover this session later
+            "audit_trail"     — raw per-subagent events from the API
+            "final_status"    — the session status dict at completion
+
+    Raises:
+        SessionStillRunningError: The coordinator's own turn ended normally but
+            not every subagent thread reached idle within the completion-wait
+            ceiling (see wait_for_all_threads_idle()). NOT a failure — the
+            session is left alive, not archived. Re-raised with
+            coordinator_id/environment_id/subagent_ids attached (the exception
+            as raised by wait_for_all_threads_idle() only knows session_id).
+            Callers must treat this distinctly from a real failure.
     """
     ids = create_agent_session(
         coordinator_system_prompt=coordinator_system_prompt,
@@ -715,14 +819,40 @@ def run_implementation_stage(
 
     try:
         send_message(session_id, initial_message)
-        final_status = poll_until_idle(session_id, timeout_seconds=timeout_seconds)
-        audit_trail = get_subagent_audit_trail(session_id)
-    finally:
-        # Always attempt cleanup, even if something above raised
+        # poll_until_idle() only confirms the coordinator's OWN turn ended
+        # without a session-level error — for a multi-agent coordinator this
+        # can return in under a second, long before delegated subagent work is
+        # actually done (see wait_for_all_threads_idle()'s docstring).
+        poll_until_idle(session_id, timeout_seconds=timeout_seconds)
+        # This is the real completion signal for the whole stage.
+        wait_for_all_threads_idle(session_id)
+    except SessionStillRunningError as exc:
+        exc.coordinator_id = coordinator_id
+        exc.environment_id = environment_id
+        exc.subagent_ids = subagent_ids
+        raise
+    except Exception:
+        # A genuine failure (session.error, terminated, requires_action, etc).
+        # Best-effort archive so we don't leak billed resources indefinitely,
+        # but don't let a cleanup failure mask the original error.
         try:
             archive_session(coordinator_id, environment_id, session_id, subagent_ids)
+        except SessionStillRunningError:
+            logger.warning(
+                "Session %s still has active threads after a failure elsewhere "
+                "in the run -- leaving it alive rather than force-archiving.",
+                session_id,
+            )
         except Exception as cleanup_err:
             logger.error("Cleanup failed for session %s: %s", session_id, cleanup_err)
+        raise
+
+    # Fetch the audit trail before archiving -- an archived session's threads
+    # may not remain queryable (unconfirmed either way; safer to fetch first,
+    # matching the original working order).
+    audit_trail = get_subagent_audit_trail(session_id)
+    final_status = _get(f"sessions/{session_id}")
+    archive_session(coordinator_id, environment_id, session_id, subagent_ids)
 
     log_entry_done = {
         "forge_event": "managed_agents_session_complete",
@@ -734,6 +864,9 @@ def run_implementation_stage(
 
     return {
         "session_id": session_id,
+        "coordinator_id": coordinator_id,
+        "environment_id": environment_id,
+        "subagent_ids": subagent_ids,
         "audit_trail": audit_trail,
         "final_status": final_status,
     }
