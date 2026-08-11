@@ -11,9 +11,17 @@ Two auth contexts, two repo targets:
 
   GITHUB_TOKEN (workflow's own token):
     Used for same-repo operations on forge-template (the orchestration repo):
-    post_comment, add_label, remove_label. The tracking issue lives in forge-template.
-    In Actions, GITHUB_TOKEN is automatically available. For local smoke tests, set it
-    to a PAT with repo scope on forge-template.
+    post_comment, get_issue, get_issue_comments, remove_label. The tracking issue
+    lives in forge-template. In Actions, GITHUB_TOKEN is automatically available.
+    For local smoke tests, set it to a PAT with repo scope on forge-template.
+
+    add_label() is the one exception, on the App installation token instead (see
+    its own docstring) -- GITHUB_TOKEN-authored actions never trigger a new
+    Actions workflow run (GitHub's anti-recursion rule), which silently broke
+    06-deploy.yml's label-driven trigger for every agent-applied qa-approved/
+    security-approved. The App is installed on forge-template too (Phase 4 step
+    4.8), under the same installation as forge-demo-apps, so no other change was
+    needed to make this work.
 
 Required environment variables (see .env.example):
     FORGE_APP_ID          — numeric GitHub App ID
@@ -149,8 +157,12 @@ def post_comment(issue_or_pr_number: int, body: str) -> dict:
     """
     Post a comment on a tracking issue or PR in forge-template (the orchestration repo).
 
-    Uses GITHUB_TOKEN — same-repo operation; the GitHub App is not installed on
-    forge-template so the App token cannot be used here.
+    Uses GITHUB_TOKEN — same-repo operation on forge-template. (Note: the App IS
+    now also installed on forge-template as of the Phase 4 step 4.8 retrofit --
+    this docstring's original claim that it wasn't is stale. Left on GITHUB_TOKEN
+    anyway since posting a comment triggers no downstream label-driven workflow,
+    unlike add_label(), which was switched to the App token for exactly that
+    reason -- see add_label()'s docstring.)
 
     Args:
         issue_or_pr_number: The issue or PR number in forge-template.
@@ -225,7 +237,37 @@ def add_label(issue_or_pr_number: int, label: str) -> dict:
     """
     Add a label to a tracking issue or PR in forge-template (the orchestration repo).
 
-    Uses GITHUB_TOKEN — same-repo operation on forge-template.
+    Uses the GitHub App installation token, NOT GITHUB_TOKEN (switched 2026-08-11).
+
+    Why: GitHub Actions has a documented anti-recursion rule -- actions performed
+    with the default GITHUB_TOKEN never trigger a NEW workflow run (with the
+    exception of workflow_dispatch/repository_dispatch). qa_agent.py and
+    security_agent.py both call this to apply qa-approved/security-approved,
+    which 06-deploy.yml's `issues: types: [labeled]` trigger is supposed to react
+    to -- but since those calls used GITHUB_TOKEN, that event never actually
+    reached Actions. Confirmed via real run history on REQ-2026-02: the only
+    successful 06-deploy.yml run ever was triggered by a label a HUMAN applied
+    (Flamespiker, via a personal token) -- every agent-applied label, before and
+    after, produced zero deploy runs. This was a silent, fully general bug
+    affecting every future request that passes QA/Security without a manual
+    label touch in between, not something specific to one run.
+
+    The App installation token works here: the App is installed on
+    forge-template too (Phase 4 step 4.8 retrofit), under the SAME installation
+    as forge-demo-apps (confirmed empirically: GET .../forge-template/installation
+    and GET .../forge-demo-apps/installation both resolve to installation id
+    148876680) -- so get_installation_token() already returns a token valid for
+    this repo with no changes needed there. App tokens are not subject to the
+    GITHUB_TOKEN anti-recursion restriction, so this label add will correctly
+    fire a real `issues.labeled` event.
+
+    post_comment()/get_issue()/get_issue_comments()/remove_label() below are
+    UNCHANGED and still use GITHUB_TOKEN -- none of them need to trigger a
+    downstream label-driven workflow (posting a comment or removing a label
+    triggers nothing; 06-deploy.yml is the only stage-trigger workflow gated on
+    an agent-applied label rather than a human-applied one or a
+    repository_dispatch), so there was no equivalent bug to fix in those, and no
+    reason to touch their auth to keep this change minimal and isolated.
 
     Args:
         issue_or_pr_number: The issue or PR number in forge-template.
@@ -234,15 +276,16 @@ def add_label(issue_or_pr_number: int, label: str) -> dict:
     Returns:
         The API response body.
     """
+    token = get_installation_token()
     url = f"{_source_repo_url()}/issues/{issue_or_pr_number}/labels"
     response = requests.post(
         url,
-        headers=_github_token_headers(),
+        headers=_auth_headers(token),
         json={"labels": [label]},
         timeout=15,
     )
     response.raise_for_status()
-    logger.info("Added label '%s' to forge-template #%s", label, issue_or_pr_number)
+    logger.info("Added label '%s' to forge-template #%s (App token)", label, issue_or_pr_number)
     return response.json()
 
 
