@@ -1533,7 +1533,9 @@ merge PR #11 (the `design/*` `security-check` no-op workflow) into `main` on
   was first written to the fix branch — content didn't change in transit).
 - **Not done, deliberately out of scope for this cleanup task:** the
   `enforce_admins` question flagged above is still Mike's open call, not
-  decided or changed here. The merged branch `fix/design-pr-security-noop`
-  itself was left in place (not deleted) — deleting a merged PR's source
-  branch wasn't part of what this task asked for, so it wasn't done as an
-  unrequested extra.
+  decided or changed here.
+- **Follow-up, same session:** merged branch `fix/design-pr-security-noop`
+  (tip `148099a7...`, confirmed matching PR #11's merged head before
+  deleting) removed via `DELETE /git/refs/heads/fix/design-pr-security-noop`
+  at Mike's explicit request, confirmed gone via a follow-up 404 on the
+  branch lookup.
