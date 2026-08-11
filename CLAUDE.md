@@ -1539,3 +1539,198 @@ merge PR #11 (the `design/*` `security-check` no-op workflow) into `main` on
   deleting) removed via `DELETE /git/refs/heads/fix/design-pr-security-noop`
   at Mike's explicit request, confirmed gone via a follow-up 404 on the
   branch lookup.
+
+---
+
+### REQ-2026-02 (Phase 5, App 1) — Stage 3 completion-detection fix and a formal recovery tool (2026-08-11)
+
+Session started as "monitor Phase 5 App 1 (Inactive User & License Auditor)
+through the fully automated, label-triggered pipeline." Found on arrival that
+Stages 0–2 had already run (issue `forge-template#5`: Intake questions
+answered, `requirements.md`/`ado-work-items.json` committed, design PR
+[#14](https://github.com/Flamespiker/forge-demo-apps/pull/14) merged,
+`design-approved` applied) and Stage 3 had already **failed** — this section
+covers diagnosing and fixing that failure, not the Stage 0–2 work itself.
+
+**Root cause, confirmed live, not assumed:** the `03-implementation.yml` run
+([31451985838](https://github.com/Flamespiker/forge-template/actions/runs/31451985838))
+failed with `Coordinator session ... completed but did not produce
+'implementation.tar.gz'`. A read-only poll of the session's own thread
+statuses (`GET /sessions/{id}/threads`) showed it was NOT stuck —
+`forge-coordinator`/`backend_agent`/`frontend_agent` were idle but
+`test_writer_agent` was still genuinely `running`, well past the job's own
+failure. The coordinator's top-level session status had gone `idle
+(end_turn)` in **under half a second** after the initial message — reflecting
+only the coordinator's first turn ending after kicking off delegation, not
+real completion of the multi-agent work. Real completion (all four threads
+idle, `implementation.tar.gz` produced) took **~37 minutes**
+(`2026-08-11T02:19:08Z` → `T02:55:47Z`) — consistent with, not an outlier
+against, REQ-2026-01's already-logged 38.5 min (dry run) / 55.2 min (real)
+durations in `docs/FORGE-pipeline-cost-log.md`. Phase 5 pre-flight Fix 1's
+~246s total wait budget (120s thread pre-check + 6-attempt/~126s archive
+retry-backoff) was never going to be enough for a real run, and that was
+visible from the cost log alone before Fix 1 shipped — flagged, not
+re-litigated.
+
+**Fix 1 (`core/agents/utils/managed_agents_wrapper.py`) — completion
+detection and archive-retry are now two separate mechanisms, not one
+conflated loop:**
+- New `SessionStillRunningError(RuntimeError)` — carries `session_id`,
+  `thread_statuses`, and (attached by `run_implementation_stage()`)
+  `coordinator_id`/`environment_id`/`subagent_ids`. Raised when threads
+  aren't all idle within the completion-wait ceiling. **Not a failure** — the
+  session is left alive, not archived, specifically so it can be resumed by
+  ID later.
+- `_wait_for_subagent_threads_idle()` renamed to public
+  `wait_for_all_threads_idle()` — the ONE real completion signal for the
+  whole stage. Ceiling widened from 120s to `_COMPLETION_POLL_TIMEOUT`
+  (default 5400s/90 min, overridable via
+  `FORGE_IMPLEMENTATION_COMPLETION_TIMEOUT`), chosen with ~1.6x headroom over
+  the largest real duration logged so far (55.2 min). Poll interval widened
+  5s → 15s. Per-tick logging now only fires when thread statuses actually
+  change (was logging every tick — noisy over a 90-minute ceiling).
+- `_ARCHIVE_RETRY_ATTEMPTS` reduced 6 → 3 (2s/4s/8s, ~14s total) — it no
+  longer does the real waiting (that regressed to premature-retry-as-backoff,
+  which was the actual bug: a 400 from `archive` while a thread is genuinely
+  still running isn't new information every retry). Now purely absorbs the
+  separate, genuinely transient idle→running archive-call race from the
+  Phase 2.9 build notes, on a session `wait_for_all_threads_idle()` has
+  already confirmed idle.
+- `archive_session()` no longer catches its own completion-wait step —
+  `SessionStillRunningError` propagates untouched; the archive call is never
+  reached on a still-running session.
+- `run_implementation_stage()` restructured: `poll_until_idle()` (still just
+  confirms the coordinator's own turn ended without a `session.error`) →
+  `wait_for_all_threads_idle()` (the real gate) → audit trail fetched
+  *before* archiving (unconfirmed whether an archived session's threads stay
+  queryable — kept the original safer order) → `archive_session()`.
+  `SessionStillRunningError` re-raised with the extra IDs attached and
+  deliberately NOT archived; any other exception still gets a best-effort
+  archive attempt so failures don't leak billed resources.
+- New `get_session_resource_ids(session_id)` — derives `coordinator_id`
+  (`agent.id`), `environment_id`, and `subagent_ids`
+  (`agent.multiagent.agents[].id`) directly from `GET /sessions/{id}`,
+  confirmed live to carry all three. Means a recovery tool needs only a
+  session ID, not a dig through a GitHub Actions log for the
+  `managed_agents_session_start` line. Also surfaces `usage` (token/cost) —
+  confirmed live this closes the "not yet confirmed to return it" open item
+  from chat 28 (see the pipeline cost log update below).
+- `get_thread_statuses()` (was `_get_thread_statuses`) made public for the
+  same reason.
+
+**Fix 2 (`.github/workflows/03-implementation.yml`) — job `timeout-minutes`
+raised 60 → 120.** Necessary, not optional: Fix 1's new completion-wait
+ceiling is 90 minutes, but the GitHub Actions runner would have SIGKILLed the
+whole job at the old 60-minute mark before the script's own graceful
+still-running handling ever got a chance to run — the exact same
+process-killed-out-from-under-a-live-session failure mode as the original
+REQ-2026-01/DRYRUN-2026-01 incidents, just moved one layer up. 120 minutes
+gives the 90-minute internal ceiling ~30 minutes of buffer for setup and the
+commit/PR steps.
+
+**Fix 3 (`core/agents/implementation_coordinator.py`) — formal recovery
+tool, replacing the ad hoc uncommitted script pattern used for
+DRYRUN-2026-01 and (initially, before being redirected mid-session) for this
+same incident:**
+- `run_implementation_coordinator()` now catches `SessionStillRunningError`
+  distinctly from a real failure: posts a clearly-worded "still running, not
+  failed, check back" comment to the tracking issue (session ID + live
+  per-thread status, explicit instruction not to re-apply `design-approved`)
+  instead of the generic failure comment, then re-raises. `main()` exits
+  `75` for this case (vs. `1` for a real failure) — an arbitrary but
+  documented convention so tooling can tell the two apart; the issue comment
+  is the real human-facing signal.
+- New `--recover-session SESSION_ID` CLI mode (`--request-id` still
+  required): derives all resource IDs via `get_session_resource_ids()`,
+  checks live thread status directly, and returns cleanly with no
+  monorepo/GitHub mutation at all if anything is still busy — "not ready
+  yet" is a normal, successful outcome here, not an error. If idle, sanity-
+  checks the archive (`_sanity_check_extracted_files()` — below) before
+  reusing the exact same commit/PR/comment logic the happy path uses
+  (factored out to `_commit_and_open_pr()`, so there is exactly one copy of
+  that logic, not two), then archives the session itself (left alive
+  precisely so this recovery could reach it).
+- New `.github/workflows/03b-recover-implementation.yml` —
+  `workflow_dispatch` ONLY (session ID / issue number / request ID / dry-run
+  as inputs), deliberately not automatic, scheduled, or polling. A human
+  deciding "it's been long enough, let's check" is the intended amount of
+  automation — auto-recovery would remove the one checkpoint that has
+  already caught real issues in manual recoveries (see the two findings
+  below).
+- New `_sanity_check_extracted_files()`: rejects an archive under
+  `_MIN_ARCHIVE_FILES`(3)/`_MIN_ARCHIVE_BYTES`(500), and — for each unit
+  (`backend`/`frontend`) that `tasks.md` actually mentions — requires ≥2
+  files under `services/<request-id>/<unit>/`. Deliberately does NOT
+  hardcode "every request needs both units" (DRYRUN-2026-01 was legitimately
+  backend-only); ties the check to what that request's own tasks.md called
+  for. Verified against 4 constructed cases (realistic two-unit, legitimate
+  backend-only, truncated-missing-frontend, degenerate single-file) — the
+  two truncated cases both correctly raised.
+- Wired into the happy path too (`run_implementation_coordinator()`), not
+  just the recovery path.
+
+**Two real, previously-latent issues the recovery process itself caught —
+exactly what the sanity checks/format checks exist for, not hypothetical:**
+1. **Cross-repo issue reference format.** `workflow_glue.py`'s
+   `resolve_tracking_issue()` greps a PR body for `<source_repo>#N`; a bare
+   `#5` (no `owner/` prefix) is what broke QA/Security's dispatch on the
+   DRYRUN-2026-01 recovery. Checked before touching anything this time:
+   `FORGE_GITHUB_OWNER=Flamespiker` is set, and `_commit_and_open_pr()`
+   reuses the same qualified-format logic as the original happy path — PR
+   #15's body confirmed to contain `Flamespiker/forge-template#5` before
+   relying on it.
+2. **Archive rooted at the wrong prefix.** REQ-2026-02's archive was tarred
+   as `REQ-2026-02/...`, not the `services/REQ-2026-02/...` the coordinator's
+   own system prompt asked for — `_extract_archive_to_file_dict()`'s
+   existing prefix guard correctly rejected every member on the first dry
+   run rather than silently committing to a wrong (or, worse, silently
+   accepted-empty) path. Fixed by adding a fallback: if no member matches
+   the full expected prefix but members match just the trailing `<request-id>`
+   segment, remap `<request-id>/...` → `services/<request-id>/...` rather
+   than failing outright, with a loud warning that this is a real coordinator
+   packaging deviation, not normal — **root cause not diagnosed, just worked
+   around; worth a closer look if it recurs on a future request.**
+
+**REQ-2026-02 recovered for real using the new tool** (not a synthetic
+test — this was the live incident): dry run first (confirmed 69 files, all
+correctly remapped and sanity-checked) → real run → committed to
+`feature/REQ-2026-02` (69 files) → draft **PR
+[#15](https://github.com/Flamespiker/forge-demo-apps/pull/15)** opened →
+comment posted to issue #5 → session + environment + coordinator + all 3
+subagents archived cleanly. QA and Security both fired automatically via the
+existing `repository_dispatch` wiring the moment the PR opened (no
+special-casing needed for a recovered PR) — **QA came back `qa-loop-back`
+(real backend/frontend build/compile errors, attempt 1 of 3)**, **Security
+came back `security-approved`** (0 Critical, 7 Medium — Semgrep flagging a
+mutable GitHub Actions tag reference in the generated `backend-ci.yml`/
+`frontend-ci.yml`, not an application code issue). Both are genuine pipeline
+output for a freshly generated app, not something this session's own fix
+should have prevented or was asked to fix.
+
+**Real cost data pulled for REQ-2026-02 and logged in
+`docs/FORGE-pipeline-cost-log.md`:** `GET /sessions/{id}`'s own `usage`
+object carries `active_seconds` and `list_cost` — confirmed live (closing
+the "not yet confirmed" item from chat 28) at 6,684,549 cache-read tokens,
+138,996 output tokens, 2,218.4 active seconds, `list_cost.amount: "663"`
+(units not cross-checked against the Console, read as ~$6.63).
+
+**Not done this session, flagged rather than resolved:**
+- `SessionStillRunningError`'s propagation through a *fresh* `run_implementation_stage()`
+  call (as opposed to the recovery path, which calls
+  `wait_for_all_threads_idle()`/`archive_session()` directly) was not
+  exercised live — reproducing it deliberately would mean spending on a new
+  real Stage 3 session just to hit the timing window. Reasoned through, not
+  reproduced under load, same honesty standard the original Fix 1 held
+  itself to.
+- The archive-prefix deviation's actual root cause (something about how the
+  coordinator's `tar` invocation resolved its working directory this run)
+  was not diagnosed — only worked around.
+- `design-approved` was left applied on issue #5 after the manual recovery —
+  the workflow step that normally clears it never ran (the automated
+  `03-implementation.yml` job had already failed before this point; the
+  recovery tool doesn't touch trigger labels). Harmless (nothing re-triggers
+  off a label that's already been actioned) but visually stale; Mike's call
+  whether to clear it.
+- QA's `qa-loop-back` result on PR #15 (real backend/frontend build errors)
+  is unexamined — out of scope for this session's own brief (fixing Stage 3
+  completion detection, not the generated app).
