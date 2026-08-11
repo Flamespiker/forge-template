@@ -1412,9 +1412,10 @@ to be reported" forever.
   normal branch, not a workflow file), the workflow file itself written via
   `gh api ... --method PUT` under Mike's own token, then draft **PR #11**
   opened via the App token (opening a PR doesn't need `workflows` either).
-  **Left open, unmerged, pending Mike's review** — matches the existing
-  PR #7/#8 "small mechanical fix, agent doesn't merge its own PR" pattern
-  (ADR-0009).
+  Left open, unmerged, pending Mike's review at the time this fix was built —
+  matches the existing PR #7/#8 "small mechanical fix, agent doesn't merge
+  its own PR" pattern (ADR-0009). **Merged 2026-08-11 in a follow-up
+  session — see the PR #11 merge entry below.**
 - **Verified live** with a throwaway `design/fix2-smoketest` branch/PR
   (branched from `fix/design-pr-security-noop` so the new workflow file was
   actually present in the head ref — a `design/*` branch cut from `main`
@@ -1491,3 +1492,48 @@ close of this mini-cycle, per the standing two-tool convention. Also not
 done: deciding the `enforce_admins` question above, and a root-cause (not
 just non-reproduction) diagnosis of REQ-2026-01's original "QA backend TRX
 report failure."
+
+---
+
+### PR #11 merge (Fix 2 cleanup, 2026-08-11 follow-up session)
+
+Single-purpose follow-up to the Phase 5 pre-flight fixes session above:
+merge PR #11 (the `design/*` `security-check` no-op workflow) into `main` on
+`forge-demo-apps`. No Phase 5 work started in this session.
+
+- **Re-verified before merging, not assumed unchanged:** pulled the live PR
+  #11 diff and byte-diffed it against the exact file content verified last
+  session — identical, no drift (trigger filter, in-job branch-prefix guard,
+  and the check-run summary text distinguishing this from a real Security
+  Agent pass were all still intact).
+- **Confirmed the throwaway verification PRs were actually cleaned up**:
+  both PR #12 (the first, mis-based attempt) and PR #13 (the one that
+  actually verified the fix) show `state: closed`; branch
+  `design/fix2-smoketest` returns 404 (deleted). No leftover test artifacts.
+- **Merged PR #11** — merge commit
+  `2e00e3f3c3dbda2723349b8127233bb473eddc9c`. Required an admin-privilege
+  merge (`gh pr merge --admin`): PR #11's own head branch
+  (`fix/design-pr-security-noop`) is not itself `design/*`, so the new
+  workflow's own job-level guard correctly skipped on this PR and never
+  produced a `security-check` run for it — a one-time bootstrapping
+  limitation of this specific fix (it can't satisfy its own required check
+  on the branch that introduces it), not a bypass of the review/scan
+  requirement it exists to enforce for `design/*` PRs going forward. Zero
+  reviews were also present at merge time. `enforce_admins: false` (see
+  above) is what made the admin override possible at all.
+- **Re-verified branch protection on `main` immediately after merge**, fresh
+  `GET`, not trusted from any cached state: `required_status_checks.checks`
+  = `[{"context":"security-check","app_id":4388813}]` (unchanged),
+  `enforce_admins.enabled` = `false` (unchanged — expected and accepted per
+  this session's brief, not something this session touched or was asked to
+  touch), `allow_force_pushes`/`allow_deletions` both `false` (unchanged).
+  Nothing changed as a side effect of the merge itself.
+- Confirmed `.github/workflows/design-pr-security-noop.yml` is now present
+  on `main` (blob sha `622d3bc3...`, matching the blob created when the file
+  was first written to the fix branch — content didn't change in transit).
+- **Not done, deliberately out of scope for this cleanup task:** the
+  `enforce_admins` question flagged above is still Mike's open call, not
+  decided or changed here. The merged branch `fix/design-pr-security-noop`
+  itself was left in place (not deleted) — deleting a merged PR's source
+  branch wasn't part of what this task asked for, so it wasn't done as an
+  unrequested extra.
