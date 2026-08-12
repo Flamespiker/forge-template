@@ -1790,3 +1790,138 @@ neither is fixed at the root:**
   now at attempt 2 of 3 after the CI-file-cleanup commit consumed one
   attempt) is unexamined — separate app-code work for Mike, out of scope
   for this session's own brief.
+
+---
+
+### PR #15 QA fix, deploy-trigger bug, and REQ-2026-02 staging deploy (same day, follow-up)
+
+Mike merged PR #15 after QA/Security passed on attempt 3 of 3, then
+reported the Deploy Agent hadn't triggered. Three genuinely separate real
+bugs surfaced chasing that down to an actual live staging deploy — none
+guessed, all reproduced directly.
+
+**Bug 1 — `06-deploy.yml` never fires off an agent-applied label, only a
+human-applied one. Confirmed, not assumed, via real run history.**
+`06-deploy.yml` triggers on `issues: types: [labeled]`, gated on both
+`qa-approved` and `security-approved` being present. Both are applied by
+`qa_agent.py`/`security_agent.py` via `add_label()`, which used
+`GITHUB_TOKEN`. GitHub Actions has a documented anti-recursion rule:
+actions performed with the default `GITHUB_TOKEN` never trigger a NEW
+workflow run (exempting only `workflow_dispatch`/`repository_dispatch`).
+Checked `06-deploy.yml`'s full run history: the only successful run ever
+was triggered by `qa-approved` being applied by `Flamespiker` (a human,
+personal token) on DRYRUN-2026-01 — every agent-applied label, before and
+after, produced zero deploy runs. **This silently affected every request
+that passes QA/Security cleanly without a human touching a label in
+between — not something specific to REQ-2026-02.** Every other stage
+transition is either human-applied or uses `repository_dispatch`
+(exempt); Stage 6 was the only one relying on an agent-applied label.
+
+Fix: `add_label()` (`core/agents/utils/github_helper.py`) switched to the
+GitHub App installation token. Confirmed no knock-on effects first:
+`get_installation_token()`'s existing lookup (via `FORGE_TARGET_REPO`)
+already resolves to the same installation id (`148876680`) for both
+forge-template and forge-demo-apps — no change needed there.
+`post_comment`/`get_issue`/`get_issue_comments`/`remove_label` stay on
+`GITHUB_TOKEN` since none of them need to trigger a downstream
+label-driven workflow. Also corrected a stale docstring on
+`post_comment()` claiming the App wasn't installed on forge-template — it
+has been since the Phase 4 step 4.8 retrofit. Smoke-tested against the
+`forge-smoke-test` label on issue #1 before trusting it live, then used
+for real: re-applied `qa-approved` on issue #5 (after first confirming
+via a full grep of every workflow that nothing listens for `unlabeled`
+events, and that `qa_agent.py`'s retry counter is comment-based, not
+label-based, so the toggle was safe) — `06-deploy.yml` fired for real
+this time. Committed separately (`9f54135`).
+
+**Bug 2 — frontend `package-lock.json` was generated with the wrong
+npm/Node version.** The resulting real deploy run built the backend image
+fine, then failed on the frontend's `npm ci` inside the Dockerfile.
+First attempts to pull the real error out of the Actions log kept
+surfacing only npm's generic `ci` usage/help trailer, not the actual
+reason — traced to a genuinely truncated/lost log line, resolved by
+reproducing directly: `npm ci` succeeds fine against this repo's
+`package.json`/`package-lock.json` pair locally (npm 11.6.2/Node 24.11.1)
+but fails inside the actual `node:20-alpine` deploy image (npm 10.8.2)
+with `Missing: @emnapi/core@1.11.3` / `Missing: @emnapi/runtime@1.11.3
+from lock file` — npm 10 and 11 resolve platform-conditional optional
+dependencies differently, and `npm ci` is strict about exact sync.
+Root-caused because the Jest rewrite's lockfile had only ever been
+regenerated/tested locally, never inside the actual deploy target.
+
+Fix: regenerated `package-lock.json` by running `npm install` *inside* a
+real `node:20-alpine` container (not locally), extracted it via `docker
+cp`, and verified `npm ci` now succeeds both inside that same image and
+locally. Full Jest suite re-confirmed 44/44 passing, `next build`/`next
+lint` both clean, against the regenerated lockfile.
+
+**Bug 3 — missing `public/` directory breaks the Dockerfile's final
+stage.** Even past Bug 2, `COPY --from=builder /app/public ./public`
+failed with `"/app/public": not found` — this app has no static assets
+and therefore no `public/` directory at all; Git doesn't track empty
+directories, so nothing ever created one. Fixed with
+`public/.gitkeep`. Verified the complete multi-stage Dockerfile (`deps`
+→ `builder` → `runner`) now builds end-to-end with zero errors.
+
+**Non-bug, worth recording so it doesn't get re-investigated:** partway
+through verifying Bug 2's fix, a `next build` run threw `Cannot read
+properties of null (reading 'useContext')` across every page including
+Next's own internal `/404`/`/500` — looked like a real regression at
+first. Root cause: a Windows path-casing artifact specific to this local
+machine (the real folder is `C:\Users\mikef\Projects\...`, capital P, but
+builds were being invoked via git-bash's lowercase `/c/Users/mikef/projects/...`
+mount, so webpack saw two differently-cased copies of the same module and
+crashed). Confirmed by building the identical code from an unambiguous
+path — clean pass. Cannot occur on the real Linux CI runners; no code
+change needed or made for it.
+
+**Also encountered and resolved, infrastructure not code:** Docker
+Desktop was found hung (daemon unresponsive to `docker version` even
+after 20s+ timeouts, despite all `Docker Desktop`/`com.docker.*`
+processes showing `Responding: True` in `Get-Process`) partway through
+reproducing Bug 2. Killed all Docker-related processes and relaunched
+`Docker Desktop.exe`; daemon came back responsive (server 24.0.7) within
+~30s. Not a code issue, just a local-machine note in case it recurs.
+
+**Delivery, since `feature/REQ-2026-02` no longer exists** (PR #15's
+branch was deleted on merge, confirmed via a 404 on the branch lookup —
+so Bugs 2/3's fixes couldn't just be pushed to the old branch): opened a
+new, small, separate PR **[#16](https://github.com/Flamespiker/forge-demo-apps/pull/16)**
+off `main` (same "mechanical fix, agent doesn't merge its own PR" pattern
+as PRs #7/#8/#11) containing only the lockfile regen and `public/.gitkeep`
+— no application/business logic touched. **Left open, unmerged** (per
+ADR-0009). Since Deploy Agent's own design already tolerates deploying an
+unmerged commit SHA, `deploy_agent.py` was invoked manually against PR
+#16's head commit (`77aac8a`) to actually unblock staging now rather than
+wait on a merge — same "manual invocation satisfies the requirement"
+pattern already used for QA/Security's own real runs earlier in this
+project.
+
+**Real (non-dry-run) deploy verified live, both units, both confirmed
+actually serving traffic (not just CLI-reported success):**
+- `req-2026-02-auditor-api` (backend): `https://req-2026-02-auditor-api.yellowmeadow-894377a9.canadacentral.azurecontainerapps.io/api/health`
+  → HTTP 200, `{"status":"healthy"}`.
+- `req-2026-02-frontend` (frontend): `https://req-2026-02-frontend.yellowmeadow-894377a9.canadacentral.azurecontainerapps.io/`
+  → HTTP 200. **First time this project's frontend deploy path has been
+  verified end-to-end** — REQ-2026-01's frontend was parked (unrelated
+  app-insights dependency issue) and never actually deployed.
+- Deploy comment posted to PR #16. No label applied (Document 6 has no
+  deploy-stage label, unchanged from prior deploys).
+
+**Not done this session, flagged rather than resolved:**
+- PR #16 is unmerged — Mike's call whether/when to merge it. Since its
+  head branch isn't `feature/*` or `design/*`, `notify-forge.yml` won't
+  dispatch QA/Security for it, so the `security-check` required status
+  check will be permanently unsatisfiable on this PR the same way it was
+  for `design/*` PRs before Fix 2 — merging it will need the same kind of
+  admin override PR #11 needed (`enforce_admins` is still `false`, so
+  that path is open), or a deliberate decision about how to handle
+  non-`feature/*`/`design/*` fix PRs generally. Not designed or built.
+- The two deploy bugs (lockfile npm-version mismatch, missing `public/`)
+  were never caught earlier because this project's frontend Docker deploy
+  path had never been exercised end-to-end before now for ANY request —
+  REQ-2026-01's frontend was parked. Worth considering whether Deploy
+  Agent (or CI generally) should build the frontend Docker image earlier
+  in the pipeline (e.g. at PR-open time) so a `npm ci`/lockfile issue
+  surfaces before Stage 6, not after everything else has already passed.
+  Flagged, not designed.
