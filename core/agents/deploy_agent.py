@@ -164,10 +164,11 @@ class DeployUnit:
 class DeployResult:
     unit: DeployUnit
     image: str
-    action: str               # "create" | "update"
+    action: str = ""           # "create" | "update" -- "" if it failed before a command was built
     command: list[str] = field(default_factory=list)
     executed: bool = False
     fqdn: str | None = None
+    error: str | None = None   # set if this unit's build/push/deploy failed; other units still proceed
 
 
 def _run_shell(
@@ -545,9 +546,21 @@ def _build_pr_comment(request_id: str, commit_sha: str, results: list[DeployResu
         "|---|---|---|---|",
     ]
     for r in results:
-        url = f"https://{r.fqdn}" if r.fqdn else "_(internal — no public ingress)_"
-        lines.append(f"| `{r.unit.name}` | {r.unit.unit_type} | `{r.image}` | {url} |")
+        if r.error:
+            first_line = r.error.splitlines()[0][:300]
+            status = f"❌ **failed** — {first_line}"
+        else:
+            status = f"https://{r.fqdn}" if r.fqdn else "_(internal — no public ingress)_"
+        lines.append(f"| `{r.unit.name}` | {r.unit.unit_type} | `{r.image}` | {status} |")
     lines.append("")
+
+    failed = [r for r in results if r.error]
+    if failed:
+        lines.append(
+            f"**{len(failed)} of {len(results)} unit(s) failed to deploy** -- a failure on one unit "
+            "does not block the others; see the table above for which unit(s) and why."
+        )
+        lines.append("")
 
     if design_gaps:
         lines.append(
@@ -651,54 +664,67 @@ def run_deploy_agent(
                     "NEXT_PUBLIC_API_BASE_URL and FRONTEND_ORIGIN will not be set.", frontend_unit.name,
                 )
 
-        full_images: dict[str, str] = {}
-        for unit in units:
-            full_image = f"{acr_login_server}/{unit.name}:{commit_sha}"
-            full_images[unit.name] = full_image
-            build_args = {"NEXT_PUBLIC_API_BASE_URL": f"https://{backend_fqdn}"} if (
-                unit.unit_type == "frontend" and backend_fqdn
-            ) else None
-            _docker_build(unit, full_image, build_args=build_args)
-            _docker_push(full_image)
-
         # Real az login + real read-only existence checks, dry-run or not —
         # only the create/update mutation itself is print-only in dry-run.
         _az_login(azure_credentials)
 
+        # Build+push+deploy interleaved per unit (not two batched passes) --
+        # one unit's failure must not block a different unit that would
+        # otherwise succeed. Each unit's own try/except records its outcome
+        # (success or error) into `results` and moves on; nothing here
+        # re-raises mid-loop. FQDNs needed for cross-service wiring were
+        # already computed above from unit *names*, not from any unit's
+        # create/update having actually run yet, so processing order here
+        # doesn't matter for backend_fqdn/frontend_fqdn's correctness.
         results: list[DeployResult] = []
         for unit in units:
-            full_image = full_images[unit.name]
-            exists = _containerapp_exists(unit.name, staging_cfg["resource_group"])
-            extra_env_vars = {"FRONTEND_ORIGIN": f"https://{frontend_fqdn}"} if (
-                unit is backend_web_unit and frontend_fqdn
-            ) else None
-            action, command = _build_containerapp_command(
-                unit, exists, full_image, acr_login_server, acr_username, acr_password, staging_cfg,
-                extra_env_vars=extra_env_vars,
-            )
-            result = DeployResult(unit=unit, image=full_image, action=action, command=command)
+            full_image = f"{acr_login_server}/{unit.name}:{commit_sha}"
+            result = DeployResult(unit=unit, image=full_image)
+            try:
+                build_args = {"NEXT_PUBLIC_API_BASE_URL": f"https://{backend_fqdn}"} if (
+                    unit.unit_type == "frontend" and backend_fqdn
+                ) else None
+                _docker_build(unit, full_image, build_args=build_args)
+                _docker_push(full_image)
 
-            if dry_run:
-                logger.info(
-                    "[dry-run] Would run: %s", " ".join(_redact_command(command)),
+                exists = _containerapp_exists(unit.name, staging_cfg["resource_group"])
+                extra_env_vars = {"FRONTEND_ORIGIN": f"https://{frontend_fqdn}"} if (
+                    unit is backend_web_unit and frontend_fqdn
+                ) else None
+                action, command = _build_containerapp_command(
+                    unit, exists, full_image, acr_login_server, acr_username, acr_password, staging_cfg,
+                    extra_env_vars=extra_env_vars,
                 )
-            else:
-                exec_result = _run_shell(
-                    command, cwd=str(_REPO_ROOT), timeout=_SHELL_TIMEOUT_SECONDS,
-                    log_override=" ".join(_redact_command(command)),
-                )
-                if exec_result.returncode != 0:
-                    raise RuntimeError(
-                        f"az containerapp {action} failed for unit {unit.name}:\n"
-                        f"{(exec_result.stdout or '')[-3000:]}\n{(exec_result.stderr or '')[-2000:]}"
+                result.action = action
+                result.command = command
+
+                if dry_run:
+                    logger.info(
+                        "[dry-run] Would run: %s", " ".join(_redact_command(command)),
                     )
-                result.executed = True
-                if unit.unit_type in _TARGET_PORTS:
-                    result.fqdn = _get_fqdn(unit.name, staging_cfg["resource_group"])
+                else:
+                    exec_result = _run_shell(
+                        command, cwd=str(_REPO_ROOT), timeout=_SHELL_TIMEOUT_SECONDS,
+                        log_override=" ".join(_redact_command(command)),
+                    )
+                    if exec_result.returncode != 0:
+                        raise RuntimeError(
+                            f"az containerapp {action} failed for unit {unit.name}:\n"
+                            f"{(exec_result.stdout or '')[-3000:]}\n{(exec_result.stderr or '')[-2000:]}"
+                        )
+                    result.executed = True
+                    if unit.unit_type in _TARGET_PORTS:
+                        result.fqdn = _get_fqdn(unit.name, staging_cfg["resource_group"])
+            except Exception as unit_exc:
+                logger.exception(
+                    "Deploy failed for unit %s -- continuing with remaining unit(s).", unit.name,
+                )
+                result.error = str(unit_exc)
             results.append(result)
 
         design_gaps = _detect_design_gaps(request_id, units)
         pr_comment = _build_pr_comment(request_id, commit_sha, results, design_gaps)
+        failed_results = [r for r in results if r.error]
 
     except Exception as exc:
         logger.exception("Deploy Agent failed for request %s", request_id)
@@ -725,6 +751,7 @@ def run_deploy_agent(
                 "command": _redact_command(r.command),
                 "executed": r.executed,
                 "fqdn": r.fqdn,
+                "error": r.error,
                 "dockerfile_generated": r.unit.dockerfile_generated,
             }
             for r in results
@@ -742,18 +769,41 @@ def run_deploy_agent(
         print(pr_comment)
         logger.info(
             "Dry run complete for request %s -- images built and pushed for real, "
-            "containerapp create/update NOT executed, nothing posted.",
-            request_id,
+            "containerapp create/update NOT executed, nothing posted. %d of %d unit(s) succeeded.",
+            request_id, len(results) - len(failed_results), len(results),
         )
+        if failed_results:
+            failed_names = ", ".join(r.unit.name for r in failed_results)
+            raise RuntimeError(
+                f"Deploy Agent dry-run: {len(failed_results)} of {len(results)} unit(s) failed: {failed_names}"
+            )
         return run_summary
 
     post_pr_comment(pr_number, pr_comment)
 
     logger.info(
-        "Deploy Agent complete for request %s -- %d unit(s) deployed to staging, "
+        "Deploy Agent complete for request %s -- %d of %d unit(s) deployed to staging, "
         "PR #%s comment posted.",
-        request_id, len(results), pr_number,
+        request_id, len(results) - len(failed_results), len(results), pr_number,
     )
+
+    if failed_results:
+        failed_names = ", ".join(r.unit.name for r in failed_results)
+        failure_body = (
+            f"⚠️ **FORGE Deploy Agent: {len(failed_results)} of {len(results)} unit(s) failed to "
+            f"deploy** (`{failed_names}`) -- the rest were deployed successfully; see the PR "
+            "comment above for per-unit detail.\n\n"
+            "An Orchestration Manager needs to investigate before staging can be considered "
+            "fully deployed for this request."
+        )
+        try:
+            post_comment(issue_number, failure_body)
+        except Exception:
+            logger.exception("Also failed to post partial-failure comment to issue #%s", issue_number)
+        raise RuntimeError(
+            f"Deploy Agent: {len(failed_results)} of {len(results)} unit(s) failed: {failed_names}"
+        )
+
     return run_summary
 
 
