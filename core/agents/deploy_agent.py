@@ -411,16 +411,24 @@ def _build_containerapp_command(
     acr_username: str,
     acr_password: str,
     staging_cfg: dict,
+    extra_env_vars: dict[str, str] | None = None,
 ) -> tuple[str, list[str]]:
     resource_group = staging_cfg["resource_group"]
+    # Single merged --set-env-vars flag so a future second caller of this
+    # function can't accidentally clobber this one with a competing flag --
+    # no other env vars are set here today, but this keeps that true if that changes.
+    env_var_args = [f"{k}={v}" for k, v in (extra_env_vars or {}).items()]
 
     if exists:
-        return "update", [
+        command = [
             "az", "containerapp", "update",
             "--name", unit.name,
             "--resource-group", resource_group,
             "--image", full_image,
         ]
+        if env_var_args:
+            command += ["--set-env-vars", *env_var_args]
+        return "update", command
 
     command = [
         "az", "containerapp", "create",
@@ -438,6 +446,8 @@ def _build_containerapp_command(
     ]
     if unit.unit_type in _TARGET_PORTS:
         command += ["--target-port", str(_TARGET_PORTS[unit.unit_type]), "--ingress", "external"]
+    if env_var_args:
+        command += ["--set-env-vars", *env_var_args]
     return "create", command
 
 
@@ -620,21 +630,25 @@ def run_deploy_agent(
         _docker_login(acr_login_server, acr_username, acr_password)
 
         # Cross-service wiring: a frontend unit needs the backend's FQDN baked
-        # in at build time (Next.js NEXT_PUBLIC_* vars are build-time-only).
-        # Computed once per run, not per unit -- see _get_env_default_domain().
+        # in at build time (Next.js NEXT_PUBLIC_* vars are build-time-only),
+        # and the backend needs the frontend's FQDN for CORS. Both derived
+        # from one shared env_default_domain lookup, computed once per run,
+        # not per unit -- see _get_env_default_domain().
         frontend_unit = next((u for u in units if u.unit_type == "frontend"), None)
         backend_web_unit = next((u for u in units if u.unit_type == "web"), None)
         backend_fqdn: str | None = None
+        frontend_fqdn: str | None = None
         if frontend_unit is not None:
             if backend_web_unit is not None:
                 env_default_domain = _get_env_default_domain(
                     staging_cfg["environment"], staging_cfg["resource_group"],
                 )
                 backend_fqdn = f"{backend_web_unit.name}.{env_default_domain}"
+                frontend_fqdn = f"{frontend_unit.name}.{env_default_domain}"
             else:
                 logger.warning(
                     "Frontend unit %s detected with no 'web' backend unit in this request -- "
-                    "NEXT_PUBLIC_API_BASE_URL will not be set.", frontend_unit.name,
+                    "NEXT_PUBLIC_API_BASE_URL and FRONTEND_ORIGIN will not be set.", frontend_unit.name,
                 )
 
         full_images: dict[str, str] = {}
@@ -655,8 +669,12 @@ def run_deploy_agent(
         for unit in units:
             full_image = full_images[unit.name]
             exists = _containerapp_exists(unit.name, staging_cfg["resource_group"])
+            extra_env_vars = {"FRONTEND_ORIGIN": f"https://{frontend_fqdn}"} if (
+                unit is backend_web_unit and frontend_fqdn
+            ) else None
             action, command = _build_containerapp_command(
                 unit, exists, full_image, acr_login_server, acr_username, acr_password, staging_cfg,
+                extra_env_vars=extra_env_vars,
             )
             result = DeployResult(unit=unit, image=full_image, action=action, command=command)
 
