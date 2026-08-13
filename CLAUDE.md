@@ -2161,3 +2161,118 @@ potential future reuse, only its client secret deleted.
 session — crossed off, not re-investigated. ACR images for both apps left
 in place (low-priority). See context doc chat 44 entry and
 `FORGE_Build_Plan_v8.md` for the checklist-level record.
+
+---
+
+### Deploy Agent cross-service wiring fixes (per `docs/FORGE-DeployAgent-CrossService-Wiring-Spec.md`)
+
+Three fixes implemented against `core/agents/deploy_agent.py`, each verified
+and committed separately per the spec's own convention. Line numbers below
+are post-drift, confirmed against the real file at the time each fix
+landed, not the spec's own (stale) estimates.
+
+**Fix 1 — `NEXT_PUBLIC_API_BASE_URL` build-arg.** New `_get_env_default_domain()`
+(next to `_get_fqdn()`) runs `az containerapp env show ... --query
+properties.defaultDomain`, raising rather than returning empty/None on
+failure. `_docker_build()` gained an optional `build_args` dict, appending
+`--build-arg KEY=VALUE` pairs. `run_deploy_agent()` computes the backend
+"web" unit's FQDN once (from the environment's `defaultDomain` + the unit's
+deterministic name — confirmed no chicken-and-egg problem, matching the
+spec's own verified premise) and passes it only when building the frontend
+unit; a frontend with no "web" backend unit in the request logs a warning
+and skips the build-arg rather than guessing. Confirmed live:
+`az containerapp env show --resource-group forge-build-rg --name
+forge-staging` returned `yellowmeadow-894377a9.canadacentral.azurecontainerapps.io`,
+matching the spec's assumption exactly. Verified with a local (no ACR push,
+no live Container App touch) build of REQ-2026-02's real frontend via the
+actual `_docker_build()` function, both with and without the fix's
+`build_args` — grep for the backend FQDN inside `/app/.next` found it in
+both the server and client-chunk bundles only in the with-build-arg case
+(exit 0 vs. exit 1 on the negative control), confirming the fix's effect
+empirically rather than by code inspection alone. Committed `2bd8679`.
+
+**Fix 2 — `FRONTEND_ORIGIN` on the backend Container App.**
+`_build_containerapp_command()` gained `extra_env_vars: dict[str, str] |
+None`, building one merged `--set-env-vars KEY=VALUE ...` flag (confirmed
+first that no other `--set-env-vars` usage existed anywhere in the function
+to clobber — there wasn't one). `run_deploy_agent()` reuses Fix 1's already-
+cached `env_default_domain` to derive the frontend unit's FQDN too (no
+second `az` call), passing it as `FRONTEND_ORIGIN` only to the backend
+"web" unit's create/update command. Verified locally (no live `az` calls)
+by calling `_build_containerapp_command()` directly for all four
+create/update × with/without-`extra_env_vars` combinations — confirmed
+exact expected command shape each time. Committed `3acab2c`.
+
+**Fix 3 — interleaved per-unit build+push+deploy.** `run_deploy_agent()`'s
+two batched passes (build-all-then-deploy-all) merged into one loop with a
+per-unit `try/except` — a failure on one unit's build/push/deploy no longer
+blocks a different unit that would otherwise succeed. `DeployResult` gained
+an `error: str | None` field (and `action`/`image` defaults, since a unit
+that fails during its own docker build never reaches the point of having a
+containerapp command built at all). `_build_pr_comment()`'s existing
+per-unit table now renders a `❌ **failed** — <first line of error>` status
+cell for failed units instead of a staging URL, plus a summary line
+("N of M unit(s) failed to deploy") when any exist.
+
+**Design fork surfaced, not resolved silently, per the spec's own
+instruction:** the spec's acceptance criteria only required that (a) other
+units still succeed and (b) the failure is reported against only the
+broken unit — it didn't specify what should happen to the run's own
+success/failure signal (CI exit code, tracking-issue comment) on a
+*partial* failure. There was no existing partial-failure reporting
+precedent anywhere in this agent to "match" (confirmed by reading the
+whole file first: before this fix, ANY exception anywhere aborted the
+entire function immediately, and the only failure surface was one generic
+comment on the FORGE tracking issue — the PR comment was never even
+reached on failure). Resolved by: still posting the (partial) PR comment
+via the existing `post_pr_comment()` on ANY outcome (all successes now
+visible even if a sibling unit failed, which is strictly more information
+than before, not less), and — if any unit failed — additionally posting a
+second, distinct summary comment to the tracking issue via the existing
+`post_comment()`, then raising so the job still exits non-zero. This
+preserves the pre-existing "CI reflects real problems" guarantee while
+adding the new partial-success visibility Fix 3 asks for. The dry-run path
+mirrors this (raises on partial failure too, but posts nothing, per the
+existing dry-run convention of posting nothing at all).
+
+**Verified via local simulation, not a live multi-unit deploy** (mocking
+every function that would touch Docker/Azure/GitHub, feeding one unit a
+forced `_docker_build` failure): confirmed the failing unit's error landed
+in `results` without preventing the second unit from reaching a fully-built
+`az containerapp create` command (including its correct
+`NEXT_PUBLIC_API_BASE_URL` build-arg, itself computed from the backend
+unit's *name* rather than its actual success — confirming Fix 1/2's
+FQDN-prediction mechanism is independent of unit processing order or
+success, exactly as the spec's point 3 asked to confirm explicitly rather
+than assume); confirmed the resulting PR-comment markdown correctly showed
+one failure row, one internal-no-ingress row, and the "1 of 2 failed"
+summary line; confirmed the function raised
+`RuntimeError("Deploy Agent dry-run: 1 of 2 unit(s) failed: ...")` as
+designed. Not verified: a real multi-unit live deploy with a genuine build
+failure — this session did not push to ACR or touch any live Container App
+for Fix 3 (per the same "confirm before touching forge-staging" convention
+already established for Fix 1).
+
+**Incident during this session's Fix 3 verification, caught and cleaned up
+immediately — logged because this project's whole process is built around
+catching exactly this failure mode:** the first version of the local
+simulation script mocked every higher-level function
+(`_docker_build`/`_docker_push`/`_containerapp_exists`/`_get_fqdn`/
+`post_pr_comment`/`post_comment`) but never mocked `_run_shell()` itself,
+and was run with `dry_run=False`. That combination let a **real**
+`az containerapp create` execute against the live `forge-build-rg`/
+`forge-staging` environment, using fake image/registry data. Caught
+immediately via `az containerapp show --name req-sim-frontend
+--resource-group forge-build-rg`, which showed a real Container App
+resource with `provisioningState: "Failed"` (image never resolved — no
+real container ever ran, no traffic, nothing pulled). Deleted via `az
+containerapp delete`, confirmed gone via a follow-up `az containerapp show`
+(`ResourceNotFound`) **and** `az containerapp list --resource-group
+forge-build-rg` (only the two legitimate REQ-2026-01 apps remained) — not
+trusted from the delete command's own exit code alone, per Mike's explicit
+instruction. No live impact beyond the stray inert resource itself. Fixed
+the simulation script before re-running: `_run_shell` is now hard-mocked to
+raise `AssertionError` if ever actually called (a safety net independent of
+whether every higher-level function happens to be mocked), and the script
+defaults to `dry_run=True` unless deliberately overridden. Re-ran
+successfully with zero live calls reached.
