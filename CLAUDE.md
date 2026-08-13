@@ -15,15 +15,25 @@ security → deploy) with human approval gates at each stage.
 - **Target repo:** `forge-demo-apps` (GitHub: `Flamespiker`, private) — stand-in for LAA's
   application monorepo during the build/demo phase
 - **ADO org:** `https://dev.azure.com/spike99` — project `FORGE-Build`
-- **Full project context:** `docs/FORGE-context_v20.md` — read this for architecture decisions,
+- **Full project context:** `docs/FORGE-context_v48.md` — read this for architecture decisions,
   agent roster, pipeline stages, and session history
 
 ---
 
 ## Current Build Phase
 
-**Phase 3 — Agent Implementation: complete.** **Phase 4 — Pipeline Wiring: wired and
-dispatch-verified, 2026-08-06** (see below for what "verified" does and doesn't cover).
+**Phase 3 — Agent Implementation: complete. Phase 4 — Pipeline Wiring: complete**
+(4.1–4.9 wired 2026-08-06; 4.10 full dry-run, `DRYRUN-2026-01`, completed
+2026-08-09 — see below). **Phase 5 — App 1 (`REQ-2026-02`, Inactive User &
+License Auditor): substantially complete.** Reached staging, confirmed
+working in a real browser; production deliberately not attempted. Close-out
+doc written 2026-08-13 (`FORGE-Phase5-Closeout.md`) — full detail on what
+shipped, the R-001 descope, every confirmed structural gap, and real
+manual-intervention count. **App 1's Azure Container Apps and D365
+connection decommissioned 2026-08-13** (App User disabled, secret deleted,
+app registration kept for potential reuse; code retained in
+`forge-demo-apps`). Cost log transcription still outstanding — do before
+Phase 6.
 
 Step 3.1 (shared agent utilities) is complete. Step 3.2 (Intake Agent) is complete.
 Step 3.3 (Requirements Agent) is complete. Step 3.4 (Design Agent) is complete.
@@ -2132,3 +2142,22 @@ gaps are logged here as confirmed findings (1-3 with a verified fix shape,
 4 without yet) specifically so they're ready to pick up in a dedicated
 pre-Phase-6 session, rather than folded into whatever unrelated work
 surfaces them next.
+
+---
+
+### Phase 5 close-out and REQ-2026-02 decommission (2026-08-13)
+
+Phase 5 close-out doc written (`FORGE-Phase5-Closeout.md`) from records
+already in the context doc — no new screenshots/data pulled first, per
+Mike's call. REQ-2026-02's live Azure/D365 resources then decommissioned in
+the same session, with two deliberate deviations from the original teardown
+plan: the D365 Application User was disabled but not deleted (Dataverse
+rejected the delete even post-disable; left as-is — disabled is sufficient
+to close the security exposure); the app registration was kept for
+potential future reuse, only its client secret deleted.
+`req-2026-02-auditor-api`/`req-2026-02-frontend` Container Apps deleted from
+`forge-staging`. `dryrun-2026-01-backend`/`dryrun-2026-01-frontend` and PR
+#10 were both confirmed already gone/closed from an earlier undocumented
+session — crossed off, not re-investigated. ACR images for both apps left
+in place (low-priority). See context doc chat 44 entry and
+`FORGE_Build_Plan_v8.md` for the checklist-level record.
