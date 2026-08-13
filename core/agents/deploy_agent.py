@@ -342,8 +342,11 @@ def _ensure_dockerignore(build_context: Path, unit_type: str) -> None:
 # Docker build / push
 # ---------------------------------------------------------------------------
 
-def _docker_build(unit: DeployUnit, full_image: str) -> None:
-    command = ["docker", "build", "-f", str(unit.dockerfile_path), "-t", full_image, str(unit.build_context)]
+def _docker_build(unit: DeployUnit, full_image: str, build_args: dict[str, str] | None = None) -> None:
+    command = ["docker", "build", "-f", str(unit.dockerfile_path)]
+    for key, value in (build_args or {}).items():
+        command += ["--build-arg", f"{key}={value}"]
+    command += ["-t", full_image, str(unit.build_context)]
     result = _run_shell(command, cwd=str(_REPO_ROOT))
     if result.returncode != 0:
         raise RuntimeError(
@@ -436,6 +439,36 @@ def _build_containerapp_command(
     if unit.unit_type in _TARGET_PORTS:
         command += ["--target-port", str(_TARGET_PORTS[unit.unit_type]), "--ingress", "external"]
     return "create", command
+
+
+def _get_env_default_domain(environment_name: str, resource_group: str) -> str:
+    """
+    A unit's FQDN is `f"{unit.name}.{env_default_domain}"` -- confirmed
+    empirically against every real Container App deployed so far. This lets
+    a unit's FQDN be predicted before that unit's Container App exists,
+    which is what cross-service wiring (NEXT_PUBLIC_API_BASE_URL,
+    FRONTEND_ORIGIN) needs. Raises rather than returning None/"" on failure
+    -- the bug this fixes was a *silent* empty value; a quiet fallback here
+    would just reintroduce the same failure mode one level up.
+    """
+    result = _run_shell(
+        ["az", "containerapp", "env", "show", "--resource-group", resource_group, "--name", environment_name,
+         "--query", "properties.defaultDomain", "-o", "tsv"],
+        cwd=str(_REPO_ROOT), timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"az containerapp env show failed for environment '{environment_name}' in resource group "
+            f"'{resource_group}' -- cannot compute a unit's FQDN for cross-service wiring:\n"
+            f"{(result.stderr or '')[-1500:]}"
+        )
+    domain = (result.stdout or "").strip()
+    if not domain:
+        raise RuntimeError(
+            f"az containerapp env show for environment '{environment_name}' returned an empty "
+            "defaultDomain -- cannot compute a unit's FQDN for cross-service wiring."
+        )
+    return domain
 
 
 def _get_fqdn(name: str, resource_group: str) -> str | None:
@@ -586,11 +619,32 @@ def run_deploy_agent(
         # QA/Security's --dry-run.
         _docker_login(acr_login_server, acr_username, acr_password)
 
+        # Cross-service wiring: a frontend unit needs the backend's FQDN baked
+        # in at build time (Next.js NEXT_PUBLIC_* vars are build-time-only).
+        # Computed once per run, not per unit -- see _get_env_default_domain().
+        frontend_unit = next((u for u in units if u.unit_type == "frontend"), None)
+        backend_web_unit = next((u for u in units if u.unit_type == "web"), None)
+        backend_fqdn: str | None = None
+        if frontend_unit is not None:
+            if backend_web_unit is not None:
+                env_default_domain = _get_env_default_domain(
+                    staging_cfg["environment"], staging_cfg["resource_group"],
+                )
+                backend_fqdn = f"{backend_web_unit.name}.{env_default_domain}"
+            else:
+                logger.warning(
+                    "Frontend unit %s detected with no 'web' backend unit in this request -- "
+                    "NEXT_PUBLIC_API_BASE_URL will not be set.", frontend_unit.name,
+                )
+
         full_images: dict[str, str] = {}
         for unit in units:
             full_image = f"{acr_login_server}/{unit.name}:{commit_sha}"
             full_images[unit.name] = full_image
-            _docker_build(unit, full_image)
+            build_args = {"NEXT_PUBLIC_API_BASE_URL": f"https://{backend_fqdn}"} if (
+                unit.unit_type == "frontend" and backend_fqdn
+            ) else None
+            _docker_build(unit, full_image, build_args=build_args)
             _docker_push(full_image)
 
         # Real az login + real read-only existence checks, dry-run or not —
