@@ -6,6 +6,8 @@
 
 **v7 update:** a follow-on conflict under 4.8 was found and resolved in the next chat, not a reopening of 4.8 itself — `requirements_agent.py` and `create_ado_items.py` both wrote directly to `main` (a pre-existing, documented-as-intentional pattern), which the newly-live required-PR-review rule would reject on their next real run. `bypass_pull_request_allowances` was tried first but is org-only (confirmed via a 422 and GitHub's own docs — not available on a personal-account repo). Resolved instead by moving both files' target branch from `main` to a dedicated, intentionally-unprotected `pipeline-state` branch — see 4.8's note below for details. No checkbox change (4.8 was already correctly checked in v6); this just closes a gap chat 37 hadn't hit yet.
 
+**v8 update (2026-08-13):** Step 4.10 (full dry-run, `DRYRUN-2026-01`) checked off — ran for real, chat 39, Phase 4 fully closed. Phase 5 (App 1 — `REQ-2026-02`, Inactive User & License Auditor) substantially complete: 5.1–5.8 and 5.11 checked off against real evidence in the context doc and `FORGE-Phase5-Closeout.md`. **5.9 checked with a caveat — staging only, production deliberately not attempted** (not appropriate for a Phase 5 validation run per Mike's call; App 1's Azure/D365 resources have since been decommissioned entirely, so a production deploy of this specific app is now moot). **5.10 left unchecked** — some real actuals were captured mid-run (Stage 1 cost, a Stage 3 Managed Agents timing/cost data point) but never fully transcribed into `docs/FORGE-pipeline-cost-log.md`; that pass is still outstanding and should happen before Phase 6, per the close-out doc's go/no-go read. See `FORGE-Phase5-Closeout.md` for full detail on what shipped, what was descoped (R-001), every confirmed-not-fixed structural gap, and the real manual-intervention count.
+
 ---
 
 ## Phase 1 — Repo Foundation
@@ -182,7 +184,7 @@
 - [x] 4.9 Verify reciprocal traceability links are written:
   - FORGE tracking issue → monorepo PR URL (written by the Implementation Coordinator)
   - Monorepo PR body → FORGE tracking issue URL (written by the Implementation Coordinator)
-- [ ] 4.10 Full dry-run: trigger a pipeline with a dummy spreadsheet, walk every stage manually confirming labels, comments, and artifacts appear correctly (no deployment). For Stage 3, also confirm the Claude Console per-subagent audit trail is reachable from the coordinator session.
+- [x] 4.10 Full dry-run: trigger a pipeline with a dummy spreadsheet, walk every stage manually confirming labels, comments, and artifacts appear correctly (no deployment). For Stage 3, also confirm the Claude Console per-subagent audit trail is reachable from the coordinator session. *(Done for real, chat 39, `DRYRUN-2026-01` — a real GitHub Actions platform incident hit mid-run, unrelated to FORGE config; cleared and re-ran clean. Its staging Container Apps were later torn down; confirmed already gone as of the chat 44 teardown.)*
 
 ---
 
@@ -190,17 +192,19 @@
 
 > Goal: Run the complete pipeline end-to-end on a real (small) app. Fix everything that breaks. This is the "proof it works" run.
 
-- [ ] 5.1 Write a simple BA intake spreadsheet for App 1 (suggest: a basic internal tool — something with a small API surface and a simple UI)
-- [ ] 5.2 Stage 0b — upload spreadsheet to tracking issue, apply `intake-ready`, review Intake Agent questions
-- [ ] 5.3 Answer clarifying questions, apply `clarification-complete`
-- [ ] 5.4 Stage 1 — review Requirements Agent draft, approve ADO items, apply `requirements-approved`
-- [ ] 5.5 Stage 2 — review Design Agent output (design.md, openapi.yaml, tasks.md), approve design PR, apply `design-approved`
-- [ ] 5.6 Stage 3 *(updated — ADR-0010)* — review implementation PR (backend + frontend + tests), confirm the coordinator ran Backend/Frontend/Test Writer as subagents in parallel via the Claude Console session audit trail, approve PR
-- [ ] 5.7 Stage 4 — review QA report, confirm bugs filed (or clean run), apply `qa-approved`
-- [ ] 5.8 Stage 5 — review Security Agent findings, confirm no Critical blockers, apply `security-approved`
-- [ ] 5.9 Stage 6 — confirm staging deployment, click production approval gate, confirm production deployment
-- [ ] 5.10 Record actuals *(updated — ADR-0010)*: GitHub Actions minutes consumed, Anthropic API token cost, and Managed Agents session-hours for the Stage 3 run — update Document 3 cost summary
-- [ ] 5.11 Document all fixes made during App 1 run — anything patched mid-run becomes a follow-up task
+**Status: substantially complete.** App 1 = "Inactive User & License Auditor" (`REQ-2026-02`), a read-only D365 Dataverse admin tool. Full detail, including the R-001 descope, every confirmed-not-fixed structural gap, real manual-intervention count, and a go/no-go read for Phase 6, is in `FORGE-Phase5-Closeout.md`. App 1's Azure Container Apps and D365 connection were decommissioned 2026-08-13 (code retained in `forge-demo-apps`); see the context doc's chat 44 entry for the teardown record.
+
+- [x] 5.1 Write a simple BA intake spreadsheet for App 1 (suggest: a basic internal tool — something with a small API surface and a simple UI)
+- [x] 5.2 Stage 0b — upload spreadsheet to tracking issue, apply `intake-ready`, review Intake Agent questions
+- [x] 5.3 Answer clarifying questions, apply `clarification-complete`
+- [x] 5.4 Stage 1 — review Requirements Agent draft, approve ADO items, apply `requirements-approved`
+- [x] 5.5 Stage 2 — review Design Agent output (design.md, openapi.yaml, tasks.md), approve design PR, apply `design-approved`
+- [x] 5.6 Stage 3 *(updated — ADR-0010)* — review implementation PR (backend + frontend + tests), confirm the coordinator ran Backend/Frontend/Test Writer as subagents in parallel via the Claude Console session audit trail, approve PR *(required a real recovery cycle — Stage 3's completion-detection bug, see `FORGE-Stage3-Completion-Detection-Spec.md` — not a clean first pass)*
+- [x] 5.7 Stage 4 — review QA report, confirm bugs filed (or clean run), apply `qa-approved` *(passed on the 3rd of 3 automated attempts against real bugs, not a clean first pass)*
+- [x] 5.8 Stage 5 — review Security Agent findings, confirm no Critical blockers, apply `security-approved`
+- [x] 5.9 Stage 6 — confirm staging deployment, click production approval gate, confirm production deployment *(staging only — confirmed live and working in a real browser; production deliberately not attempted, not appropriate for a validation run. Moot now: this app's infrastructure has since been decommissioned.)*
+- [ ] 5.10 Record actuals *(updated — ADR-0010)*: GitHub Actions minutes consumed, Anthropic API token cost, and Managed Agents session-hours for the Stage 3 run — update Document 3 cost summary *(partial — some real figures captured in the context doc, never fully transcribed into `docs/FORGE-pipeline-cost-log.md`. Outstanding — do before Phase 6.)*
+- [x] 5.11 Document all fixes made during App 1 run — anything patched mid-run becomes a follow-up task *(see `FORGE-Phase5-Closeout.md` §4–5 for the full list of confirmed structural gaps and manual interventions, and §7–8 for what's carried forward into Phase 6)*
 
 ---
 
