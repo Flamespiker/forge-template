@@ -1925,3 +1925,210 @@ actually serving traffic (not just CLI-reported success):**
   in the pipeline (e.g. at PR-open time) so a `npm ci`/lockfile issue
   surfaces before Stage 6, not after everything else has already passed.
   Flagged, not designed.
+
+---
+
+### R-001 descope to a license-status report (REQ-2026-02, follow-up session)
+
+Root cause confirmed live (not guessed): a Dataverse metadata investigation
+against `EntityDefinitions(LogicalName='systemuser')/Attributes` found no
+field matching login/logon/signin/last-activity anywhere among `systemuser`'s
+221 attributes in this environment. R-001's original "inactive user" audit
+scope was formally descoped by Mike as a result — `GET /api/users/inactive`
+became `GET /api/users/license-status`, a license-status report only (no
+login timestamps, no inactivity filter). Backend DTOs/service/repository
+renamed to match (`LicensedUserDto`, `LicenseStatusResponseDto`,
+`LicenseStatusService`/`ILicenseStatusService`); frontend columns/CSV/copy
+updated so the UI doesn't imply data it no longer has;
+`AppConstants.INACTIVITY_THRESHOLD_DAYS` removed. `openapi.yaml` and both
+READMEs updated to match. Real backend tests 49/49, frontend tests 38/38,
+`next build`/`next lint` clean before opening a PR. Where real login-activity
+data could come from (Graph/Entra sign-in activity, a custom Dataverse
+field, or Dataverse audit history) is an open question, not resolved here —
+logged as exactly that, an open question, not a TODO with an assumed answer.
+
+**A genuinely new pipeline bug found and root-caused during this work**
+(not present in any prior session's notes): the first attempt used branch
+name `feature/REQ-2026-02-license-status-fix`. `04-qa.yml`/`05-security.yml`
+derive `request_id="${HEAD_REF#feature/}"` — a bash prefix-strip that
+assumes the branch is exactly `feature/<request-id>`, nothing more. Stripping
+`feature/` left `REQ-2026-02-license-status-fix`, not `REQ-2026-02`, so both
+agents looked for a nonexistent `services/REQ-2026-02-license-status-fix/`.
+Security crashed loudly (`FileNotFoundError`); QA got a **silent false
+positive** — found nothing at the wrong path, correctly-but-wrongly treated
+everything as `not_applicable` (Phase 5 Fix 3's own logic, working exactly
+as designed, just fed a wrong path), and applied `qa-approved` on zero real
+test coverage. Fixed by renaming the branch to the conforming
+`feature/REQ-2026-02` (not by touching pipeline code) — re-run confirmed
+real coverage (87/87 tests) and a genuine Security pass. The false
+`qa-approved` label from the broken run was removed from tracking issue #5
+before re-running. **Not fixed at the root**: `04-qa.yml`/`05-security.yml`'s
+`request_id` derivation is still a bare prefix-strip with no validation that
+the result matches a real `services/<request_id>/` directory — a
+differently-named `feature/*` branch would silently reproduce this exact
+QA false-positive again. Flagged, not built.
+
+**A second, separate pipeline gap found while watching Deploy auto-fire**:
+when the (corrected) `qa-approved` label landed via the App token, `06-deploy.yml`
+fired automatically as designed — but `workflow_glue.py`'s
+`resolve_feature_pr()` finds "the feature PR" by reading the *original
+Implementation Coordinator's comment* on the tracking issue, which still
+pointed at PR #15 (the original Stage 3 implementation PR, merged days
+earlier). It has no notion of "the current open feature PR for this
+request" — so the automatic deploy tried to rebuild PR #15's old,
+pre-descope commit, not the new fix. This is a structural gap for any
+follow-up feature PR on a request that's already been through
+Implementation once, not specific to this fix. Worked around the same way
+PR #16 was handled: `deploy_agent.py` invoked manually against PR #18's real
+merge commit (`9e4054c`, then `d8823cf` after PR #16 also merged — see
+below). Not fixed at the root — `resolve_feature_pr()`'s comment-anchored
+lookup is unchanged.
+
+**PR #16 (frontend deploy fix, open since the prior session) admin-merged
+this session, at Mike's explicit request**, once it became the direct
+blocker for the above manual deploy: `deploy_agent.py`'s build-then-deploy
+loop (`deploy_agent.py:590-626` — builds+pushes **every** unit first, *then*
+runs `az containerapp create/update` for every unit in a separate pass) means
+a single unit's build failure aborts before ANY unit's Container App gets
+touched, even ones that built fine. So PR #18's backend image built and
+pushed to ACR cleanly, but the frontend build failed on the exact bug PR #16
+fixes, and the whole run aborted before the backend's Container App was
+ever updated — the real fix was pushed to the registry but never actually
+went live until PR #16 merged and the deploy was re-run. Confirmed before
+merging: PR #16 was 3 purely mechanical files (regenerated
+`package-lock.json`, `public/.gitkeep`, the previously-only-auto-generated
+backend `Dockerfile`), no application logic. `gh pr merge --admin` used
+(same as PR #11) since PR #16's branch (`fix/req-2026-02-frontend-deploy`)
+hit the identical two-part block PR #18 hit initially: no review
+(`reviewDecision: REVIEW_REQUIRED`) plus a `security-check` that can never
+populate on a non-`feature/*`/non-`design/*` branch.
+
+**Standing item, explicitly logged per Mike's request rather than fixed —
+do not lose this count before it's actually decided:** PR #16 admin-merging
+is the **fourth** occurrence of this exact pattern — an ad hoc `fix/*`
+branch for a small mechanical fix, hitting the permanently-unsatisfiable
+`security-check` (because `notify-forge.yml` only dispatches for
+`feature/*`/`design/*` branches) plus no human review, resolved by admin
+override each time:
+1. PR #7 — `fix/req-2026-01-test-infra`
+2. PR #8 — `fix/req-2026-01-navigation-aria-types`
+3. PR #11 — `fix/design-pr-security-noop`
+4. PR #16 — `fix/req-2026-02-frontend-deploy`
+
+Fix 2 (the `design-pr-security-noop.yml` no-op check) already solved this
+exact class of problem for `design/*` branches specifically. It was never
+generalized to cover ad hoc `fix/*` branches, and four occurrences in is
+long enough that this is a real recurring cost (an admin override every
+time), not a one-off. Options for whenever this gets decided: extend the
+no-op-check pattern to any branch prefix used for these mechanical fixes,
+adopt a fixed naming convention for them that's already covered by an
+existing dispatch filter, or accept admin-merge as the standing procedure
+and stop treating it as a gap. Not decided here — logged only so the count
+is not lost.
+
+**Two more real, previously-undiscovered `deploy_agent.py` bugs found while
+verifying the live REQ-2026-02 frontend after this deploy — both patched as
+one-off, throwaway fixes on the running Azure resources only, `deploy_agent.py`
+itself untouched, so both will reproduce on the next real deploy of any
+request's frontend unit:**
+
+1. **`NEXT_PUBLIC_API_BASE_URL` is never passed as a Docker build-arg, for
+   any unit, on any request.** The frontend Dockerfile declares `ARG
+   NEXT_PUBLIC_API_BASE_URL=""` (empty default); `_docker_build()`
+   (`deploy_agent.py:345-352`) runs a bare `docker build -f ... -t ... <context>`
+   with no `--build-arg` anywhere in the file (confirmed:
+   `grep -n "NEXT_PUBLIC_API_BASE_URL\|build-arg" deploy_agent.py` returns
+   nothing). Next.js bakes `NEXT_PUBLIC_*` vars in at build time, so every
+   deployed frontend build has always shipped with an empty base URL — the
+   client's `fetch()` calls resolve to a same-origin relative path against
+   the frontend container itself, which has no such route, so Next.js's own
+   404 HTML page comes back instead of JSON. `apiClient.ts`'s JSON-parse
+   fallback then surfaces a generic "An unexpected error occurred" — a
+   real, silent, 100%-of-the-time failure that nothing in this project's
+   prior verification ever caught, because every past frontend check only
+   confirmed `/` returns 200, never that the actual data fetch succeeds.
+   **Not just a missing line, either**: `run_deploy_agent()` builds+pushes
+   *all* units in one loop (`deploy_agent.py:590-594`) before creating/
+   updating *any* Container App in a second loop (`:600-626`), so the
+   backend's real FQDN doesn't exist yet at the point the frontend image
+   would need it as a build-arg on a brand-new deploy. A real fix needs
+   either a build-order change (backend first, discover FQDN, then build
+   frontend) or a predictable FQDN computed from the environment's fixed
+   domain suffix + the unit's deterministic name — plausible (Container
+   Apps FQDNs are `<app-name>.<env-suffix>.<region>.azurecontainerapps.io`,
+   and the suffix/region are fixed per environment) but unconfirmed, not
+   designed.
+2. **`FRONTEND_ORIGIN` is never set on any backend Container App either** —
+   confirmed via `az containerapp show ... properties.template.containers[0].env`
+   on the live `req-2026-02-auditor-api`: no `FRONTEND_ORIGIN` entry at all.
+   `Program.cs` defaults it to `http://localhost:3000` when unset, so the
+   CORS policy only ever allows `localhost` — a real deployed frontend
+   origin gets no `Access-Control-Allow-Origin` header back at all
+   (confirmed by curling the backend with `-H "Origin: <real frontend
+   URL>"` and finding the header absent). Even with bug 1 fixed, a real
+   browser's cross-origin fetch would still be CORS-blocked, surfacing a
+   *different* generic error ("Unable to reach the Auditor API — check
+   your network connection and try again.", the `NETWORK_ERROR` branch)
+   rather than the JSON-parse-fallback one. `deploy_agent.py` never sets
+   this env var for any unit on any request either.
+
+**Manual patch applied to unblock REQ-2026-02 specifically** (per Mike's
+explicit direction, `deploy_agent.py` deliberately not touched):
+`docker build --build-arg NEXT_PUBLIC_API_BASE_URL=<real backend FQDN>` →
+new tag `d8823cf...-fix-buildarg` → pushed to ACR → `az containerapp update
+--image` on `req-2026-02-frontend`; `az containerapp update --set-env-vars
+FRONTEND_ORIGIN=<real frontend FQDN>` on `req-2026-02-auditor-api`. Verified
+both empirically (not assumed): the deployed JS bundle now shows the real
+backend URL concatenated before `/api/users/license-status`; the backend's
+CORS response now echoes the exact frontend origin back in
+`Access-Control-Allow-Origin`; **Mike confirmed live in a real browser** —
+page loads real data, no error banner. Neither fix touched application
+source or `deploy_agent.py` — both are Azure-resource-only patches specific
+to this one running app, and will need to be reapplied (or `deploy_agent.py`
+fixed at the root) the next time this app is redeployed from scratch, or
+for any other request's frontend unit.
+
+**Follow-up the same session: the "unconfirmed" caveat on bugs 1/2's fix
+shape is now resolved — confirmed empirically, not assumed.** `az
+containerapp env list --resource-group forge-build-rg --query
+"[].{name:name, defaultDomain:properties.defaultDomain}"` returns
+`defaultDomain` at the **environment** level (`forge-staging` →
+`yellowmeadow-894377a9.canadacentral.azurecontainerapps.io`, matching
+exactly what both REQ-2026-02 units' real FQDNs have been built from all
+along). This means a unit's FQDN (`f"{unit.name}.{env_domain}"`) is fully
+predictable **before that unit's Container App exists** — there is no
+chicken-and-egg ordering problem after all. Bug 1 (missing
+`NEXT_PUBLIC_API_BASE_URL` build-arg) and bug 2 (missing `FRONTEND_ORIGIN`)
+both have a concrete, verified fix shape now, not just a flagged gap:
+
+1. **Missing `NEXT_PUBLIC_API_BASE_URL` build-arg** (`_docker_build()`,
+   `deploy_agent.py:345-352`) — before building a frontend unit, compute the
+   backend unit's expected FQDN via one `az containerapp env show --query
+   properties.defaultDomain` call (done once per run) + the backend unit's
+   already-deterministic name, pass it via `--build-arg`.
+2. **Missing `FRONTEND_ORIGIN`** (`_build_containerapp_command()`,
+   `deploy_agent.py:403-438`) — same predictable-FQDN trick in reverse: add
+   `--set-env-vars FRONTEND_ORIGIN=https://{frontend_fqdn}` to the backend
+   unit's create/update command.
+3. **Batched build-then-deploy** (`run_deploy_agent()`,
+   `deploy_agent.py:590-626`) — builds+pushes *every* unit before running
+   `az containerapp create/update` for *any* unit, so one unit's build
+   failure blocks even a successfully-built unit's deploy (this is exactly
+   what happened to REQ-2026-02's backend earlier this session). Not
+   strictly required to fix 1/2 now that FQDNs are predictable without
+   needing creation order, but a separate, real robustness gap — fix shape:
+   interleave build+push+deploy per unit in one loop instead of two batched
+   passes.
+4. **`resolve_feature_pr()` anchored to the original Implementation
+   Coordinator comment** (`workflow_glue.py`, used by `06-deploy.yml`) —
+   different file/mechanism from 1-3, can't discover a newer follow-up
+   feature PR for a request that's already been through Implementation
+   once (caused the auto-deploy-on-`qa-approved` trigger to target stale
+   PR #15 instead of PR #18 earlier this session). No verified fix shape
+   yet — not investigated as deeply as 1-3.
+
+**Explicit decision, Mike's call: not implemented this session.** All four
+gaps are logged here as confirmed findings (1-3 with a verified fix shape,
+4 without yet) specifically so they're ready to pick up in a dedicated
+pre-Phase-6 session, rather than folded into whatever unrelated work
+surfaces them next.
