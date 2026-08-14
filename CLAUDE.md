@@ -15,7 +15,7 @@ security → deploy) with human approval gates at each stage.
 - **Target repo:** `forge-demo-apps` (GitHub: `Flamespiker`, private) — stand-in for LAA's
   application monorepo during the build/demo phase
 - **ADO org:** `https://dev.azure.com/spike99` — project `FORGE-Build`
-- **Full project context:** `docs/FORGE-context_v48.md` — read this for architecture decisions,
+- **Full project context:** `docs/FORGE-context_v52.md` — read this for architecture decisions,
   agent roster, pipeline stages, and session history
 
 ---
@@ -38,6 +38,12 @@ backfilled Intake/Requirements figures, and corrected §3 cumulative totals
 (commit `8f7fc24`), per `docs/FORGE-cost-log-transcription-patch.md`. Three
 REQ-2026-02 cost gaps (Requirements, QA partial, Security missing) remain
 flagged as open gaps in that log, not resolved.
+
+**Convention:** Branch-naming convention for ad hoc fix PRs — decided
+2026-08-13. Use `feature/fix-<short-description>` instead of `fix/*`, so
+these PRs route through the existing `feature/*` dispatch chain (real QA/
+Security) rather than hitting the permanently-unsatisfiable `security-check`
+gap that forced admin-merges on PRs #7, #8, #11, #16.
 
 Step 3.1 (shared agent utilities) is complete. Step 3.2 (Intake Agent) is complete.
 Step 3.3 (Requirements Agent) is complete. Step 3.4 (Design Agent) is complete.
