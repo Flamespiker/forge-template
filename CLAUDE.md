@@ -2170,7 +2170,8 @@ potential future reuse, only its client secret deleted.
 #10 were both confirmed already gone/closed from an earlier undocumented
 session — crossed off, not re-investigated. ACR images for both apps left
 in place (low-priority). See context doc chat 44 entry and
-`FORGE_Build_Plan_v8.md` for the checklist-level record.
+`FORGE_Build_Plan_v9.md` for the checklist-level record (renamed from `v8`
+2026-08-13, see the doc-cleanup entry above).
 
 ---
 
