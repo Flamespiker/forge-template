@@ -81,6 +81,12 @@ jobs:
         run: |
           python -m core.agents.workflow_glue resolve-tracking-issue --pr-number "$PR_NUMBER"
 
+      - name: Resolve request id
+        if: steps.guard.outputs.proceed == 'true'
+        id: request_id
+        run: |
+          python -m core.agents.workflow_glue resolve-request-id --issue-number "${{ steps.issue.outputs.issue_number }}"
+
       - name: Generate GitHub App installation token (scoped to forge-demo-apps)
         if: steps.guard.outputs.proceed == 'true'
         id: app-token
@@ -114,7 +120,7 @@ jobs:
         if: steps.guard.outputs.proceed == 'true'
         working-directory: ${{ github.workspace }}/monorepo-checkout
         run: |
-          request_id="${HEAD_REF#feature/}"
+          request_id="${{ steps.request_id.outputs.request_id }}"
           frontend_dir="services/$request_id/frontend"
           if [ -f "$frontend_dir/package.json" ]; then
             npm install --prefix "$frontend_dir"
@@ -126,7 +132,7 @@ jobs:
         id: run_agent
         if: steps.guard.outputs.proceed == 'true'
         run: |
-          request_id="${HEAD_REF#feature/}"
+          request_id="${{ steps.request_id.outputs.request_id }}"
           python -m core.agents.qa_agent \
             --issue-number "${{ steps.issue.outputs.issue_number }}" \
             --request-id "$request_id" \
