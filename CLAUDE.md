@@ -15,7 +15,7 @@ security → deploy) with human approval gates at each stage.
 - **Target repo:** `forge-demo-apps` (GitHub: `Flamespiker`, private) — stand-in for LAA's
   application monorepo during the build/demo phase
 - **ADO org:** `https://dev.azure.com/spike99` — project `FORGE-Build`
-- **Full project context:** `docs/FORGE-context_v52.md` — read this for architecture decisions,
+- **Full project context:** `docs/FORGE-context_v53.md` — read this for architecture decisions,
   agent roster, pipeline stages, and session history
 
 ---
