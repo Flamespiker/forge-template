@@ -2276,3 +2276,78 @@ raise `AssertionError` if ever actually called (a safety net independent of
 whether every higher-level function happens to be mocked), and the script
 defaults to `dry_run=True` unless deliberately overridden. Re-ran
 successfully with zero live calls reached.
+
+**Real end-to-end verification against `forge-staging`, per the spec's own
+acceptance criteria — a genuinely live deploy, not a mocked/local test.**
+Ran `python -m core.agents.deploy_agent` for real (no `--dry-run`) against
+REQ-2026-02's actual code in `forge-demo-apps-clone` (`main` @ `d8823cff`,
+confirmed matching `origin/main`), targeting `forge-demo-apps` PR #18 and
+FORGE tracking issue #5.
+
+**First attempt surfaced a real bug, exactly because this was the first
+genuinely live `create` call any of these three fixes had ever gone
+through:** `az containerapp create` takes `--env-vars`; `--set-env-vars`
+(what `_build_containerapp_command()` used for both branches) is
+`update`-only and errors with "unrecognized arguments" — confirmed via
+`az containerapp create --help`/`update --help`. Neither Fix 2's own
+verification (checked the Python-level command list only) nor Fix 3's
+mocked simulation (deliberately hard-mocks `_run_shell` so nothing real
+ever runs) could have caught this — both were scoped that way on purpose,
+to avoid touching `forge-staging` before this dedicated step. The backend
+create failed at CLI arg-parsing, before reaching Azure — confirmed via
+`az containerapp show` (`ResourceNotFound`), so no partial/broken resource
+was left behind by the failed attempt itself. Fixed
+(`_build_containerapp_command()` now uses `--env-vars` for `create`,
+`--set-env-vars` for `update`) and, same commit, widened
+`_build_pr_comment()`'s error snippet from the first line only (usually
+just `"...failed for unit X:"`, no real detail) to the first three
+non-empty lines — the real failure above would otherwise have shown no
+useful error text in the PR comment at all. Committed `e0986d0`.
+
+**Re-run after the fix: both units deployed clean.** `provisioningState:
+Succeeded` for both `req-2026-02-auditor-api` and `req-2026-02-frontend`,
+FQDNs matching the predicted pattern exactly (this run also exercised the
+`update` path for the frontend, since its first-attempt `create` had
+already succeeded — confirms `--set-env-vars` is correct there, unchanged).
+
+- **Fix 1, confirmed against the live-served bundle, not a local build:**
+  `curl`'d the running frontend's actual JS chunk
+  (`/_next/static/chunks/app/page-05411a420c1e92a5.js`) and found the real
+  backend FQDN baked in.
+- **Fix 2, confirmed against the live resource and live HTTP behavior:**
+  `az containerapp show ... properties.template.containers[0].env` shows
+  `FRONTEND_ORIGIN` set to the real frontend FQDN; `curl -H "Origin:
+  <real frontend FQDN>"` against the backend gets back
+  `access-control-allow-origin: <that exact origin>`.
+- **Fix 3, confirmed in two real scenarios, not one:** the first (failing)
+  attempt showed the backend's error isolated from the frontend's success
+  in both the PR comment (per-unit table + "1 of 2 failed" summary) and a
+  distinct tracking-issue comment, while the frontend still deployed for
+  real; the second (clean) attempt shows both units' real staging URLs
+  with the failure-summary line correctly absent. `git diff` between the
+  Fix 3 commit and the `e0986d0` bug-fix commit confirms the per-unit
+  `try/except` loop itself was untouched by the bug fix — only the CLI
+  flag and error-snippet formatting changed — so the live partial-failure
+  behavior observed on the first attempt is the same loop running on the
+  second.
+
+**Non-issue, confirmed via container logs, not assumed:** the real
+`/api/users/license-status` endpoint returned HTTP 500
+(`System.InvalidOperationException: Missing required configuration:
+D365_TENANT_ID`, from `az containerapp logs show`). Expected — REQ-2026-02's
+D365/Dataverse connection was deliberately decommissioned in the Phase 5
+close-out (App User disabled, client secret deleted), and
+`deploy_agent.py` has never wired D365 application config for any
+request (out of scope for this agent). Unrelated to Fix 1/2/3.
+
+**Cleanup, per Mike's explicit direction:** both Container Apps were
+deleted after verification (`az containerapp delete`, both) to restore the
+decommissioned state from the Phase 5 close-out, rather than leaving them
+live. Confirmed actually gone via **both** a follow-up `az containerapp
+show` (`ResourceNotFound` for each) **and** `az containerapp list
+--resource-group forge-build-rg` (only the two legitimate REQ-2026-01
+apps remained) — not trusted from the delete commands' exit codes alone.
+ACR images pushed during this verification
+(`req-2026-02-auditor-api:d8823cff...`, `req-2026-02-frontend:d8823cff...`)
+were left in place, consistent with the existing "ACR images left in
+place, low-priority" convention from the original Phase 5 decommission.
