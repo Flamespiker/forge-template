@@ -32,8 +32,12 @@ shipped, the R-001 descope, every confirmed structural gap, and real
 manual-intervention count. **App 1's Azure Container Apps and D365
 connection decommissioned 2026-08-13** (App User disabled, secret deleted,
 app registration kept for potential reuse; code retained in
-`forge-demo-apps`). Cost log transcription still outstanding — do before
-Phase 6.
+`forge-demo-apps`). **Cost log transcription complete (2026-08-13)** —
+`docs/FORGE-pipeline-cost-log.md` now has real QA/Security per-run tables,
+backfilled Intake/Requirements figures, and corrected §3 cumulative totals
+(commit `8f7fc24`), per `docs/FORGE-cost-log-transcription-patch.md`. Three
+REQ-2026-02 cost gaps (Requirements, QA partial, Security missing) remain
+flagged as open gaps in that log, not resolved.
 
 Step 3.1 (shared agent utilities) is complete. Step 3.2 (Intake Agent) is complete.
 Step 3.3 (Requirements Agent) is complete. Step 3.4 (Design Agent) is complete.
@@ -2433,10 +2437,10 @@ criteria:**
   right now to exercise the single-match path live.
 
 **Both fixes:** `py_compile` clean on `workflow_glue.py`/`github_helper.py`;
-both edited workflow YAML files parse cleanly via `yaml.safe_load`. Not yet
-committed — pending confirmation. Per the spec's own handoff notes, intended
-as two separate commits: Fix 1 (`04-qa.yml` + `05-security.yml` together)
-and Fix 2 (`github_helper.py` + `workflow_glue.py` together).
+both edited workflow YAML files parse cleanly via `yaml.safe_load`. **Committed
+2026-08-13** as two separate commits per the spec's own handoff notes: Fix 1
+(`04-qa.yml` + `05-security.yml` together, `5271342`) and Fix 2
+(`github_helper.py` + `workflow_glue.py` together, `457f1b9`) — both pushed to
+`main`, documented in `7fc46dc`.
 
 ---
-place, low-priority" convention from the original Phase 5 decommission.
