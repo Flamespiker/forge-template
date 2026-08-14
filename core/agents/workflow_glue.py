@@ -27,14 +27,18 @@ Four subcommands:
       itself (from the spreadsheet's own Request ID field).
 
   resolve-feature-pr --issue-number N
-      Scans the tracking issue's comments for the Implementation
-      Coordinator's own "stage=implementation" comment (implementation_
-      coordinator.py's run_implementation_coordinator()), which embeds the
-      opened PR's html_url in plain text ("...opened a draft PR: <url>").
-      Extracts the PR number from that URL. Needed by 06-deploy.yml: the
-      qa-approved/security-approved labels live on the tracking issue, but
-      deploy_agent.py needs the *feature PR's* number and head commit SHA in
-      forge-demo-apps, neither of which the label event carries.
+      Resolves request_id via resolve-request-id, then asks the GitHub API
+      directly for the currently open PR on feature/<request_id> in
+      forge-demo-apps (implementation_coordinator.py's own branch-naming
+      convention). Returns that PR's number and head commit SHA. Needed by
+      06-deploy.yml: the qa-approved/security-approved labels live on the
+      tracking issue, but deploy_agent.py needs the *feature PR's* number and
+      head commit SHA in forge-demo-apps, neither of which the label event
+      carries. Deliberately does NOT anchor to the original Implementation
+      Coordinator comment -- that went stale the moment a follow-up feature
+      PR was opened on the same tracking issue (e.g. a post-implementation
+      fix/descope), since the comment always points at the *first* PR ever
+      opened, not the currently open one.
 
   resolve-tracking-issue --pr-number N
       The reverse of resolve-feature-pr: given a forge-demo-apps PR number
@@ -60,6 +64,7 @@ from core.agents.utils.github_helper import (
     get_issue,
     get_issue_comments,
     get_pr,
+    list_open_prs_by_head,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,8 +73,6 @@ _ATTACHMENT_URL_RE = re.compile(
     r"https://github\.com/(?:[^/\s]+/[^/\s]+/files|user-attachments/files)/\d+/[^\s)\]]+"
 )
 _REQUEST_ID_MARKER_RE = re.compile(r"forge:agent-comment\b[^>]*\brequest_id=(\S+?)(?=\s|-->)")
-_IMPLEMENTATION_STAGE_MARKER = "forge:agent-comment stage=implementation"
-_PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/(\d+)")
 
 
 def _write_output(name: str, value: str) -> None:
@@ -145,20 +148,32 @@ def resolve_tracking_issue(pr_number: int) -> int:
 
 
 def resolve_feature_pr(issue_number: int) -> tuple[int, str]:
-    """Returns (pr_number, head_sha) for the feature PR opened by Stage 3."""
-    for comment in get_issue_comments(issue_number):
-        if _IMPLEMENTATION_STAGE_MARKER not in comment["body"]:
-            continue
-        match = _PR_URL_RE.search(comment["body"])
-        if not match:
-            continue
-        pr_number = int(match.group(1))
-        pr = get_pr(pr_number)
-        return pr_number, pr["head"]["sha"]
-    raise ValueError(
-        f"No Implementation Coordinator comment (stage=implementation) with a PR "
-        f"link found on issue #{issue_number} -- has Stage 3 run yet?"
-    )
+    """
+    Returns (pr_number, head_sha) for the *currently open* feature PR tied
+    to this tracking issue. Resolves request_id via the same marker-based
+    resolve_request_id() every other stage trusts (stable for the life of
+    the issue), then looks up the live, currently-open PR on
+    feature/<request_id> directly via the GitHub API -- no longer anchored
+    to a potentially-stale Implementation Coordinator comment.
+    """
+    request_id = resolve_request_id(issue_number)
+    branch_name = f"feature/{request_id}"
+    prs = list_open_prs_by_head(branch_name)
+
+    if not prs:
+        raise ValueError(
+            f"No open PR found on branch '{branch_name}' for issue #{issue_number} -- "
+            "has Stage 3 run yet, or has the feature PR already been merged/closed "
+            "without a new one being opened?"
+        )
+    if len(prs) > 1:
+        raise ValueError(
+            f"Found {len(prs)} open PRs on branch '{branch_name}' for issue "
+            f"#{issue_number} -- expected exactly one. Refusing to guess which "
+            "one to deploy."
+        )
+    pr = prs[0]
+    return pr["number"], pr["head"]["sha"]
 
 
 def main() -> None:

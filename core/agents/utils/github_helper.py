@@ -691,6 +691,25 @@ def get_pr(pr_number: int) -> dict:
     return pr
 
 
+def list_open_prs_by_head(branch_name: str) -> list[dict]:
+    """
+    List open PRs in the target monorepo (forge-demo-apps) whose head branch
+    matches branch_name exactly. Uses the GitHub App installation token --
+    same cross-repo auth context as get_pr(). Needed by resolve_feature_pr()
+    to find the *currently* open feature PR, rather than trusting a
+    potentially-stale comment reference.
+    """
+    owner = os.environ["FORGE_GITHUB_OWNER"]
+    token = get_installation_token()
+    url = f"{_repo_url()}/pulls"
+    params = {"state": "open", "head": f"{owner}:{branch_name}"}
+    response = requests.get(url, headers=_auth_headers(token), params=params, timeout=15)
+    response.raise_for_status()
+    prs: list[dict] = response.json()
+    logger.info("Found %d open PR(s) with head '%s'", len(prs), branch_name)
+    return prs
+
+
 def create_check_run(
     head_sha: str,
     name: str,
