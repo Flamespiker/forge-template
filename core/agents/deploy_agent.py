@@ -415,9 +415,16 @@ def _build_containerapp_command(
     extra_env_vars: dict[str, str] | None = None,
 ) -> tuple[str, list[str]]:
     resource_group = staging_cfg["resource_group"]
-    # Single merged --set-env-vars flag so a future second caller of this
-    # function can't accidentally clobber this one with a competing flag --
-    # no other env vars are set here today, but this keeps that true if that changes.
+    # `create` and `update` take env vars via two DIFFERENT flags --
+    # `--env-vars` on create (the initial full set), `--set-env-vars` on
+    # update (add/update against an existing set). Confirmed empirically:
+    # `az containerapp create --set-env-vars ...` errors with "unrecognized
+    # arguments" (caught live during REQ-2026-02 end-to-end verification --
+    # `az containerapp create --help`/`update --help` confirm the split).
+    # One merged flag either way, built from the same env_var_args, so a
+    # future second caller of this function can't clobber this one with a
+    # competing flag -- no other env vars are set here today, but this
+    # keeps that true if that changes.
     env_var_args = [f"{k}={v}" for k, v in (extra_env_vars or {}).items()]
 
     if exists:
@@ -448,7 +455,7 @@ def _build_containerapp_command(
     if unit.unit_type in _TARGET_PORTS:
         command += ["--target-port", str(_TARGET_PORTS[unit.unit_type]), "--ingress", "external"]
     if env_var_args:
-        command += ["--set-env-vars", *env_var_args]
+        command += ["--env-vars", *env_var_args]
     return "create", command
 
 
@@ -547,8 +554,13 @@ def _build_pr_comment(request_id: str, commit_sha: str, results: list[DeployResu
     ]
     for r in results:
         if r.error:
-            first_line = r.error.splitlines()[0][:300]
-            status = f"❌ **failed** — {first_line}"
+            # First line alone is often just "...failed for unit X:" with the
+            # actual CLI error on the next line(s) -- confirmed live on the
+            # real create/update failure this was written against. Take the
+            # first few non-empty lines instead of just line one.
+            snippet_lines = [line.strip() for line in r.error.splitlines() if line.strip()][:3]
+            snippet = " / ".join(snippet_lines)[:400]
+            status = f"❌ **failed** — {snippet}"
         else:
             status = f"https://{r.fqdn}" if r.fqdn else "_(internal — no public ingress)_"
         lines.append(f"| `{r.unit.name}` | {r.unit.unit_type} | `{r.image}` | {status} |")
