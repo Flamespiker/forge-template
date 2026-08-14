@@ -2450,3 +2450,87 @@ both edited workflow YAML files parse cleanly via `yaml.safe_load`. **Committed
 `main`, documented in `7fc46dc`.
 
 ---
+
+### Security Agent — scanner-failure verdict fix (per `docs/FORGE-SecurityAgent-ScannerFailureVerdict-Spec.md`)
+
+Root cause (first observed live on `DRYRUN-2026-01`, chat 39, never fixed
+until now): `run_security_agent()`'s verdict computation only ever looked
+at `all_findings` — a scanner that failed to execute at all (crash,
+timeout, missing report; `ScanResult.ran=False`) was computationally
+indistinguishable from one that ran clean and found nothing, so
+`security-approved` could auto-apply on an incomplete scan.
+
+Fix, exactly per spec, all in `core/agents/security_agent.py`:
+- `any_tool_failed = any(not r.ran for r in all_results)`, computed right
+  after `all_results` is built.
+- `check_conclusion`/`label_to_apply` now gate on `has_critical or
+  any_tool_failed` — a tool-run failure blocks merge and withholds the
+  label exactly like a Critical finding does, no new label or retry
+  mechanism introduced.
+- `any_tool_failed` added to `summary_for_model`; `_SYSTEM_PROMPT` gained a
+  third case instructing the model to state plainly that the scan is
+  **incomplete** (not that vulnerabilities were found) when a scanner
+  failed with no Criticals present.
+- Check-run title is now a three-way branch: `"Security scan: blocked"` /
+  `"Security scan: incomplete — scanner failure"` / `"Security scan:
+  passed"`.
+- `--dry-run`'s printed "label (not applied)" reason now reflects the real
+  cause (Critical findings vs. scanner failure) instead of a hardcoded
+  Critical-findings string.
+
+**Verified via unit-level checks against `run_security_agent()`'s
+internals** (scanner functions and `invoke_agent()` mocked, `dry_run=True`,
+no live GitHub/Anthropic calls) — all four spec cases passed, including
+the `--dry-run` printed-reason text for each: baseline clean pass
+(`success`/`security-approved`), the fixed case — one tool failed, no
+findings elsewhere, the exact `DRYRUN-2026-01` shape (`failure`/`None`,
+reason correctly names scanner failure), tool failure plus a genuine
+Critical elsewhere (`failure`/`None`, reason correctly still names
+Critical findings as the cause), and total scanner collapse
+(`failure`/`None`). Live confirmation against a real broken scanner
+invocation (the spec's own suggested follow-up) not done this session.
+
+Committed `5492305`. Document 3 §3.5's "open item, not yet fixed in code"
+pointer to this spec (added the same day, see the doc-cleanup entry below)
+was updated to reflect the fix as closed, in the same doc-cleanup commit.
+
+### Doc-cleanup changeset applied (`docs/FORGE-DocCleanup-Changeset-2026-08-13.md`)
+
+Three pre-Phase-6 doc-drift items, batched per Mike's call, applied
+verbatim from the changeset spec (which itself was drafted from the live
+`security_agent.py` and known label-ownership discrepancy, not the other
+way around):
+
+- **`06_Orchestration_v5.md` → `v6`:** Gate 4/5 narrative corrected — QA
+  Agent and Security Agent apply `qa-approved`/`security-approved`
+  automatically on a clean pass, the reviewer's job is to review and
+  confirm, not to apply the label. Label Reference table rows updated to
+  match. The now-redundant footnote describing this as a documented
+  human-owner/actual-agent-owner discrepancy was removed — the table
+  states the true owner directly now, so there's nothing left to disclaim.
+- **`FORGE_Build_Plan_v8.md` → `v9`:** steps 5.7/5.8 reworded to match
+  (agent applies the label automatically; reviewer confirms). Added a new
+  internal `**v9 update**` log entry at the top of the file, consistent
+  with the file's own v6/v7/v8 self-documenting version-log convention.
+- **`03_FORGE_Tooling_v7.md` → `v8`:** §3.5 (Security Tooling) rewritten to
+  describe the real, live-verified architecture — Security Agent invokes
+  Semgrep/Gitleaks/OWASP Dependency-Check directly as CLI subprocesses
+  inside one GitHub Actions job and is the sole poster of every PR
+  comment/check run/label; no GitHub Actions marketplace step for any of
+  the three tools is used anywhere, contrary to what earlier versions of
+  this document said. Table's "Who Provisions"/cost columns corrected to
+  CLI/binary-install language (pip for Semgrep, standalone binary +
+  PATH for Gitleaks, binary + JDK 21 + NVD API key for Dependency-Check).
+  Provisioning checklist step 8 reworded to match. The open item pointing
+  at the scanner-failure-verdict spec was updated to note the fix as
+  closed (commit `5492305`, see above), per the spec's own cross-reference
+  instruction.
+- Old-version files removed on rename per the project's document-
+  supersession convention (Git history is the version record) —
+  `06_Orchestration_v5.md`/`FORGE_Build_Plan_v8.md`/`03_FORGE_Tooling_v7.md`
+  no longer exist; only the new-version filenames do.
+
+Committed `7d03937`. Both this commit and the security-agent fix commit
+(`5492305`) pushed to `main`.
+
+---
