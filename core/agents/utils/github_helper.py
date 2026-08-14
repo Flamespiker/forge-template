@@ -57,9 +57,15 @@ def _build_app_jwt() -> str:
     private_key = os.environ["FORGE_APP_PRIVATE_KEY"]
 
     now = int(time.time())
+    issued_at = now - 60  # issued-at skewed back 60 s to account for clock drift
     payload = {
-        "iat": now - 60,  # issued-at skewed back 60 s to account for clock drift
-        "exp": now + _JWT_EXPIRY_SECONDS,
+        "iat": issued_at,
+        # exp must be <= 600s after iat (GitHub's max) -- computed from issued_at,
+        # not `now`, so the 60s skew above doesn't push the iat->exp window past
+        # GitHub's limit (previously now+600 on top of an already-skewed iat gave
+        # a 660s window, rejected as "'Expiration time' claim ('exp') is too far
+        # in the future").
+        "exp": issued_at + _JWT_EXPIRY_SECONDS,
         "iss": app_id,
     }
     return jwt.encode(payload, private_key, algorithm="RS256")
