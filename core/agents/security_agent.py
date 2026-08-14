@@ -455,16 +455,27 @@ Do NOT re-judge severity or re-interpret individual findings — these are alrea
 by deterministic code and must be reported exactly as given. Do not write the individual \
 finding descriptions; those are posted separately as inline PR comments.
 
+You will also be told whether any_tool_failed is true — meaning one or more of the three \
+scanners failed to execute at all (crashed, timed out, or never produced its report), as \
+opposed to running cleanly and finding nothing. This is a distinct case from Critical \
+findings and must be worded distinctly: never imply vulnerabilities were found when the \
+real story is that the scan is incomplete and the result is simply unknown.
+
 Your job is only to write a brief, clear Markdown overview comment for a human reviewer \
 (the Security Reviewer, per Document 6 Gate 5). Include:
-- A one-line overall verdict (blocked / clear).
+- A one-line overall verdict (blocked / incomplete / clear).
 - Finding counts by severity, and by tool.
 - If Critical findings exist: a clear note that the security-check is failing and blocking \
 merge until they're resolved — do not imply anything else will unblock it.
-- If there are no Critical findings: a brief note that the security-check passed and, if \
-applicable, that `security-approved` was applied to the tracking issue — but that a Security \
-Reviewer's PR approval is still required regardless of finding severity (Document 6 Gate 5: \
-even an all-clear scan needs an explicit human approval).
+- If any_tool_failed is true and there are no Critical findings: a clear note that the scan \
+is INCOMPLETE — one or more scanners failed to run, so the true security status of this PR \
+is not yet known — and that security-check is failing for that reason, not because a \
+vulnerability was found. State plainly which tool(s) failed. Do not apply, or say was applied, \
+`security-approved` in this case.
+- If there are no Critical findings and no tool failures: a brief note that the security-check \
+passed and, if applicable, that `security-approved` was applied to the tracking issue — but \
+that a Security Reviewer's PR approval is still required regardless of finding severity \
+(Document 6 Gate 5: even an all-clear scan needs an explicit human approval).
 
 Output format — this is strict:
 Respond with ONLY a single JSON object, no markdown code fences, no prose before or after it. \
@@ -501,6 +512,7 @@ def run_security_agent(
         depcheck_result = _run_dependency_check(service_dir, request_id)
 
         all_results = [semgrep_result, gitleaks_result, depcheck_result]
+        any_tool_failed = any(not r.ran for r in all_results)
         all_findings = [f for r in all_results for f in r.findings]
 
         counts_by_severity = {sev: 0 for sev in (_SEV_CRITICAL, _SEV_HIGH, _SEV_MEDIUM, _SEV_LOW)}
@@ -508,8 +520,8 @@ def run_security_agent(
             counts_by_severity[f.severity] += 1
         has_critical = counts_by_severity[_SEV_CRITICAL] > 0
 
-        check_conclusion = "failure" if has_critical else "success"
-        label_to_apply = None if has_critical else "security-approved"
+        check_conclusion = "failure" if (has_critical or any_tool_failed) else "success"
+        label_to_apply = None if (has_critical or any_tool_failed) else "security-approved"
 
         commit_sha = None
         if not dry_run:
@@ -524,6 +536,7 @@ def run_security_agent(
                 r.tool: len(r.findings) for r in all_results
             },
             "has_critical": has_critical,
+            "any_tool_failed": any_tool_failed,
             "check_conclusion": check_conclusion,
             "label_to_apply": label_to_apply,
         }
@@ -585,7 +598,13 @@ def run_security_agent(
         print("=" * 20, "check run (not created)", "=" * 20)
         print(f"name={_CHECK_RUN_NAME} conclusion={check_conclusion}")
         print("=" * 20, "label (not applied)", "=" * 20)
-        print(label_to_apply or "(none — Critical findings present)")
+        if label_to_apply:
+            reason = label_to_apply
+        elif has_critical:
+            reason = "(none — Critical findings present)"
+        else:
+            reason = "(none — one or more scanners failed to run; see tool_run_failures)"
+        print(reason)
         logger.info(
             "Dry run complete for request %s -- nothing posted, nothing labeled.",
             request_id,
@@ -597,11 +616,18 @@ def run_security_agent(
     from core.agents.utils.github_helper import post_pr_comment
     post_pr_comment(pr_number, overview_markdown)
 
+    if has_critical:
+        check_run_title = "Security scan: blocked"
+    elif any_tool_failed:
+        check_run_title = "Security scan: incomplete — scanner failure"
+    else:
+        check_run_title = "Security scan: passed"
+
     create_check_run(
         head_sha=commit_sha,
         name=_CHECK_RUN_NAME,
         conclusion=check_conclusion,
-        title="Security scan: blocked" if has_critical else "Security scan: passed",
+        title=check_run_title,
         summary=overview_markdown,
     )
 
