@@ -8,6 +8,8 @@
 
 **v8 update (2026-08-13):** Step 4.10 (full dry-run, `DRYRUN-2026-01`) checked off — ran for real, chat 39, Phase 4 fully closed. Phase 5 (App 1 — `REQ-2026-02`, Inactive User & License Auditor) substantially complete: 5.1–5.8 and 5.11 checked off against real evidence in the context doc and `FORGE-Phase5-Closeout.md`. **5.9 checked with a caveat — staging only, production deliberately not attempted** (not appropriate for a Phase 5 validation run per Mike's call; App 1's Azure/D365 resources have since been decommissioned entirely, so a production deploy of this specific app is now moot). **5.10 left unchecked** — some real actuals were captured mid-run (Stage 1 cost, a Stage 3 Managed Agents timing/cost data point) but never fully transcribed into `docs/FORGE-pipeline-cost-log.md`; that pass is still outstanding and should happen before Phase 6, per the close-out doc's go/no-go read. See `FORGE-Phase5-Closeout.md` for full detail on what shipped, what was descoped (R-001), every confirmed-not-fixed structural gap, and the real manual-intervention count.
 
+**v9 update (2026-08-13, doc cleanup pass):** Corrected the label-ownership wording in steps 5.7/5.8 — `qa-approved`/`security-approved` are applied automatically by the QA/Security Agents on a clean pass, not manually by a reviewer; matches the same correction made to Document 6 (Orchestration Manager Guide) this same pass. No step status changes.
+
 ---
 
 ## Phase 1 — Repo Foundation
@@ -200,8 +202,8 @@
 - [x] 5.4 Stage 1 — review Requirements Agent draft, approve ADO items, apply `requirements-approved`
 - [x] 5.5 Stage 2 — review Design Agent output (design.md, openapi.yaml, tasks.md), approve design PR, apply `design-approved`
 - [x] 5.6 Stage 3 *(updated — ADR-0010)* — review implementation PR (backend + frontend + tests), confirm the coordinator ran Backend/Frontend/Test Writer as subagents in parallel via the Claude Console session audit trail, approve PR *(required a real recovery cycle — Stage 3's completion-detection bug, see `FORGE-Stage3-Completion-Detection-Spec.md` — not a clean first pass)*
-- [x] 5.7 Stage 4 — review QA report, confirm bugs filed (or clean run), apply `qa-approved` *(passed on the 3rd of 3 automated attempts against real bugs, not a clean first pass)*
-- [x] 5.8 Stage 5 — review Security Agent findings, confirm no Critical blockers, apply `security-approved`
+- [x] 5.7 Stage 4 — review QA report, confirm bugs filed (or clean run); `qa-approved` applied automatically by the agent on the clean pass *(3rd of 3 automated attempts against real bugs, not a clean first pass)*
+- [x] 5.8 Stage 5 — review Security Agent findings, confirm no Critical blockers; `security-approved` applied automatically by the agent
 - [x] 5.9 Stage 6 — confirm staging deployment, click production approval gate, confirm production deployment *(staging only — confirmed live and working in a real browser; production deliberately not attempted, not appropriate for a validation run. Moot now: this app's infrastructure has since been decommissioned.)*
 - [ ] 5.10 Record actuals *(updated — ADR-0010)*: GitHub Actions minutes consumed, Anthropic API token cost, and Managed Agents session-hours for the Stage 3 run — update Document 3 cost summary *(partial — some real figures captured in the context doc, never fully transcribed into `docs/FORGE-pipeline-cost-log.md`. Outstanding — do before Phase 6.)*
 - [x] 5.11 Document all fixes made during App 1 run — anything patched mid-run becomes a follow-up task *(see `FORGE-Phase5-Closeout.md` §4–5 for the full list of confirmed structural gaps and manual interventions, and §7–8 for what's carried forward into Phase 6)*

@@ -222,10 +222,10 @@ The Design Agent reads `requirements.md` from `pipeline-state` and has opened a 
 The Implementation Coordinator (a Managed Agents session) has run the Backend, Frontend, and Test Writer subagents in parallel on a shared sandbox filesystem, synthesized their output, committed the complete implementation to `feature/<request-id>`, and opened a **draft** PR. Review the diff. The coordinator has flagged any issues encountered in the PR description, and a per-subagent audit trail is available in the Claude Console alongside the GitHub Actions log. Click **Ready for review** before GitHub will allow the PR to be approved and merged — the coordinator opens it as draft, the same as the Design Agent's PR in Gate 2. Approve or request changes — the coordinator does not merge its own PR, and does not click Ready for review on your behalf.
 
 **Gate 4 — QA sign-off:**
-The QA Agent has posted a test report as a PR comment. If all tests pass, apply `qa-approved`. If failures exist, the agent has already filed ADO bug tickets and the implementation loop restarts. You do not need to act on failures — the loop handles itself unless it exceeds the retry limit (see failure handling below).
+The QA Agent has posted a test report as a PR comment. If all tests pass, the agent applies `qa-approved` automatically — there is nothing for the QA Reviewer to apply manually. Review the report to confirm the pass is real. If failures exist, the agent has already filed ADO bug tickets and the implementation loop restarts. You do not need to act on failures — the loop handles itself unless it exceeds the retry limit (see failure handling below).
 
 **Gate 5 — Security sign-off:**
-The Security Agent has posted severity-tagged findings as inline PR comments. A Critical finding has already set a failing check that blocks merge. If there are no Criticals, or after Criticals are resolved, the Technical Approver applies `security-approved`.
+The Security Agent has posted severity-tagged findings as inline PR comments. A Critical finding has already set a failing check that blocks merge. If there are no Criticals, the agent applies `security-approved` automatically — the Security Reviewer's role is to review the findings and confirm the pass, not to apply the label. After Criticals are resolved and a clean re-scan runs, the label is applied the same way.
 
 **Gate 6 — Production deployment:**
 Staging deploys automatically once all prior gates pass. To approve production, open the **`production`** GitHub Environment approval request and click **Approve**. The Deploy Agent runs the production deployment.
@@ -380,11 +380,11 @@ The following labels are used in the FORGE tracking issue to drive pipeline stat
 | `clarification-complete` | BA | Triggers Requirements Agent |
 | `requirements-approved` | Technical Approver | Writes `requirements.md`/`ado-work-items.json` to the monorepo's `pipeline-state` branch; creates ADO work items; triggers Design Agent |
 | `design-approved` | Technical Approver, after merging the design PR | Triggers the Implementation Coordinator (Stage 3) — merging the design PR alone does not start Stage 3, this label does |
-| `qa-approved` | QA Reviewer | Clears QA gate; combined with `security-approved` to enable production deploy |
-| `security-approved` | Security Reviewer | Clears security gate; combined with `qa-approved` to enable production deploy |
+| `qa-approved` | QA Agent (applied automatically on a clean pass) | Clears QA gate; combined with `security-approved` to enable production deploy |
+| `security-approved` | Security Agent (applied automatically on a clean pass, no Critical findings) | Clears security gate; combined with `qa-approved` to enable production deploy |
 | `qc-retry-limit-reached` | QA Agent | Halts pipeline; requires Orchestration Manager triage |
 
-PR events (open, merge) and GitHub Environment approvals handle the remaining state transitions — these are not label-driven. Note that `qa-approved` and `security-approved` are shown above with their documented human-reviewer owners; in practice both are applied directly by the QA Agent and Security Agent respectively when their automated checks pass cleanly (see Part 2, Gates 4–5) — this discrepancy between documented and built behavior is a known, separately-tracked open item, not resolved by this pass.
+PR events (open, merge) and GitHub Environment approvals handle the remaining state transitions — these are not label-driven.
 
 **On `pipeline-state`:** several of the labels above interact with a branch, not just each other. `requirements-approved` causes writes to `pipeline-state`; `design-approved`'s Design Agent reads from it. This branch exists because `main` is protected (required reviewers) to gate real application-code merges, while Requirements-stage writes are orchestration state committed directly, without a PR — protecting `main` meant giving those direct commits a home outside it. See Document 2 §9 for the full traceability-chain diagram reflecting this.
 
