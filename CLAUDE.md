@@ -2351,3 +2351,92 @@ ACR images pushed during this verification
 (`req-2026-02-auditor-api:d8823cff...`, `req-2026-02-frontend:d8823cff...`)
 were left in place, consistent with the existing "ACR images left in
 place, low-priority" convention from the original Phase 5 decommission.
+
+---
+
+### `request_id` derivation & `resolve_feature_pr()` staleness fixes (per `docs/FORGE-RequestId-FeaturePR-Resolution-Spec.md`)
+
+Two independent structural bugs, confirmed unrelated (different files,
+mechanisms, and consumers — see the spec's own investigation section),
+fixed per spec. Both pre-flight-verified against live file content before
+editing; line numbers in the spec were descriptive, not authoritative, and
+matched the live files as found.
+
+**Fix 1 — `request_id` derivation (`04-qa.yml`, `05-security.yml`).** Both
+workflows previously derived `request_id` via a bare bash prefix-strip
+(`request_id="${HEAD_REF#feature/}"`), with no validation that the result
+named a real `services/<request_id>/` directory — confirmed live as the
+root cause of the exact silent-false-positive class already seen once (the
+REQ-2026-02 `feature/REQ-2026-02-license-status-fix` incident: wrong
+`request_id` → both suites `not_applicable` → `qa-approved` applied with
+zero real test coverage). Fixed by adding a new "Resolve request id" step
+to both workflows, immediately after "Resolve tracking issue number",
+calling the already-existing, already-proven `resolve-request-id` glue
+subcommand (marker-based, same mechanism every stage from
+`01-requirements.yml` onward already trusts) instead of re-parsing
+`HEAD_REF`. Both workflows' two remaining `HEAD_REF`-derived
+`request_id` usages (frontend dependency install in `04-qa.yml`; the QA/
+Security Agent invocation in both files) now read
+`${{ steps.request_id.outputs.request_id }}`. `HEAD_REF` itself left in
+the env block unchanged — no other consumer, no reason to remove it.
+No changes needed to `workflow_glue.py`, `qa_agent.py`, or
+`security_agent.py` for this fix — `resolve-request-id` already existed
+and already did the right thing.
+
+**Verified live, read-only, no mutation:** ran
+`python -m core.agents.workflow_glue resolve-request-id --issue-number 5`
+directly against the real tracking issue for REQ-2026-02 — returned
+`request_id=REQ-2026-02`, confirming the subcommand this fix now relies on
+resolves correctly against real issue history.
+
+**Fix 2 — `resolve_feature_pr()` staleness (`workflow_glue.py`).** The
+function previously scanned tracking-issue comments for the *first*
+`stage=implementation` marker and returned that PR's number/SHA forever —
+stale the moment a follow-up feature PR opened on the same issue (e.g. the
+R-001 descope pattern), with no mechanism to detect or prefer a newer one.
+`06-deploy.yml` uses this to decide what to actually build and deploy, so
+a stale result risks silently deploying a superseded commit.
+
+Fixed by asking GitHub directly for the PR that's actually open right now,
+using Stage 3's own deterministic branch-naming convention
+(`feature/<request_id>`, confirmed in `implementation_coordinator.py`)
+instead of trusting comment history:
+- New `list_open_prs_by_head(branch_name)` in `github_helper.py` — lists
+  open PRs in `forge-demo-apps` whose head branch matches exactly, via the
+  GitHub App installation token (same auth context as `get_pr()`).
+- `resolve_feature_pr()` rewritten: resolves `request_id` via the existing
+  `resolve_request_id()` (stable for the life of the issue), looks up
+  `feature/<request_id>`'s open PRs, and returns the single match. Zero
+  matches or more than one both raise `ValueError` loudly — no silent
+  fallback to "pick the first one." No signature change; `06-deploy.yml`
+  needed no edits at all, since it only ever consumed the function's
+  `pr_number`/`head_sha` outputs, not its internals.
+- `_IMPLEMENTATION_STAGE_MARKER`/`_PR_URL_RE` removed — confirmed via grep
+  first that nothing else in the file referenced either constant, so they
+  were genuinely dead code after the rewrite, not just orphaned by it.
+
+**Verified live and via simulation, per the spec's own acceptance
+criteria:**
+- Real, read-only call against tracking issue #5 (REQ-2026-02):
+  `resolve_feature_pr(5)` raised `ValueError` — correct, since both of
+  REQ-2026-02's feature PRs (#15, #18) are merged/closed and no
+  `feature/REQ-2026-02` PR is currently open. This *is* the real
+  historical case the spec asked to check against (an issue whose
+  Implementation-stage comment points at a since-superseded PR) — the old
+  code would have returned stale PR #15 data forever; the new code
+  correctly refuses to guess instead.
+- Simulated (mocked `list_open_prs_by_head`/`resolve_request_id`, no live
+  API calls) single/zero/multiple-open-PR cases: single → returns
+  `(pr_number, head_sha)` correctly; zero and multiple both raise
+  `ValueError` with the expected message; confirms all three branches
+  independent of live state, since no `feature/*` PR is open anywhere
+  right now to exercise the single-match path live.
+
+**Both fixes:** `py_compile` clean on `workflow_glue.py`/`github_helper.py`;
+both edited workflow YAML files parse cleanly via `yaml.safe_load`. Not yet
+committed — pending confirmation. Per the spec's own handoff notes, intended
+as two separate commits: Fix 1 (`04-qa.yml` + `05-security.yml` together)
+and Fix 2 (`github_helper.py` + `workflow_glue.py` together).
+
+---
+place, low-priority" convention from the original Phase 5 decommission.
