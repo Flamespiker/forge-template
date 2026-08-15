@@ -335,31 +335,73 @@ def _frontend_test_script_exists(frontend_dir: str) -> bool:
     return bool(test_script and test_script.strip())
 
 
+def _detect_frontend_test_runner(frontend_dir: str) -> str:
+    """
+    Returns "vitest" or "jest". Vitest and Jest's CLIs are not flag-compatible
+    (Vitest hard-rejects an unrecognized flag like Jest's `--ci` and exits
+    before collecting any tests — this is what broke QA for REQ-2026-03,
+    whose frontend uses Vitest), so the runner must be detected before
+    invocation, not assumed.
+
+    Checks, in order: a vitest.config.{ts,js,mjs} file (the strongest signal —
+    only present on a real Vitest project), then "vitest" in package.json's
+    devDependencies/dependencies. Defaults to "jest" — the core-layer mandate
+    (ADR-0008) and the existing, working behavior for a project like
+    REQ-2026-02's frontend that has neither signal.
+    """
+    frontend_path = Path(frontend_dir)
+    if any(
+        (frontend_path / f"vitest.config.{ext}").exists()
+        for ext in ("ts", "js", "mjs")
+    ):
+        return "vitest"
+
+    package_json_path = frontend_path / "package.json"
+    try:
+        package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "jest"
+
+    deps = {**package_json.get("dependencies", {}), **package_json.get("devDependencies", {})}
+    if "vitest" in deps:
+        return "vitest"
+
+    return "jest"
+
+
 def _run_frontend_tests(frontend_dir: str) -> TestSuiteResult:
     """
-    Run `npm test -- --ci --json --outputFile=...` and parse the Jest JSON report.
+    Detects the actual frontend test runner (see _detect_frontend_test_runner())
+    and invokes it with the correct CLI flags, then parses the resulting JSON
+    report.
 
-    Assumes the team's frontend package.json "test" script invokes Jest
-    directly and forwards CLI flags after `--` (the core-layer default per
-    ADR-0008 — Jest mandated for frontend tests). A team-layer test script that
-    doesn't forward args (e.g. a wrapped runner) would break this and needs
-    adjusting — not handled here, flagged as a known assumption.
+    - Vitest: `npx vitest run --reporter=json --outputFile=...`. Vitest's `json`
+      reporter deliberately mirrors Jest's report schema (numPassedTests,
+      numFailedTests, testResults[].assertionResults[] with the same field
+      names) — confirmed empirically against a real Vitest run, not assumed —
+      so _parse_jest_json() parses both without a separate Vitest-specific
+      parser.
+    - Jest (fallback/existing behavior): `npm test -- --ci --json
+      --outputFile=...`, forwarded through the team's package.json "test"
+      script per ADR-0008 — unchanged, since REQ-2026-02's frontend already
+      relies on this working.
     """
+    runner = _detect_frontend_test_runner(frontend_dir)
+
     with tempfile.TemporaryDirectory() as results_dir:
-        json_path = Path(results_dir) / "jest-results.json"
+        json_path = Path(results_dir) / "frontend-results.json"
+        if runner == "vitest":
+            command = ["npx", "vitest", "run", "--reporter=json", f"--outputFile={json_path}"]
+        else:
+            command = ["npm", "test", "--", "--ci", "--json", f"--outputFile={json_path}"]
+
         try:
-            result = _run_shell(
-                [
-                    "npm", "test", "--",
-                    "--ci", "--json", f"--outputFile={json_path}",
-                ],
-                cwd=frontend_dir,
-            )
+            result = _run_shell(command, cwd=frontend_dir)
         except subprocess.TimeoutExpired:
             return TestSuiteResult(
                 suite="frontend", ran=False, passed=0, failed=0, total=0,
                 failures=[],
-                run_failure_message=f"`npm test` timed out after {_TEST_TIMEOUT_SECONDS}s.",
+                run_failure_message=f"`{' '.join(command)}` timed out after {_TEST_TIMEOUT_SECONDS}s.",
             )
 
         if not json_path.exists():
@@ -368,7 +410,7 @@ def _run_frontend_tests(frontend_dir: str) -> TestSuiteResult:
                 suite="frontend", ran=False, passed=0, failed=0, total=0,
                 failures=[],
                 run_failure_message=(
-                    "Frontend test suite failed to produce a Jest JSON report — likely "
+                    f"Frontend test suite ({runner}) failed to produce a JSON report — likely "
                     f"a build/syntax error, not a test failure. Tail of output:\n\n{tail}"
                 ),
             )
