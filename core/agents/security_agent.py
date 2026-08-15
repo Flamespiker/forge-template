@@ -330,16 +330,20 @@ def _run_dependency_check(service_dir: str, request_id: str) -> ScanResult:
             )
 
         try:
-            _run_shell(command, cwd=service_dir)
+            result = _run_shell(command, cwd=service_dir)
         except subprocess.TimeoutExpired:
             return ScanResult(tool="dependency-check", ran=False, findings=[],
                                run_failure_message=f"dependency-check timed out after {_TOOL_TIMEOUT_SECONDS}s.")
 
         json_path = Path(results_dir) / "dependency-check-report.json"
         if not json_path.exists():
+            tail = (result.stdout or "")[-3000:] + (result.stderr or "")[-1000:]
             return ScanResult(
                 tool="dependency-check", ran=False, findings=[],
-                run_failure_message="dependency-check failed to produce dependency-check-report.json.",
+                run_failure_message=(
+                    "dependency-check failed to produce dependency-check-report.json. "
+                    f"Tail of output:\n\n{tail}"
+                ),
             )
         return _parse_dependency_check(json_path)
 
