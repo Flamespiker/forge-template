@@ -123,7 +123,7 @@ jobs:
         if: steps.guard.outputs.proceed == 'true'
         run: |
           curl -sSfL -o dependency-check.zip \
-            https://github.com/jeremylong/DependencyCheck/releases/download/v9.2.0/dependency-check-9.2.0-release.zip
+            https://github.com/jeremylong/DependencyCheck/releases/download/v12.1.0/dependency-check-12.1.0-release.zip
           unzip -q dependency-check.zip -d "$HOME/dependency-check-dist"
           chmod +x "$HOME/dependency-check-dist/dependency-check/bin/dependency-check.sh"
           echo "$HOME/dependency-check-dist/dependency-check/bin" >> "$GITHUB_PATH"
