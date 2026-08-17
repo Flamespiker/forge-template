@@ -315,6 +315,7 @@ def _run_dependency_check(service_dir: str, request_id: str) -> ScanResult:
         command = [_dependency_check_executable(),
                    "--project", request_id,
                    "--scan", ".",
+                   "--exclude", "**/node_modules/**",
                    "--format", "JSON",
                    "--out", results_dir]
 
