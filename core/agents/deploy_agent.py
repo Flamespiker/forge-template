@@ -146,6 +146,11 @@ _TARGET_PORTS = {"web": 8080, "frontend": 3000}  # worker units get no ingress a
 _SENSITIVE_FLAGS = {"--registry-password", "-p"}  # redacted before logging/printing
 
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+_NON_ALNUM_RUN = re.compile(r"[^a-z0-9]+")
+_VALID_CONTAINER_APP_NAME = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+# Azure CLI's own stated constraint (`az containerapp create --help`, confirmed
+# live 2026-08-17): "must be less than 32 characters" -- i.e. len < 32, not <=.
+_MAX_CONTAINER_APP_NAME_LEN = 32
 
 
 @dataclass
@@ -201,8 +206,57 @@ def _redact_command(command: list[str]) -> list[str]:
 
 
 def _slugify(name: str) -> str:
-    """'DocumentApi' -> 'document-api', 'EmailWorker' -> 'email-worker', 'frontend' -> 'frontend'."""
-    return _CAMEL_BOUNDARY.sub("-", name).lower()
+    """
+    'DocumentApi' -> 'document-api', 'EmailWorker' -> 'email-worker',
+    'OnCallRosterTracker.Api' -> 'on-call-roster-tracker-api', 'frontend' -> 'frontend'.
+
+    Splits on PascalCase word boundaries AND any literal non-alphanumeric
+    character (e.g. '.') as equivalent word separators -- both collapse to a
+    single '-', then any leading/trailing '-' is stripped. Previously only
+    PascalCase boundaries were converted; a literal '.' passed straight
+    through untouched, so a project shaped like Foo.Bar produced a stray '.'
+    immediately adjacent to the '-' inserted before the next boundary (e.g.
+    'Tracker.-Api') -- an invalid Docker tag ('invalid reference format').
+    Confirmed live on REQ-2026-03's OnCallRosterTracker.Api.
+    """
+    camel_split = _CAMEL_BOUNDARY.sub("-", name)
+    return _NON_ALNUM_RUN.sub("-", camel_split.lower()).strip("-")
+
+
+def _validate_unit_name(name: str, project_label: str) -> None:
+    """
+    Raises ValueError, naming the offending project, if `name` (the full
+    "<request-id>-<slug>" Container App / image name) would be rejected by
+    Docker's tag grammar or Azure Container Apps' naming rules. A loud,
+    early, diagnosable failure here is strictly better than letting an
+    invalid name reach `docker build`/`az containerapp create` and fail
+    there instead (the original REQ-2026-03 failure mode this closes).
+
+    `_VALID_CONTAINER_APP_NAME` alone covers both rule sets' character
+    constraints (lowercase alphanumeric segments joined by single hyphens,
+    starting with a letter -- Azure's stricter of the two on start
+    character; Docker also permits a leading digit or '.'/'_'/'__'
+    separators, but `_slugify()` above never emits those, so this simplified
+    pattern is sufficient). Length is Azure-specific and checked separately,
+    since Docker has no such limit.
+    """
+    if not _VALID_CONTAINER_APP_NAME.match(name):
+        raise ValueError(
+            f"Computed Container App / image name '{name}' (from project "
+            f"'{project_label}') is not a valid Docker tag / Azure Container App "
+            "name -- must be lowercase alphanumeric segments separated by single "
+            "hyphens, starting with a letter."
+        )
+    if len(name) >= _MAX_CONTAINER_APP_NAME_LEN:
+        raise ValueError(
+            f"Computed Container App name '{name}' (from project '{project_label}') "
+            f"is {len(name)} characters -- Azure Container Apps requires names "
+            f"under {_MAX_CONTAINER_APP_NAME_LEN} characters. This project's name "
+            "does not fit the '<request-id>-<slug>' naming convention as-is; this "
+            "needs an explicit naming decision (e.g. a shorter project directory "
+            "name), not a Deploy Agent truncation workaround -- flagged, not "
+            "silently shortened."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -693,6 +747,7 @@ def run_deploy_agent(
             full_image = f"{acr_login_server}/{unit.name}:{commit_sha}"
             result = DeployResult(unit=unit, image=full_image)
             try:
+                _validate_unit_name(unit.name, unit.project_label)
                 build_args = {"NEXT_PUBLIC_API_BASE_URL": f"https://{backend_fqdn}"} if (
                     unit.unit_type == "frontend" and backend_fqdn
                 ) else None
