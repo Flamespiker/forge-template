@@ -715,6 +715,24 @@ def run_deploy_agent(
         # not per unit -- see _get_env_default_domain().
         frontend_unit = next((u for u in units if u.unit_type == "frontend"), None)
         backend_web_unit = next((u for u in units if u.unit_type == "web"), None)
+        # A backend unit whose own name is invalid (bad characters, or too
+        # long for Azure) will never actually build/deploy -- see the
+        # per-unit try/except below, which will record its own error. Don't
+        # let that same broken name reach the frontend's build-arg / this
+        # unit's own FRONTEND_ORIGIN wiring first: validate here, before
+        # either FQDN is derived, and fall back to the same "no web backend
+        # unit" no-wiring behavior rather than baking in an unreachable URL.
+        if backend_web_unit is not None:
+            try:
+                _validate_unit_name(backend_web_unit.name, backend_web_unit.project_label)
+            except ValueError as name_exc:
+                logger.warning(
+                    "Backend web unit %s has an invalid name and will fail to build -- "
+                    "treating as if no 'web' backend unit exists for cross-service wiring "
+                    "purposes (NEXT_PUBLIC_API_BASE_URL/FRONTEND_ORIGIN will not be set): %s",
+                    backend_web_unit.name, name_exc,
+                )
+                backend_web_unit = None
         backend_fqdn: str | None = None
         frontend_fqdn: str | None = None
         if frontend_unit is not None:
