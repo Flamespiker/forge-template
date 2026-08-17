@@ -2535,3 +2535,292 @@ Committed `7d03937`. Both this commit and the security-agent fix commit
 (`5492305`) pushed to `main`.
 
 ---
+
+### REQ-2026-03 (On-Call Roster Tracker) — Design retry, Implementation recovery, and a real PR-hardening cycle (2026-08-15/16/17)
+
+A single long session covering REQ-2026-03 end-to-end from a failed Design
+run through a hardened, re-scanned PR #20. Documented here as one section
+since each step's fix fed directly into the next verification.
+
+**Design Agent (Stage 2) — transient failure, not a repeatable bug.** The
+automated `02-design.yml` run failed with `yaml.safe_load()` rejecting the
+model's `openapi_yaml` (an unquoted colon inside a `message:` example value —
+`"Only coordinators can create ..."` parsed as a new mapping key). Retried
+standalone via `python -m core.agents.design_agent --issue-number 6
+--request-id REQ-2026-03` (confirmed this CLI path already exists, same
+pattern as `implementation_coordinator.py`) — **succeeded cleanly on the
+first retry**, no repeat of the bug. Draft PR
+[#19](https://github.com/Flamespiker/forge-demo-apps/pull/19) opened on
+`design/REQ-2026-03`. Since it didn't reproduce, no prompt/validation fix was
+made — logged as a one-off model fluke, not a confirmed repeatable gap.
+Separately confirmed PR #19's `design.md`/`openapi.yaml`/`tasks.md` correctly
+say nothing about the `services/<request-id>/` path convention — that's by
+design: the path is computed deterministically in
+`implementation_coordinator.py` (`service_root = f"services/{request_id}"`)
+from the CLI-supplied request-id, not parsed out of Design's own artifacts.
+
+**Real bug found and fixed while retrying Design: `_build_app_jwt()`'s `exp`
+claim exceeded GitHub's 10-minute `iat`-to-`exp` window.** `github_helper.py`
+computed `exp = now + 600` on top of an `iat` already skewed back 60s for
+clock drift, giving a 660s window — GitHub started hard-rejecting this with
+`401: "'Expiration time' claim ('exp') is too far in the future"`, silently
+blocking every App-token operation project-wide (not specific to Design).
+Fixed by computing `exp` from `issued_at` instead of `now`. Verified live via
+`GET /app` (200 OK) before retrying anything. **Committed `f501146` on
+`main`** (`forge-template` has no branch protection — confirmed via a live
+`gh api .../branches/main/protection` 404 — direct-to-`main` commits are the
+established, intentional pattern for this repo, unlike `forge-demo-apps`).
+
+**Implementation Coordinator (Stage 3) — a genuine Anthropic billing
+exhaustion, confirmed from the real event stream, not inferred from the
+stopping point.** The first real run (session `sesn_0135RbeieLaZVoamUVymowtT`)
+hit a `session.error` of `type: "billing_error"` ("Your credit balance is too
+low...") at the exact moment Test Writer was mid-flight — this event fired at
+the **session level**, not just Test Writer's own thread, so the coordinator
+never got a further turn to package `implementation.tar.gz`. Confirmed this
+was a genuine, previously-undiscovered gap in Fix 1's completion detection
+(from the REQ-2026-02 session): `wait_for_all_threads_idle()` only checks
+thread `status`, never `session.error` events or non-`end_turn` stop reasons,
+so a billing-exhausted session (every thread reports `idle` once nothing can
+run) was indistinguishable from a genuinely finished one. Confirmed via a
+live `GET /sessions/{id}` that this session was fully `terminated` and
+unrecoverable (`resources: []`) — `--recover-session` would correctly refuse
+it ("genuinely failed -- not recoverable by this tool"), consistent with its
+own existing design. Backend/Frontend had each finished real work before the
+billing wall hit (confirmed via each subagent's own thread events: Backend
+wrote 29 files, Frontend 38, both ending in a clean `session.thread_status_idle`)
+but none of it was ever persisted to `/mnt/session/outputs/`, so it's
+unrecoverable — this had to be a fresh run, not a resume.
+
+**Fresh run (session `sesn_01BJBnYKAc6ontnMnUxDFmy8`) succeeded once funds
+were restored**, but the local `implementation_coordinator.py` process itself
+got killed by the invoking shell's own timeout while `run_implementation_stage()`
+was still polling — same class of incident as the REQ-2026-01/DRYRUN-2026-01
+precedents. Per the standing rule, did **not** re-invoke the coordinator.
+Confirmed live the session had actually finished server-side
+(`status: "idle"`, not archived, `implementation.tar.gz` present, 77,439
+bytes) and recovered it via `--recover-session` — dry-run first (88 files,
+sanity check passed), then real: committed to `feature/REQ-2026-03` (SHA
+`763c27c`), draft **PR [#20](https://github.com/Flamespiker/forge-demo-apps/pull/20)**
+opened, session/environment/coordinator/3 subagents all archived cleanly.
+
+---
+
+### PR #20 — three CI failures investigated, four real fixes shipped, one Next.js CVE remediation cycle
+
+QA and Security both failed on PR #20's first real run. Investigated each to
+a confirmed root cause (not guessed) before fixing anything, per explicit
+instruction each time.
+
+**Finding 1 — OWASP Dependency-Check: INCOMPLETE, generic error only.**
+`NVD_API_KEY` was never set as a `forge-template` Actions secret (confirmed:
+blank in the live run's env dump, despite a working key existing locally).
+Separately, `security_agent.py`'s `_run_dependency_check()` never captured
+the scanner's `stdout`/`stderr` on a report-missing failure (unlike
+`_run_semgrep()`'s equivalent code) — worse than just "no detail": since the
+`CompletedProcess` was never assigned to a variable, this branch would have
+raised a bare `NameError` instead of a clean `ScanResult`, had `TimeoutExpired`
+not already been ruled out first. **Fixed, committed `a99471f` on `main`** —
+now captures and surfaces a real tail of tool output on this failure path,
+matching the semgrep pattern exactly.
+
+**Finding 2 — Backend "logger is already frozen" (ADO #153–155), fully
+root-caused via a real local repro (not just the error text).** All 6
+integration test classes used `IClassFixture<IntegrationTestFactory>`
+(one `WebApplicationFactory<Program>` host built per class); `Program.cs`
+assigns Serilog's process-wide static `Log.Logger` via `CreateBootstrapLogger()`
+then freezes it in `UseSerilog()`. xUnit runs different test classes in
+parallel by default, so N separate host builds raced to freeze that one
+static logger — non-deterministic, confirmed by reproducing locally and
+hitting a *different* failing test than CI did. **Fixed in `forge-demo-apps`
+on `feature/REQ-2026-03` (commit `42763d0`)**: all 6 classes now share a
+single `IntegrationTestFactory` instance via an xUnit collection fixture
+(`[CollectionDefinition("Integration Tests")]` + `[Collection(...)]` on each
+class) — removes the race by construction (one host, ever) rather than just
+serializing it away, and is faster than disabling parallelization would have
+been. Verified: no test assertions relied on per-class DB isolation (read all
+6 files first); full suite re-run 3× locally, 39/39 passed every time, no
+"frozen" errors; suite runtime dropped from ~22s to 2–7s.
+
+**Finding 3 — Frontend suite silently not collecting.** `qa_agent.py`
+hardcoded Jest-style flags (`--ci --json --outputFile=...`) regardless of
+which runner the target project actually uses; REQ-2026-03's frontend uses
+Vitest (`"test": "vitest run"`), and Vitest's CLI hard-rejects the
+unrecognized `--ci` flag, crashing before collecting a single test — the
+truncated PR comment only showed Vitest's internal call-stack tail, not the
+real `CACError: Unknown option '--ci'`. **Fixed, committed `55f9ee9` on
+`main`**: new `_detect_frontend_test_runner()` checks for a
+`vitest.config.{ts,js,mjs}` file or `"vitest"` in `package.json`'s deps,
+defaulting to `jest` (REQ-2026-02's frontend, unaffected); Vitest's own
+`--reporter=json` output deliberately mirrors Jest's schema closely enough
+that `_parse_jest_json()` handles both without a separate parser. Verified
+against both real checkouts (REQ-2026-03 → vitest detected, no more crash;
+REQ-2026-01 → jest detected, unchanged).
+
+**Re-running the fixes together surfaced a real GitHub Actions gotcha:**
+`gh run rerun` pins to the exact commit SHA that existed at the *original*
+dispatch event, not current `main` — confirmed empirically (the checkout log
+showed the stale `55f9ee9`, not `a99471f`, on a rerun fired after the
+security fix landed). A genuinely fresh `repository_dispatch` (same payload
+shape as the Phase 4 verification) was required to actually test all fixes
+together, and correctly picked up current `main`.
+
+**That fresh run surfaced two more findings, one old and one brand new:**
+- QA came back `qa-approved` (attempt 4/3 — the retry cap only ever gates the
+  *failure* label branch, never blocks a pass; confirmed via `04-qa.yml`
+  having no attempt-count guard clause at all, and via `qa_agent.py`'s own
+  comment: *"Attempt 4 of 3 (retry limit had been reached prior to this run;
+  tests ultimately passed...)"*). But frontend showed `0 passed / 0 failed /
+  0 total` reported as a **pass** — a real, separate, still-unfixed gap:
+  `_parse_jest_json()` only counts individual test pass/fail, never checks
+  whether entire test *files* failed to even collect (Vitest's own
+  `success: false` / per-file `status: "failed"`). Root cause of the 0/0/0:
+  all 4 frontend test files had a pre-existing, unrelated bad-relative-import
+  bug (`../msw/server`/`../utils/testUtils` resolving one directory too high
+  — the real files live at `__tests__/msw/...` and `__tests__/utils/...`,
+  siblings of the test files, not parents). **Fixed, committed `fc647df` on
+  `feature/REQ-2026-03`** — corrected to `./msw/...`/`./utils/...` in all 4
+  files (deliberately left `__tests__/utils/testUtils.tsx`'s own `../msw/server`
+  untouched — it's one directory deeper, so that path was already correct).
+  Verified: `npx vitest run` now genuinely collects and passes 28/28 tests.
+  The `_parse_jest_json()` file-collection-failure gap itself is still open,
+  not fixed.
+- Security's Dependency-Check step got a **specific** error this time (fix 1
+  above worked as designed) — a real 403/404 from the live NVD API despite a
+  correctly-set, correctly-masked `NVD_API_KEY`. Root cause: `05-security.yml`
+  pinned Dependency-Check **v9.2.0** (a 2023 release, predating NIST's NVD API
+  2.0 rollout). Confirmed by reproducing locally with the same key on a newer
+  installed version (worked in ~2 min) vs. the CI failure (8s, too fast to
+  have even attempted a real update). **v12.2.2** (that local install)
+  turned out not to be an official release at all — confirmed via both the
+  GitHub Releases and Tags APIs for `jeremylong/DependencyCheck`; the real
+  latest is **v12.1.0**. **Fixed, committed `b1419a3` on `main`** — bumped the
+  pin, verified by downloading the real v12.1.0 release zip fresh (same
+  `curl`+`unzip` the workflow uses) and running it with the real key against
+  `services/REQ-2026-03/backend`: produced a genuine report, `engineVersion:
+  12.1.0`, 313 dependencies scanned, 5 with real CVE findings, zero NVD
+  errors.
+
+**A second real Dependency-Check gap found and fixed the same session:**
+the general-purpose analyzers (Archive, Assembly, Sonatype OSS Index) were
+walking every individual file inside `frontend/node_modules` — tens of
+thousands of files — on top of the Node Audit Analyzer, which already covers
+npm dependencies correctly via `package.json`/`package-lock.json` without
+touching installed source. This made a full REQ-2026-03 scan exceed 10
+minutes without completing (killed twice). **Note: the actual fix location is
+`security_agent.py`, not `05-security.yml`** — that workflow file only
+installs the binary; the invocation and its flags are built in Python.
+Confirmed first that the Node Audit Analyzer needs no `--enableExperimental`
+or other enabling flag (there's a `--disableNodeAudit` flag but no `--enable`
+equivalent — it's on by default) and that excluding `node_modules` from the
+general scan can't affect it, since it reads `package-lock.json` directly.
+Added `"--exclude", "**/node_modules/**"` to the command list. Verified: full
+backend+frontend scan dropped from >10 min (unfinished, killed twice) to
+~90–170s; zero `node_modules` mentions anywhere in the log; 964 total
+dependencies reported, 643 precisely identified via `pkg:npm/...` URLs
+(confirming Node Audit Analyzer still ran and still covers the npm tree).
+
+**⚠️ This last fix (`--exclude` in `security_agent.py`) was shown as a diff
+with a proposed commit message but was never actually committed** — the
+session moved on to pulling CVE detail before an explicit "commit and push"
+landed for it. It is currently sitting as an uncommitted local change in the
+`forge-template` working tree. Needs an explicit decision (commit it, or
+revisit) before the next real Security run — without it, Dependency-Check
+will very likely time out again on this project's frontend.
+
+---
+
+### Pulling real CVE detail — one set of false positives, one set of genuine findings
+
+Asked twice to pull exact JSON fields (CVE ID, CVSS, description, fixed
+version) rather than paraphrase — both times surfaced something beyond the
+raw data:
+
+**The 5 .NET findings (pre-`--exclude` scan) are very likely false
+positives, not real vulnerabilities.** Every one matched a *different*
+product than the real NuGet package, all at `confidence: MEDIUM`:
+`Azure.Identity.dll` matched the JavaScript SDK's CPE, not `.net`;
+`Microsoft.AspNetCore.Authentication.OpenIdConnect.dll` matched the generic
+2007 OpenID *protocol* itself, not Microsoft's library;
+`Npgsql.EntityFrameworkCore.PostgreSQL.dll` (57 CVEs) matched the
+**PostgreSQL server binary**, not the .NET driver — its version string
+"8.0.11" coincidentally collides with a real historic server release;
+`System.IO.Pipes.AccessControl.dll` matched **Microsoft Office Access**
+purely on the word "Access"; `System.Threading.Tasks.dll` matched an
+**Android to-do-list app** called Tasks.org purely on the word "Tasks." None
+of this was fixed or suppressed — reported as a finding, not resolved.
+
+**The 5 npm findings (post-`--exclude` scan) are genuine** — matched via
+precise `pkg:npm/...` URLs from `package-lock.json`, not fuzzy CPE guessing:
+`esbuild@0.21.5`, `next@14.2.5`, `postcss@8.4.31`, `vite@5.4.21`,
+`vitest@1.6.1`. Checked devDependency classification via `package-lock.json`'s
+own `dev` flag (npm's authoritative classification, not just package.json's
+top-level section) rather than assuming: **`vite`/`esbuild`/`vitest` are
+genuinely dev-only** (confirmed `dev: true`, reachable only via
+`vitest`/`vite-node`'s own nested tree). **`next` is a real production
+dependency** (`dev: None`, listed directly in `"dependencies"` —
+contradicted the stated premise). **The vulnerable `postcss@8.4.31` copy is
+nested inside `next`'s own tree** (`node_modules/next/node_modules/postcss`,
+`dev: None`) — also effectively production-path, not the safe top-level
+devDependency copy (which resolved to a different, newer 8.5.26).
+
+---
+
+### `next` bumped 14.2.5 → 14.2.35; nested `postcss` forced to 8.5.26 via overrides
+
+Two follow-up commits on `feature/REQ-2026-03`, each shown as a diff and
+verified end-to-end before committing.
+
+**`next` → 14.2.35** (latest 14.2.x patch, confirmed via `npm view next
+versions` — deliberately not 15.x, per explicit direction that a major bump
+is a bigger compatibility risk than this fix warrants). `eslint-config-next`
+bumped alongside it (Next.js's own convention — that package tracks `next`'s
+version). **Committed `18ca416`.** Real, mixed result, reported honestly
+rather than oversold: the specifically-targeted `GHSA-f82v-jwr5-mffw` (9.1
+CRITICAL, middleware authorization bypass) is confirmed gone, along with 10
+others. **8 HIGH-severity findings remain** — their advisories list a fix
+only on the 15.x branch, meaning Next.js never backported them to 14.x;
+staying on 14.x is a real ongoing tradeoff, not resolved by this bump. The
+nested `postcss@8.4.31` copy inside `next`'s own tree was confirmed
+**unchanged** by this bump (predicted correctly before checking). Verified:
+frontend 28/28 tests passed (unchanged), backend 39/39 passed (unaffected).
+Also found, confirmed pre-existing and unrelated: `npm run build` fails on a
+TypeScript conflict in `vitest.config.ts` (duplicate `vite` type definitions
+between the top-level package and `vitest`'s own nested copy) — reproduced
+identically against a fresh clone of the original `next@14.2.5` state, so not
+caused by this bump; not fixed, since QA's real invocation never runs
+`next build`.
+
+**Nested `postcss` forced to 8.5.26 via a scoped `npm overrides` entry.**
+Confirmed npm 8.3+/lockfile v2+ support first (this project: lockfileVersion
+3, npm 11.6.2 locally) before applying. A flat top-level
+`"overrides": {"postcss": "8.5.26"}` was rejected by npm itself
+(`EOVERRIDE`: conflicts with the existing direct devDependency range) — fixed
+by scoping the override to `next`'s own dependency specifically
+(`"overrides": {"next": {"postcss": "8.5.26"}}}`), since that's the actual
+intent (only the nested copy needs forcing, not the whole tree). **Getting it
+to actually take effect needed more than a plain `rm -rf node_modules && npm
+install`** — npm's own package cache had already cached the old resolution
+for this specific dependency edge and kept reusing it even against a clean
+`node_modules`, surfacing as a persistent `npm ls` `invalid`/`ELSPROBLEMS`
+error. Required also deleting `package-lock.json` and `npm cache clean
+--force` before the override was honored end-to-end. **Committed `82090c8`.**
+Verified: `npm ls postcss` shows only `8.5.26` anywhere in the tree (root
+marked `overridden`, every nested occurrence including `next`'s own copy
+marked `deduped`); a real re-scan confirms both CVEs
+(`CVE-2026-45623`/`CVE-2026-69153`) gone — only one `postcss` entry remains
+in the report at all, 0 vulnerabilities; frontend 28/28 and backend 39/39
+both re-confirmed passing, unaffected.
+
+**Still open, not addressed this session:**
+- The uncommitted `--exclude` fix in `security_agent.py` (see above) — needs
+  an explicit commit decision before the next real Security run.
+- 8 remaining HIGH-severity `next` findings with no 14.x backport available.
+- The pre-existing `vitest.config.ts` build-time type conflict (doesn't block
+  QA today, since QA never runs `next build`, but would block a real
+  production build attempt).
+- `_parse_jest_json()`'s file-collection-failure blind spot (a fully-broken
+  frontend suite can still report `qa-approved` if every file fails to
+  collect rather than fails a specific test).
+
+---
