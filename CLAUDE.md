@@ -2726,7 +2726,8 @@ session moved on to pulling CVE detail before an explicit "commit and push"
 landed for it. It is currently sitting as an uncommitted local change in the
 `forge-template` working tree. Needs an explicit decision (commit it, or
 revisit) before the next real Security run — without it, Dependency-Check
-will very likely time out again on this project's frontend.
+will very likely time out again on this project's frontend. **Resolved later
+the same session — see the follow-up section below (`fd4a0b7`).**
 
 ---
 
@@ -2871,5 +2872,56 @@ before `qa_agent.py` runs `vitest run` — no build step. This confirms the
 `vitest.config.ts` conflict (now fixed) could only ever have been caught for
 real at Stage 6, never earlier in the pipeline — exactly why it slipped past
 QA on this PR.
+
+---
+
+### Open items for next session (REQ-2026-03 / PR #20 arc) — consolidated
+
+Everything below was surfaced during this arc but deliberately not fixed —
+each is a real, confirmed gap, not a guess:
+
+1. **`qa_agent.py`'s `_parse_jest_json()` has a file-collection-failure blind
+   spot.** It only counts individual test pass/fail (`numPassedTests`/
+   `numFailedTests`), and never checks whether entire test *files* failed to
+   even collect (Vitest's own top-level `success: false` / per-file
+   `status: "failed"`). A Vitest run where every file fails to collect
+   reports `0 passed / 0 failed / 0 total` — currently treated as a clean
+   **pass**, not a failure. This is exactly what let a real, unrelated
+   bad-import bug on REQ-2026-03's frontend slip through as `qa-approved`
+   before it was caught by chance while pulling CVE detail (see above; fixed
+   in `fc647df`, but the *classifier gap itself* was never fixed).
+2. **8 HIGH-severity `next@14.2.35` findings have no 14.x backport.** Their
+   advisories list a fix only on the 15.x branch — Next.js never backported
+   them to 14.x. This is an accepted ongoing risk from the explicit decision
+   to stay on the 14.x major line (see the `next` bump section above), not a
+   gap in anything fixed this session. Only resolvable by eventually moving
+   to 15.x, or waiting for an upstream 14.x backport that may never come.
+3. **No pipeline stage before Deploy (Stage 6) validates that the app
+   actually builds.** Confirmed via a direct audit of every workflow file
+   (see immediately above): QA only ever runs `vitest run`/`dotnet test`; the
+   first real `npm run build`/`docker build` in the entire pipeline happens
+   inside `deploy_agent.py`'s Docker build at Stage 6. This is exactly what
+   let both the `vitest.config.ts` type conflict and the local-only
+   path-casing artifact go completely undetected until deliberately
+   investigated this session, on request — nothing in the automated pipeline
+   would have caught either on its own. Worth considering whether Deploy
+   Agent (or QA) should build the frontend earlier in the pipeline, per the
+   near-identical open question already logged for REQ-2026-02's frontend
+   deploy bugs.
+4. **QA's `_MAX_RETRIES` retry cap is not actually enforced anywhere — it
+   only ever picks a label, never blocks a re-run.** Confirmed by reading
+   both `qa_agent.py` and `04-qa.yml` directly: `_MAX_RETRIES` is consulted
+   in exactly one place (`qa_agent.py`'s label-choice branch), and only when
+   `tests_pass` is `False` — a passing run always gets `qa-approved`
+   regardless of attempt number (confirmed live: PR #20's real attempt 4
+   passed and was approved despite already being past the nominal limit of
+   3). `04-qa.yml`'s only guard clause checks PR open-state and head-SHA
+   match — nothing about label state or attempt count. The workflow will
+   keep firing unconditionally on every push, forever; a human is expected to
+   notice `qc-retry-limit-reached` and stop pushing manually, but nothing
+   enforces that. Separately, the retry counter has no concept of
+   "infrastructure/tooling failure" vs. "real app defect" — it just counts
+   every QA comment ever posted, so a redundant manual `gh run rerun` (see
+   above) burned a real attempt for zero new information.
 
 ---
