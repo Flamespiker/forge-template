@@ -2813,14 +2813,63 @@ in the report at all, 0 vulnerabilities; frontend 28/28 and backend 39/39
 both re-confirmed passing, unaffected.
 
 **Still open, not addressed this session:**
-- The uncommitted `--exclude` fix in `security_agent.py` (see above) — needs
-  an explicit commit decision before the next real Security run.
 - 8 remaining HIGH-severity `next` findings with no 14.x backport available.
-- The pre-existing `vitest.config.ts` build-time type conflict (doesn't block
-  QA today, since QA never runs `next build`, but would block a real
-  production build attempt).
 - `_parse_jest_json()`'s file-collection-failure blind spot (a fully-broken
   frontend suite can still report `qa-approved` if every file fails to
   collect rather than fails a specific test).
+
+---
+
+### `security_agent.py`'s `--exclude` fix committed; `vitest.config.ts` build conflict fixed and confirmed Stage-6-only
+
+Two follow-up items from the section above, closed in a later same-project
+session.
+
+**The uncommitted `--exclude "**/node_modules/**"` fix was confirmed still
+sitting locally** (checked `git status` before assuming anything) and
+**committed as `fd4a0b7` on `main`**, using the exact commit message already
+drafted when the diff was first shown.
+
+**The `vitest.config.ts` TypeScript conflict was investigated further, fixed,
+and re-verified.** Pulled the full (2,941-line) `npm run build` error rather
+than the earlier summary: confirmed the exact failure is
+`vitest.config.ts:6:13`, and confirmed it's the *same underlying pattern*
+already found during the Dependency-Check CVE investigation — `vitest/config`'s
+`defineConfig()` types against vitest's own nested `vite@5.4.21`, while
+`@vitejs/plugin-react`'s `react()` types against the top-level `vite@7.3.6`.
+`skipLibCheck: true` was already set in `tsconfig.json` but doesn't help (it
+only skips `.d.ts` files, not real project source like this one). Tested the
+fix live before committing anything: adding `vitest.config.ts`,
+`vitest.setup.ts`, and `__tests__` to `tsconfig.json`'s `exclude` array
+resolves the conflict completely — verified by re-running the build and
+confirming zero mentions of `vitest.config.ts` anywhere, progressing past the
+type-check stage into static page generation. **Committed `6639e09` on
+`feature/REQ-2026-03`.** Re-ran both suites after: frontend 4/4 files, 28/28
+tests passed (unchanged); backend 39/39 passed (unaffected).
+
+A second, separate, unrelated error surfaces immediately after during
+prerendering (`TypeError: Cannot read properties of null (reading
+'useContext')` on `/`, `/404`, `/500`, `/_not-found`, `/audit`) — confirmed
+via mixed path casing in its own stack trace (`C:\Users\mikef\Projects\...`
+alongside `C:\Users\mikef\projects\...`) to be the same local-machine-only
+Windows path-casing artifact already documented for REQ-2026-01. Confirmed
+this persists even invoking the build via PowerShell instead of git-bash —
+it's baked into this machine's `node_modules` own install-time state (first
+populated via a lowercase-mounted shell), not the shell used to invoke the
+build command. Cannot reproduce on a real, case-sensitive Linux CI runner;
+not fixed, not blocking.
+
+**Confirmed via a direct audit of every workflow file: nothing in the current
+pipeline invokes `next build` before Stage 6.** Checked all of
+`00-intake.yml` through `06-deploy.yml` (plus `03b-recover-implementation.yml`)
+for `next build`/`npm run build`/`docker build`/`Dockerfile` — zero matches
+anywhere except inside `06-deploy.yml`'s own invocation of `deploy_agent.py`,
+which runs a real `docker build` against the frontend's own `Dockerfile`.
+That Dockerfile's own "Stage 2: Build the Next.js app" contains `RUN npm run
+build` directly. `04-qa.yml`'s only npm-related step is `npm install --prefix`
+before `qa_agent.py` runs `vitest run` — no build step. This confirms the
+`vitest.config.ts` conflict (now fixed) could only ever have been caught for
+real at Stage 6, never earlier in the pipeline — exactly why it slipped past
+QA on this PR.
 
 ---
