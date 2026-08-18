@@ -612,6 +612,98 @@ def _get_fqdn(name: str, resource_group: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Key Vault secret wiring (generic primitive -- see CLAUDE.md's "Deploy Agent
+# has no app-secrets wiring mechanism" Open Item for why this exists and what
+# it deliberately does NOT do)
+# ---------------------------------------------------------------------------
+
+_MAX_APP_SECRET_KEY_LEN = 20  # `az containerapp secret set --help`: "'key' cannot be longer than 20 characters"
+
+
+def _wire_keyvault_secret(
+    env_var_name: str,
+    kv_secret_name: str,
+    app_secret_key: str,
+    container_app_name: str,
+    resource_group: str,
+    vault_name: str,
+) -> None:
+    """
+    Wires one Key Vault secret into one Container App as one environment
+    variable, via a Key Vault reference resolved through the Container App's
+    own system-assigned managed identity (`identityref:system`) -- never a
+    plain Container App secret, never a plaintext value in config.yaml or
+    git.
+
+    `kv_secret_name` (the secret's name *inside Key Vault*, e.g.
+    "req-2026-03-nextauth-secret" -- no length limit worth worrying about)
+    and `app_secret_key` (the Container App's own internal reference name
+    for that secret, capped at `_MAX_APP_SECRET_KEY_LEN` characters by Azure
+    CLI itself) are deliberately two separate parameters, not one reused
+    value -- confirmed live via `az containerapp secret set --help` that the
+    20-char cap applies only to the latter.
+
+    Does NOT create or rotate the underlying secret value. If `kv_secret_name`
+    doesn't already exist in `vault_name`, this raises rather than silently
+    skipping the env var or fabricating a value -- a deployed app quietly
+    missing a secret it needs is a worse failure mode than a loud one here.
+    Generic by design: every identifier is a parameter, so any future
+    (env_var_name, kv_secret_name) pair on any Container App can reuse this
+    without new code -- the still-open question is how Deploy Agent would
+    ever learn *which* secrets a given app needs (see the Open Item); this
+    function only does the wiring once that's already decided by a caller.
+    """
+    if len(app_secret_key) > _MAX_APP_SECRET_KEY_LEN:
+        raise ValueError(
+            f"app_secret_key '{app_secret_key}' is {len(app_secret_key)} characters -- "
+            f"Azure Container Apps' own secret key name limit is {_MAX_APP_SECRET_KEY_LEN} "
+            "characters (distinct from the Key Vault secret's own name, which has no such "
+            "limit here)."
+        )
+
+    show_result = _run_shell(
+        ["az", "keyvault", "secret", "show", "--vault-name", vault_name, "--name", kv_secret_name],
+        cwd=str(_REPO_ROOT), timeout=60,
+    )
+    if show_result.returncode != 0:
+        raise RuntimeError(
+            f"Key Vault secret '{kv_secret_name}' does not exist in vault '{vault_name}' (or is "
+            f"not readable under the current identity) -- refusing to wire {env_var_name} on "
+            f"'{container_app_name}' to a secret that isn't there. This function does not "
+            f"auto-generate secret values; create '{kv_secret_name}' in Key Vault first:\n"
+            f"{(show_result.stderr or '')[-1500:]}"
+        )
+
+    # Deliberately version-less -- lets the secret be rotated in Key Vault
+    # later without needing a redeploy to pick up the new version, per
+    # Microsoft's own recommended pattern for Container Apps KV references.
+    secret_uri = f"https://{vault_name}.vault.azure.net/secrets/{kv_secret_name}"
+
+    secret_set_result = _run_shell(
+        ["az", "containerapp", "secret", "set", "--name", container_app_name, "--resource-group", resource_group,
+         "--secrets", f"{app_secret_key}=keyvaultref:{secret_uri},identityref:system"],
+        cwd=str(_REPO_ROOT), timeout=120,
+    )
+    if secret_set_result.returncode != 0:
+        raise RuntimeError(
+            f"az containerapp secret set failed wiring '{app_secret_key}' (Key Vault secret "
+            f"'{kv_secret_name}') onto '{container_app_name}':\n{(secret_set_result.stderr or '')[-1500:]}"
+        )
+
+    env_var_result = _run_shell(
+        ["az", "containerapp", "update", "--name", container_app_name, "--resource-group", resource_group,
+         "--set-env-vars", f"{env_var_name}=secretref:{app_secret_key}"],
+        cwd=str(_REPO_ROOT), timeout=120,
+    )
+    if env_var_result.returncode != 0:
+        raise RuntimeError(
+            f"az containerapp update --set-env-vars failed setting {env_var_name} on "
+            f"'{container_app_name}' (secret '{app_secret_key}' was wired successfully; only the "
+            f"env var reference failed):\n{(env_var_result.stderr or '')[-1500:]}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # design.md gap check
 # ---------------------------------------------------------------------------
 
@@ -975,13 +1067,54 @@ def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description="FORGE Deploy Agent (staging)")
-    parser.add_argument("--issue-number", required=True, type=int, help="FORGE tracking issue number in forge-template")
-    parser.add_argument("--request-id", required=True, help="FORGE request ID")
-    parser.add_argument("--repo-path", required=True, help="Local path to an existing checkout of forge-demo-apps at the feature branch")
-    parser.add_argument("--commit-sha", required=True, help="Commit SHA being deployed (used as the image tag)")
-    parser.add_argument("--pr-number", required=True, type=int, help="Feature PR number in forge-demo-apps")
+    parser.add_argument("--issue-number", type=int, help="FORGE tracking issue number in forge-template")
+    parser.add_argument("--request-id", help="FORGE request ID")
+    parser.add_argument("--repo-path", help="Local path to an existing checkout of forge-demo-apps at the feature branch")
+    parser.add_argument("--commit-sha", help="Commit SHA being deployed (used as the image tag)")
+    parser.add_argument("--pr-number", type=int, help="Feature PR number in forge-demo-apps")
     parser.add_argument("--dry-run", action="store_true", help="Real docker build/push, but print (don't execute) az containerapp commands and post nothing")
+    parser.add_argument(
+        "--wire-keyvault-secret", action="store_true",
+        help="One-off admin action: wire an already-existing Key Vault secret into a Container "
+             "App as an env var, then exit -- skips the normal deploy flow entirely. Requires "
+             "--env-var-name/--kv-secret-name/--app-secret-key/--container-app-name/"
+             "--resource-group/--vault-name. Does not create the secret value itself.",
+    )
+    parser.add_argument("--env-var-name", help="With --wire-keyvault-secret: the app-facing env var name, e.g. NEXTAUTH_SECRET")
+    parser.add_argument("--kv-secret-name", help="With --wire-keyvault-secret: the secret's name inside Key Vault")
+    parser.add_argument("--app-secret-key", help="With --wire-keyvault-secret: the Container App's own internal secret reference name (<=20 chars)")
+    parser.add_argument("--container-app-name", help="With --wire-keyvault-secret: target Container App name")
+    parser.add_argument("--resource-group", help="With --wire-keyvault-secret: resource group containing the Container App and Key Vault")
+    parser.add_argument("--vault-name", help="With --wire-keyvault-secret: Key Vault name")
     args = parser.parse_args()
+
+    if args.wire_keyvault_secret:
+        required = ["env_var_name", "kv_secret_name", "app_secret_key", "container_app_name", "resource_group", "vault_name"]
+        missing = [f"--{name.replace('_', '-')}" for name in required if not getattr(args, name)]
+        if missing:
+            parser.error(f"--wire-keyvault-secret also requires: {', '.join(missing)}")
+        try:
+            _wire_keyvault_secret(
+                env_var_name=args.env_var_name,
+                kv_secret_name=args.kv_secret_name,
+                app_secret_key=args.app_secret_key,
+                container_app_name=args.container_app_name,
+                resource_group=args.resource_group,
+                vault_name=args.vault_name,
+            )
+        except Exception:
+            logger.exception("--wire-keyvault-secret failed")
+            sys.exit(1)
+        logger.info(
+            "Wired %s on %s to Key Vault secret %s (vault %s).",
+            args.env_var_name, args.container_app_name, args.kv_secret_name, args.vault_name,
+        )
+        return
+
+    missing = [f"--{name}" for name in ("issue-number", "request-id", "repo-path", "commit-sha", "pr-number")
+               if getattr(args, name.replace("-", "_")) is None]
+    if missing:
+        parser.error(f"the following arguments are required: {', '.join(missing)}")
 
     try:
         run_deploy_agent(
