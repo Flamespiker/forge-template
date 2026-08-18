@@ -393,6 +393,42 @@ def _ensure_dockerignore(build_context: Path, unit_type: str) -> None:
     logger.info("Generated .dockerignore at %s.", dockerignore_path)
 
 
+def _ensure_frontend_public_dir(build_context: Path) -> bool:
+    """
+    Next.js apps with no static assets never get a public/ directory from
+    create-next-app-style scaffolding, and Git doesn't track empty
+    directories -- so a checkout of such an app has no public/ directory on
+    disk at all. Every frontend Dockerfile seen so far -- both
+    Deploy-Agent-generated (nextjs.Dockerfile.template) and
+    Frontend-subagent-authored during Implementation (confirmed
+    independently on REQ-2026-02 and REQ-2026-03's own committed
+    Dockerfiles) -- includes `COPY --from=builder /app/public ./public`,
+    which fails the entire build ("not found") when that directory is
+    missing.
+
+    Deploy Agent never overwrites an existing Dockerfile (see
+    _generate_dockerfile_if_missing()), so patching the COPY line itself
+    only ever helps a project that has no Dockerfile yet -- it would not
+    have fixed either of the two real occurrences of this bug, both of
+    which already had a committed Dockerfile. Fixed instead at the
+    filesystem level, identically regardless of which Dockerfile is in
+    play: create an empty public/ directory in the local checkout right
+    before the build, so the Dockerfile's own `COPY . .` build-context step
+    picks it up like any other real directory and the later
+    `COPY --from=builder /app/public ./public` has something to copy.
+    Returns True if it had to be created.
+    """
+    public_dir = build_context / "public"
+    if public_dir.is_dir():
+        return False
+    public_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Created empty %s (no public/ dir in the checkout) so the frontend "
+        "Dockerfile's public/ COPY step doesn't fail.", public_dir,
+    )
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Docker build / push
 # ---------------------------------------------------------------------------
@@ -702,6 +738,8 @@ def run_deploy_agent(
         for unit in units:
             unit.dockerfile_generated = _generate_dockerfile_if_missing(unit)
             _ensure_dockerignore(unit.build_context, unit.unit_type)
+            if unit.unit_type == "frontend":
+                _ensure_frontend_public_dir(unit.build_context)
 
         # Real docker build + push for every unit, dry-run or not — same
         # "exercise the real tool, skip only the posting" pattern as
