@@ -881,7 +881,8 @@ def run_deploy_agent(
                 logger.warning(
                     "Backend web unit %s has an invalid name and will fail to build -- "
                     "treating as if no 'web' backend unit exists for cross-service wiring "
-                    "purposes (NEXT_PUBLIC_API_BASE_URL/FRONTEND_ORIGIN will not be set): %s",
+                    "purposes (NEXT_PUBLIC_API_BASE_URL/FRONTEND_ORIGIN/NEXTAUTH_URL will not "
+                    "be set): %s",
                     backend_web_unit.name, name_exc,
                 )
                 backend_web_unit = None
@@ -897,7 +898,11 @@ def run_deploy_agent(
             else:
                 logger.warning(
                     "Frontend unit %s detected with no 'web' backend unit in this request -- "
-                    "NEXT_PUBLIC_API_BASE_URL and FRONTEND_ORIGIN will not be set.", frontend_unit.name,
+                    "NEXT_PUBLIC_API_BASE_URL, FRONTEND_ORIGIN, and NEXTAUTH_URL will not be "
+                    "set (NEXTAUTH_URL is the frontend's own FQDN and doesn't strictly need a "
+                    "backend to exist, but frontend_fqdn is only computed in this branch today "
+                    "-- flagged, not fixed, since that's a structural change beyond mirroring "
+                    "the existing FRONTEND_ORIGIN pattern).", frontend_unit.name,
                 )
 
         # Real az login + real read-only existence checks, dry-run or not —
@@ -934,9 +939,18 @@ def run_deploy_agent(
                 _docker_push(full_image)
 
                 exists = _containerapp_exists(unit.name, staging_cfg["resource_group"])
-                extra_env_vars = {"FRONTEND_ORIGIN": f"https://{frontend_fqdn}"} if (
-                    unit is backend_web_unit and frontend_fqdn
-                ) else None
+                extra_env_vars = None
+                if unit is backend_web_unit and frontend_fqdn:
+                    extra_env_vars = {"FRONTEND_ORIGIN": f"https://{frontend_fqdn}"}
+                elif unit is frontend_unit and frontend_fqdn:
+                    # NEXTAUTH_URL is next-auth's own canonical-site-URL setting -- a full
+                    # https:// URL, not a bare hostname (confirmed against next-auth's docs
+                    # and this app's own .env.example, which both show the scheme). Public
+                    # info, not a secret -- a plain env var via the same --set-env-vars path
+                    # as FRONTEND_ORIGIN, not a Key Vault reference. Left unset (same as
+                    # today) when there's no backend web unit, since frontend_fqdn is only
+                    # computed in that case -- see the frontend_fqdn computation above.
+                    extra_env_vars = {"NEXTAUTH_URL": f"https://{frontend_fqdn}"}
                 action, command = _build_containerapp_command(
                     unit, exists, full_image, acr_login_server, acr_username, acr_password, staging_cfg,
                     extra_env_vars=extra_env_vars,
