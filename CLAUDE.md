@@ -42,10 +42,14 @@ is running through the full pipeline. Phases 1-5 are complete:
   wiring, the `request_id`/`resolve_feature_pr()` fixes, the security scanner-failure
   verdict fix): `docs/CLAUDE-archive-2026-08-req2026-02.md`.
 - **Phase 6 (App 2, `REQ-2026-03`)** — in progress. Stages 0-5 complete and approved
-  (PR #20 merged). Stage 6 (Deploy): frontend live, backend blocked on a naming
-  decision (see Open Items). Full narrative: `docs/CLAUDE-archive-2026-08-req2026-03.md`
-  and the newest `docs/FORGE-context_v*.md` (maintained by the Claude.ai side of the
-  two-tool workflow).
+  (PR #20 merged). Stage 6 (Deploy): both frontend and backend now live in staging —
+  the backend unit's naming blocker was resolved 2026-08-18 by
+  `_finalize_unit_name()`'s truncation+hash scheme (see "Unit naming and validation"
+  below); real re-run confirmed the backend Container App at
+  `req-2026-03-on-call-rost-5bb949.yellowmeadow-894377a9.canadacentral.azurecontainerapps.io`.
+  Full narrative: `docs/CLAUDE-archive-2026-08-req2026-03.md` and the newest
+  `docs/FORGE-context_v*.md` (maintained by the Claude.ai side of the two-tool
+  workflow).
 
 **Standing convention — ad hoc fix-PR branch naming (decided 2026-08-13):** use
 `feature/fix-<short-description>`, not `fix/*` — `fix/*` branches never get dispatched
@@ -776,16 +780,37 @@ unclassifiable project — the safer failure mode, since `web` implies public in
 `services/<request-id>/frontend/package.json` becomes one additional `frontend` unit if
 present.
 
-**Unit naming and validation:** each unit's Container App / image name is
-`<request-id>-<slug>`. `_slugify()` treats any non-alphanumeric run (not just PascalCase
-boundaries) as a word separator — `OnCallRosterTracker.Api` → `on-call-roster-tracker-api`.
-`_validate_unit_name()` checks the full name against Docker tag grammar *and* Azure
-Container Apps' naming rules (lowercase alphanumeric + hyphen, starts with a letter, no
-leading/trailing/double hyphen, **under 32 characters**) and **raises `ValueError` rather
-than truncating** — Mike's explicit decision (see Open Items: REQ-2026-03's backend unit
-is currently blocked by this). The backend "web" unit's name is validated *before* either
-cross-service FQDN is derived (below), so an invalid backend name falls back to the
-"no web backend unit" no-wiring warning instead of baking a broken URL into the frontend.
+**Unit naming and validation (retrofit 2026-08-18 — see Open Items #2's resolution):**
+each unit's Container App / image name is `<request-id>-<slug>`. `_slugify()` treats any
+non-alphanumeric run (not just PascalCase boundaries) as a word separator —
+`OnCallRosterTracker.Api` → `on-call-roster-tracker-api`. `_finalize_unit_name()` (replaced
+the old `_validate_unit_name()`, now deleted — no truncation) checks the full name against
+Docker tag grammar *and* Azure Container Apps' naming rules (lowercase alphanumeric +
+hyphen, starts with a letter, no leading/trailing/double hyphen). A charset failure (should
+not happen post-`_slugify()`, but still a real, live check) raises `ValueError` — this
+scheme does not attempt to fix that. A **length-only** failure is now handled
+automatically: the true Azure CLI constraint is `len < 32`, not `<= 32` (confirmed live
+2026-08-17 against `az containerapp create --help`'s own wording, "must be less than 32
+characters" — see the `_MAX_CONTAINER_APP_NAME_LEN` comment), so the slug is truncated to
+fit a 31-char budget (`31 - len(request_id) - 2 hyphens - 6-char hash`) and a 6-hex-char
+sha256 suffix of the *untruncated* full name is appended — deterministic, so the same
+`(request_id, slug)` pair always yields the same final name across re-runs. A request_id
+alone too long to leave any room for a slug still raises `ValueError` (a genuinely
+different, worse problem no truncation scheme should silently paper over). The backend
+"web" unit's name is finalized *before* either cross-service FQDN is derived (below), so a
+name that's invalid even after this (charset failure, or request_id-alone-too-long) falls
+back to the "no web backend unit" no-wiring warning instead of baking a broken URL into the
+frontend.
+
+Verified live against REQ-2026-03's backend (`OnCallRosterTracker.Api`, previously blocked
+at 38 chars): now resolves deterministically to `req-2026-03-on-call-rost-5bb949` (31
+chars); a real non-dry-run `deploy_agent.py` re-run against forge-demo-apps' merged main
+(PR #20) built, pushed, and deployed it for real —
+`req-2026-03-on-call-rost-5bb949.yellowmeadow-894377a9.canadacentral.azurecontainerapps.io`
+— alongside `req-2026-03-frontend`, wired to the correct backend FQDN. All 4
+previously-passing unit names (`req-2026-01-document-api`, `req-2026-01-email-worker`,
+`req-2026-02-auditor-api`, `req-2026-03-frontend`) confirmed byte-identical under the new
+scheme.
 
 **Dockerfiles/`.dockerignore`** are generated from the three templates
 (`core/agents/templates/dockerfiles/`) only when a project directory doesn't already have
@@ -970,11 +995,18 @@ completion).
    NextAuth `NEXTAUTH_SECRET`). Needs a real design (Key Vault references vs. Container
    App secrets driven from `team/config.yaml` vs. something else) rather than another
    one-off manual patch.
-2. **REQ-2026-03's backend unit name doesn't fit Azure's 32-char Container App limit**
-   even after the `_slugify()` character fix (`req-2026-03-on-call-roster-tracker-api` is
-   38 chars). Mike explicitly declined auto-truncation — needs an explicit naming
-   decision (rename the `OnCallRosterTracker` project directory, shorten the request-id
-   prefix, or design a truncation/hashing scheme) before this unit can deploy.
+2. ~~**REQ-2026-03's backend unit name doesn't fit Azure's Container App name length
+   limit**~~ — **RESOLVED 2026-08-18.** `deploy_agent.py`'s `_validate_unit_name()`
+   (raise-only) replaced with `_finalize_unit_name()` (deterministic truncation + 6-char
+   sha256-hash suffix on a length-only failure); see "Unit naming and validation" above
+   for the full scheme and its 2026-08-17 boundary correction (real Azure limit is
+   `len < 32`, not `<= 32`). Verified live: `req-2026-03-on-call-roster-tracker-api` (38
+   chars, previously raised) now resolves deterministically to
+   `req-2026-03-on-call-rost-5bb949` (31 chars); a real non-dry-run deploy against
+   forge-demo-apps' merged main (PR #20) built, pushed, and deployed it — live at
+   `req-2026-03-on-call-rost-5bb949.yellowmeadow-894377a9.canadacentral.azurecontainerapps.io`.
+   All 4 previously-passing unit names confirmed byte-identical under the new scheme (no
+   regression).
 3. **No pipeline stage validates that the app actually builds before Stage 6 (Deploy).**
    QA only runs `vitest`/`jest`/`dotnet test`; the first real `next build`/`docker build`
    happens inside `deploy_agent.py`. Already let two real issues go undetected until
