@@ -115,6 +115,7 @@ EXPLICITLY OUT OF SCOPE for this stage (not built, not stubbed):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -223,40 +224,59 @@ def _slugify(name: str) -> str:
     return _NON_ALNUM_RUN.sub("-", camel_split.lower()).strip("-")
 
 
-def _validate_unit_name(name: str, project_label: str) -> None:
+def _finalize_unit_name(request_id: str, slug: str) -> str:
     """
-    Raises ValueError, naming the offending project, if `name` (the full
-    "<request-id>-<slug>" Container App / image name) would be rejected by
-    Docker's tag grammar or Azure Container Apps' naming rules. A loud,
-    early, diagnosable failure here is strictly better than letting an
-    invalid name reach `docker build`/`az containerapp create` and fail
-    there instead (the original REQ-2026-03 failure mode this closes).
+    Computes the final Container App / image name for a unit, truncating and
+    appending a short content hash when "<request-id>-<slug>" alone doesn't
+    fit Azure's naming rules -- replaces the old "raise on length, require a
+    human naming decision" behavior (see git history) with an automatic,
+    deterministic scheme.
 
-    `_VALID_CONTAINER_APP_NAME` alone covers both rule sets' character
-    constraints (lowercase alphanumeric segments joined by single hyphens,
-    starting with a letter -- Azure's stricter of the two on start
-    character; Docker also permits a leading digit or '.'/'_'/'__'
-    separators, but `_slugify()` above never emits those, so this simplified
-    pattern is sufficient). Length is Azure-specific and checked separately,
-    since Docker has no such limit.
+    Only a LENGTH failure is auto-corrected. A charset failure (should not
+    happen given _slugify()'s normalization, but checked for real, not
+    assumed) still raises -- this scheme doesn't know how to fix that.
     """
-    if not _VALID_CONTAINER_APP_NAME.match(name):
+    full_name = f"{request_id}-{slug}"
+    charset_ok = bool(_VALID_CONTAINER_APP_NAME.match(full_name))
+    length_ok = len(full_name) < _MAX_CONTAINER_APP_NAME_LEN
+
+    if charset_ok and length_ok:
+        return full_name
+
+    if not charset_ok:
         raise ValueError(
-            f"Computed Container App / image name '{name}' (from project "
-            f"'{project_label}') is not a valid Docker tag / Azure Container App "
-            "name -- must be lowercase alphanumeric segments separated by single "
-            "hyphens, starting with a letter."
+            f"Computed Container App / image name '{full_name}' is not a valid "
+            "Docker tag / Azure Container App name even after _slugify() -- must "
+            "be lowercase alphanumeric segments separated by single hyphens, "
+            "starting with a letter. This is a charset failure, not a length "
+            "one -- the truncation/hash scheme does not apply here."
         )
-    if len(name) >= _MAX_CONTAINER_APP_NAME_LEN:
+
+    # Length-only failure: truncate the slug and append a short deterministic
+    # hash of the untruncated full name, so the same (request_id, slug) pair
+    # always produces the same final name (required for idempotent re-runs).
+    short_hash = hashlib.sha256(full_name.encode()).hexdigest()[:6]
+    fixed_overhead = len(request_id) + 1 + 1 + len(short_hash)  # 2 hyphens + hash
+    slug_budget = (_MAX_CONTAINER_APP_NAME_LEN - 1) - fixed_overhead
+    if slug_budget < 1:
         raise ValueError(
-            f"Computed Container App name '{name}' (from project '{project_label}') "
-            f"is {len(name)} characters -- Azure Container Apps requires names "
-            f"under {_MAX_CONTAINER_APP_NAME_LEN} characters. This project's name "
-            "does not fit the '<request-id>-<slug>' naming convention as-is; this "
-            "needs an explicit naming decision (e.g. a shorter project directory "
-            "name), not a Deploy Agent truncation workaround -- flagged, not "
-            "silently shortened."
+            f"request_id '{request_id}' alone leaves no room for any slug once "
+            f"the '-{short_hash}' hash suffix is accounted for, under Azure's "
+            f"Container App name length limit -- this is a request_id naming "
+            "problem, not something slug truncation can fix."
         )
+
+    truncated_slug = slug[:slug_budget].rstrip("-")
+    final_name = f"{request_id}-{truncated_slug}-{short_hash}"
+
+    if not _VALID_CONTAINER_APP_NAME.match(final_name) or len(final_name) >= _MAX_CONTAINER_APP_NAME_LEN:
+        raise ValueError(
+            f"Computed truncated name '{final_name}' (from request_id "
+            f"'{request_id}', slug '{slug}') is still invalid -- this should not "
+            "happen given a valid, _slugify()'d slug; investigate rather than "
+            "assume this branch is unreachable."
+        )
+    return final_name
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +782,9 @@ def run_deploy_agent(
         # unit" no-wiring behavior rather than baking in an unreachable URL.
         if backend_web_unit is not None:
             try:
-                _validate_unit_name(backend_web_unit.name, backend_web_unit.project_label)
+                backend_web_unit.name = _finalize_unit_name(
+                    request_id.lower(), backend_web_unit.slug,
+                )
             except ValueError as name_exc:
                 logger.warning(
                     "Backend web unit %s has an invalid name and will fail to build -- "
@@ -800,10 +822,19 @@ def run_deploy_agent(
         # doesn't matter for backend_fqdn/frontend_fqdn's correctness.
         results: list[DeployResult] = []
         for unit in units:
+            try:
+                unit.name = _finalize_unit_name(request_id.lower(), unit.slug)
+            except ValueError as name_exc:
+                logger.exception(
+                    "Could not compute a valid Container App name for unit %s -- "
+                    "continuing with remaining unit(s).", unit.project_label,
+                )
+                results.append(DeployResult(unit=unit, image="", error=str(name_exc)))
+                continue
+
             full_image = f"{acr_login_server}/{unit.name}:{commit_sha}"
             result = DeployResult(unit=unit, image=full_image)
             try:
-                _validate_unit_name(unit.name, unit.project_label)
                 build_args = {"NEXT_PUBLIC_API_BASE_URL": f"https://{backend_fqdn}"} if (
                     unit.unit_type == "frontend" and backend_fqdn
                 ) else None
