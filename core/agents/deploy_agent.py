@@ -912,9 +912,19 @@ def run_deploy_agent(
 
     if failed_results:
         failed_names = ", ".join(r.unit.name for r in failed_results)
+        succeeded_count = len(results) - len(failed_results)
+        # Hardcoded to always claim partial success regardless of the real
+        # count -- wrong when every unit failed (confirmed live on
+        # REQ-2026-03: "2 of 2 unit(s) failed" alongside "the rest were
+        # deployed successfully", though 0 had succeeded). Conditional on
+        # the actual success count instead of assuming it's always > 0.
+        outcome_clause = (
+            "the rest were deployed successfully" if succeeded_count > 0
+            else "none of this request's unit(s) were deployed"
+        )
         failure_body = (
             f"⚠️ **FORGE Deploy Agent: {len(failed_results)} of {len(results)} unit(s) failed to "
-            f"deploy** (`{failed_names}`) -- the rest were deployed successfully; see the PR "
+            f"deploy** (`{failed_names}`) -- {outcome_clause}; see the PR "
             "comment above for per-unit detail.\n\n"
             "An Orchestration Manager needs to investigate before staging can be considered "
             "fully deployed for this request."
