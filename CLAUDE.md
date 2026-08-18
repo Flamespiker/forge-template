@@ -15,93 +15,46 @@ security → deploy) with human approval gates at each stage.
 - **Target repo:** `forge-demo-apps` (GitHub: `Flamespiker`, private) — stand-in for LAA's
   application monorepo during the build/demo phase
 - **ADO org:** `https://dev.azure.com/spike99` — project `FORGE-Build`
-- **Full project context:** `docs/FORGE-context_v53.md` — read this for architecture decisions,
-  agent roster, pipeline stages, and session history
+- **Full project context:** the newest `docs/FORGE-context_v*.md` — read this for
+  architecture decisions, agent roster, pipeline stages, and session history
+- **This file's history:** trimmed 2026-08-18 to stay lean (it's loaded into every
+  session). Full pre-trim narrative lives in `docs/CLAUDE-archive-2026-08-*.md` — see
+  "Further reading" at the end of this file.
 
 ---
 
+
 ## Current Build Phase
 
-**Phase 3 — Agent Implementation: complete. Phase 4 — Pipeline Wiring: complete**
-(4.1–4.9 wired 2026-08-06; 4.10 full dry-run, `DRYRUN-2026-01`, completed
-2026-08-09 — see below). **Phase 5 — App 1 (`REQ-2026-02`, Inactive User &
-License Auditor): substantially complete.** Reached staging, confirmed
-working in a real browser; production deliberately not attempted. Close-out
-doc written 2026-08-13 (`FORGE-Phase5-Closeout.md`) — full detail on what
-shipped, the R-001 descope, every confirmed structural gap, and real
-manual-intervention count. **App 1's Azure Container Apps and D365
-connection decommissioned 2026-08-13** (App User disabled, secret deleted,
-app registration kept for potential reuse; code retained in
-`forge-demo-apps`). **Cost log transcription complete (2026-08-13)** —
-`docs/FORGE-pipeline-cost-log.md` now has real QA/Security per-run tables,
-backfilled Intake/Requirements figures, and corrected §3 cumulative totals
-(commit `8f7fc24`), per `docs/FORGE-cost-log-transcription-patch.md`. Three
-REQ-2026-02 cost gaps (Requirements, QA partial, Security missing) remain
-flagged as open gaps in that log, not resolved.
+**FORGE is in Phase 6 (Repeatability)** — App 2 (`REQ-2026-03`, On-Call Roster Tracker)
+is running through the full pipeline. Phases 1-5 are complete:
 
-**Convention:** Branch-naming convention for ad hoc fix PRs — decided
-2026-08-13. Use `feature/fix-<short-description>` instead of `fix/*`, so
-these PRs route through the existing `feature/*` dispatch chain (real QA/
-Security) rather than hitting the permanently-unsatisfiable `security-check`
-gap that forced admin-merges on PRs #7, #8, #11, #16.
+- **Phase 3 (Agent Implementation)** and **Phase 4 (Pipeline Wiring)** — complete.
+  All seven `.github/workflows/*.yml` files are wired with real triggers/guard clauses;
+  branch protection is live on `forge-demo-apps`. Full step-by-step history and every
+  dated live-run verification: `docs/CLAUDE-archive-2026-08-phase3-5.md`.
+- **Phase 5 (App 1, `REQ-2026-02`, Inactive User & License Auditor → descoped to a
+  license-status report, R-001)** — complete and closed out. Reached staging in a real
+  browser; production deliberately never attempted. Azure Container Apps and the D365
+  connection were decommissioned 2026-08-13 (App User disabled, client secret deleted,
+  app registration kept for potential reuse; code retained in `forge-demo-apps`). Full
+  fix cycle (Stage 3 recovery tooling, the deploy-trigger/label-token bug, cross-service
+  wiring, the `request_id`/`resolve_feature_pr()` fixes, the security scanner-failure
+  verdict fix): `docs/CLAUDE-archive-2026-08-req2026-02.md`.
+- **Phase 6 (App 2, `REQ-2026-03`)** — in progress. Stages 0-5 complete and approved
+  (PR #20 merged). Stage 6 (Deploy): frontend live, backend blocked on a naming
+  decision (see Open Items). Full narrative: `docs/CLAUDE-archive-2026-08-req2026-03.md`
+  and the newest `docs/FORGE-context_v*.md` (maintained by the Claude.ai side of the
+  two-tool workflow).
 
-Step 3.1 (shared agent utilities) is complete. Step 3.2 (Intake Agent) is complete.
-Step 3.3 (Requirements Agent) is complete. Step 3.4 (Design Agent) is complete.
-Step 3.5 (Implementation Coordinator) is complete, including a real (non-dry-run)
-live run verified 2026-07-30 (PR #5 opened on forge-demo-apps). Step 3.8 (QA Agent)
-is complete, including a real (non-dry-run) live run verified 2026-08-04 against a
-manually-provided local checkout (8 ADO Bugs filed, PR #5 comment posted,
-`qa-loop-back` applied to issue #2) — the "needs Phase 4's checkout wiring" caveat
-only blocks the GitHub Actions automation, not a manual `--repo-path` invocation.
-Step 3.9 (Security Agent) is complete, including a real (non-dry-run) live run
-verified 2026-08-05 against the merged PR #5 (0 findings across Semgrep/Gitleaks/
-Dependency-Check, `security-check` check run created with conclusion `success`,
-`security-approved` applied to issue #2) — same manual `--repo-path` pattern as
-the QA Agent's real run. Step 3.10 (Deploy Agent) is complete, including a real
-(non-dry-run) live run verified 2026-08-05 against the merged PR #5's backend
-units (`req-2026-01-document-api`, `req-2026-01-email-worker` deployed to
-`forge-staging`; PR #5 comment posted) — the frontend unit and a real runtime
-gap found on EmailWorker are still open, see below.
+**Standing convention — ad hoc fix-PR branch naming (decided 2026-08-13):** use
+`feature/fix-<short-description>`, not `fix/*` — `fix/*` branches never get dispatched
+to QA/Security by `forge-demo-apps`' `notify-forge.yml` (only `feature/*`/`design/*`
+are), so they hit the permanently-unsatisfiable `security-check` gate and need an admin
+merge every time. This has already happened 4 times (PRs #7, #8, #11, #16) — see Open
+Items.
 
-**Step 4.10 (full pipeline dry-run, request-id `DRYRUN-2026-01`, tracking issue
-`forge-template#4`) is in progress, being run in a separate/parallel session**
-— not yet fully written back here (that session documents its own stages when
-it concludes). This session's own contribution is limited to recovering a
-stalled Implementation Coordinator run and spot-checking the result; see the
-"Step 4.10 — Implementation recovery" section at the end of this file for detail.
-
-**Phase 4 (Build Plan steps 4.1–4.9) — all seven `.github/workflows/*.yml`
-stubs rewritten with real triggers, guard clauses, and agent invocations**;
-committed and pushed directly to `main` 2026-08-06 (`8a702ee`). Full detail in
-the "Phase 4 — Pipeline Wiring" section below. **Verified via a real
-`repository_dispatch` end-to-end against the existing PR #5/issue #2 pair**:
-the cross-repo dispatch chain, payload shape, and guard-clause logic are all
-confirmed working. **Not yet verified: a real `qa_agent.py`/`security_agent.py`
-invocation actually running through this dispatch path** — PR #5 is merged, so
-both guard clauses correctly (and harmlessly) stopped before invoking the real
-agents; that requires a fresh open PR, not yet created. **Step 4.8 (branch
-protection on forge-demo-apps requiring the `security-check` status check)
-is complete** — confirmed live via `gh api repos/.../branches/main/protection`:
-`security-check` (app_id 4388813) required, 1 approving review required,
-`enforce_admins: true`, force-pushes/deletions blocked, **no
-`bypass_pull_request_allowances`** (GitHub rejects that field entirely on a
-personal-account repo like forge-demo-apps — confirmed empirically via a 422,
-not assumed from the docs alone).
-
-Getting to a clean rule required a real conflict resolution, not just a
-config change: `requirements_agent.py` and `create_ado_items.py` both wrote
-`requirements.md`/`ado-work-items.json` **straight to `main`** via
-`commit_files()` — which the required-review rule above would reject outright
-(a GitHub App with no bypass path on a personal repo has no way around it).
-**Fix: both files moved to a dedicated, intentionally-unprotected
-`pipeline-state` branch in forge-demo-apps** (created once, branched from
-`main`'s tip) — bookkeeping/traceability records, not application code; the
-real human review already happens via the posted issue-comment draft, not a
-git diff on `main`. `design_agent.py` and `qa_agent.py`'s reads of these two
-files were updated to the same branch. Full detail in the "Phase 4 — Pipeline
-Wiring" section below.
-
-Files created:
+**Files that exist (`forge-template`):**
 
 ```
 core/agents/utils/
@@ -144,6 +97,7 @@ core/decisions/
     01-requirements.yml
     02-design.yml
     03-implementation.yml
+    03b-recover-implementation.yml
     04-qa.yml
     05-security.yml
     06-deploy.yml
@@ -151,12 +105,8 @@ requirements.txt
 .env.example
 ```
 
-(`security_agent.py` was missing from this list in a prior session despite
-being complete and live-run-verified since Step 3.9 — added here alongside
-`deploy_agent.py`, not a new file.)
-
-Also, in `forge-demo-apps` (not this repo): `.github/workflows/notify-forge.yml`
-— see the Phase 4 section below.
+Also, in `forge-demo-apps` (not this repo): `.github/workflows/notify-forge.yml` and
+`.github/workflows/design-pr-security-noop.yml` — see "Pipeline Wiring & Triggers" below.
 
 ---
 
@@ -257,12 +207,23 @@ Credentials in `forge-template` repo:
 - `FORGE_APP_PRIVATE_KEY` — secret (multiline PEM; in `.env` wrap in double quotes to preserve real newlines)
 - `FORGE_APP_CLIENT_ID` — **variable** (not secret — publicly visible on the App settings page)
 
+**`_build_app_jwt()`'s `exp` claim must be computed from `issued_at`, not `now`** — GitHub
+hard-rejects JWTs where `iat`-to-`exp` exceeds 10 minutes; computing `exp` as `now + 600`
+on top of an already-skewed-back `iat` (clock-drift padding) silently exceeded that window
+project-wide until fixed (found while retrying REQ-2026-03's Design stage).
+
 ### github_helper.py — two auth contexts, two repo targets
 
 | Function | Auth | Target repo |
 |---|---|---|
-| `post_comment`, `add_label`, `remove_label` | `GITHUB_TOKEN` | `forge-template` (tracking issue lives here) |
-| `create_branch`, `commit_files`, `open_pr`, `get_file_contents`, `post_pr_comment`, `get_pr_comments` | App installation token | `forge-demo-apps` (cross-repo work) |
+| `post_comment`, `remove_label` | `GITHUB_TOKEN` | `forge-template` (tracking issue lives here) |
+| `add_label` | App installation token | `forge-template` |
+| `create_branch`, `commit_files`, `open_pr`, `get_file_contents`, `post_pr_comment`, `get_pr_comments`, `get_pr`, `create_check_run`, `create_review_with_comments`, `create_single_review_comment`, `delete_files`, `list_open_prs_by_head` | App installation token | `forge-demo-apps` (cross-repo work) |
+
+`add_label` moved off `GITHUB_TOKEN` because GitHub Actions' anti-recursion rule means a
+`GITHUB_TOKEN`-authored label change never triggers a new workflow run — this silently
+broke `06-deploy.yml`'s label-driven dispatch for every agent-applied
+`qa-approved`/`security-approved` until fixed (see "Pipeline Wiring & Triggers" below).
 
 - `FORGE_SOURCE_REPO` env var names the orchestration repo (default: `forge-template`)
 - `FORGE_TARGET_REPO` env var names the monorepo (default: `forge-demo-apps`)
@@ -326,11 +287,6 @@ Entry point: `python -m core.agents.intake_agent --spreadsheet <path> --issue-nu
 structured failure comment to the tracking issue (best-effort) before re-raising, so the
 GitHub Actions job fails loudly with a visible GitHub comment rather than silently. All six
 stage agent scripts must follow this pattern.
-
-**Live run verified 2026-07-29:**
-- Issue `forge-template#2`, request-id `REQ-2026-01`
-- 1,045 input tokens / 472 output tokens / `total_cost_usd: $0.010215` / 13.3 s
-- 6 questions posted; `clarification-pending` label applied
 
 ### file_io.py — formatting helpers (added Step 3.3)
 
@@ -405,14 +361,6 @@ reused across every request, not per-request like `design/<request-id>`/
 Every requirement row maps to exactly one User Story; `source_req_number` preserves traceability
 back to the spreadsheet. ADO work items are NOT created by this agent — only after a human
 applies `requirements-approved` (Phase 4 wiring).
-
-**Live run verified 2026-07-29:**
-- Issue `forge-template#2`, request-id `REQ-2026-01`
-- 2,281 input tokens / 3,876 output tokens / `total_cost_usd: $0.064983` / 62.5 s
-- `requirements.md` + `ado-work-items.json` committed to `forge-demo-apps` on `main`
-  (historical — this run predates the Phase 4 step 4.8 retrofit that moved both
-  files to the `pipeline-state` branch; see above)
-- Summary comment posted to issue #2; no label applied (label is human action)
 
 ### Managed Agents API — current schema (verified against Anthropic reference docs)
 
@@ -490,19 +438,9 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 
 ## Outstanding Before Phase 3 Continues
 
-- Document 4 (Governance) already lists ADR-0010 as the 10th seed ADR — done.
-- ADR-0011 committed at `core/decisions/0011-base-anthropic-client.md` — done.
-- Step 3.2 Intake Agent (`core/agents/intake_agent.py`) — done; live run verified on issue #2.
-- Step 3.3 Requirements Agent (`core/agents/requirements_agent.py`) — done; live run verified on issue #2.
-- Step 3.4 Design Agent (`core/agents/design_agent.py`) — done; live run verified on issue #2 (PR #4 opened on forge-demo-apps).
-- Step 3.5 Implementation Coordinator (`core/agents/implementation_coordinator.py`) — done; dry run verified on issue #2 (96 files, 156 KB archive); **real live run verified 2026-07-30 (PR #5 opened on forge-demo-apps, 101 files)**.
-- Step 3.8 QA Agent (`core/agents/qa_agent.py`) — done; **real live run verified 2026-08-04** (8 ADO Bugs filed #96–103, comment posted on forge-demo-apps PR #5, `qa-loop-back` applied to issue #2 — see below).
-- Step 3.9 Security Agent (`core/agents/security_agent.py`) — done; **real live run verified 2026-08-05** (PR #5 comment posted, `security-check` check run created (conclusion `success`), `security-approved` applied to issue #2 — see below).
-- Step 3.10 Deploy Agent (`core/agents/deploy_agent.py`) — done for the staging path; **real live run verified 2026-08-05** against the two backend units (`req-2026-01-document-api`, `req-2026-01-email-worker`) — see below. Frontend unit and the EmailWorker runtime-config gap are open follow-ups, not blockers on Step 3.10 itself.
-- Phase 3 complete. Phase 4 (pipeline wiring, all seven workflows + branch
-  protection) is also complete as of 2026-08-06 — see the "Phase 4 — Pipeline
-  Wiring" section below. Next: a real end-to-end agent run through the new
-  `repository_dispatch` path (requires an actually-open PR).
+Phase 3 and Phase 4 are both complete. The original step-by-step checklist (Steps
+3.1-3.10, Build Plan 4.1-4.9) and every dated live-run verification live in
+`docs/CLAUDE-archive-2026-08-phase3-5.md`.
 
 ---
 
@@ -548,12 +486,6 @@ Entry point: `python -m core.agents.design_agent --issue-number <n> --request-id
 A draft PR is opened against `main` in `forge-demo-apps`; a summary comment linking to the
 PR is posted on the FORGE tracking issue. Human merges the PR → applies `design-approved`
 label → triggers Implementation (Gate 2, Document 6).
-
-**Live run verified 2026-07-30:**
-- Issue `forge-template#2`, request-id `REQ-2026-01`
-- 2,929 input tokens / 12,738 output tokens / `total_cost_usd: $0.199857` / 222 s
-- `design.md` + `openapi.yaml` + `tasks.md` committed to `forge-demo-apps` on `design/REQ-2026-01`
-- Draft PR #4 opened; summary comment posted to issue #2
 
 ### managed_agents_wrapper.py — Files API additions (added Step 3.5)
 
@@ -616,35 +548,6 @@ decodes UTF-8 (raises `ValueError` on binary), returns `{path: content}` dict fo
 **Output on a real run:**
 - All files committed to `feature/<request-id>` branch in `forge-demo-apps`
 - Draft PR opened against `main`; summary comment (with session ID + Console link) posted to tracking issue
-
-**Dry run verified 2026-07-30:**
-- Issue `forge-template#2`, request-id `REQ-2026-01`
-- session `sesn_0158Mvs91wfr9rNHPfa9W1oH` — 4 threads (coordinator + 3 specialists), `idle (end_turn)`
-- Archive: 156,728 bytes → 96 files extracted under `services/REQ-2026-01/`
-  (full .NET solution with DocumentApi + EmailWorker, Next.js frontend, xUnit + Jest tests)
-
-**Live (real, non-dry-run) run verified 2026-07-30:**
-- Issue `forge-template#2`, request-id `REQ-2026-01`
-- session `sesn_01EP8tcHcgdkSz7m14wKL4k6` — 4 threads (coordinator + 3 specialists), `idle (end_turn)`
-- Archive: 79,601 bytes → 101 files extracted under `services/REQ-2026-01/`
-  (full .NET solution with DocumentApi + EmailWorker, Next.js/TypeScript frontend,
-  xUnit + Jest tests, Playwright e2e tests, `COMPLIANCE_CHECKLIST.md`)
-- Committed to `feature/REQ-2026-01` in `forge-demo-apps`; draft **PR #5** opened
-  against `main`; summary comment posted to tracking issue #2
-- Session, environment, coordinator, and all 3 subagents archived cleanly after commit
-
-**Operational incident during this run — resumed by ID, not by re-invoking the script:**
-The `python -m core.agents.implementation_coordinator` process was killed by the
-invoking shell tool's own timeout (background commands are capped around 10 minutes
-in that tooling) while `poll_until_idle()` was still waiting. This killed the *local*
-script only — the Managed Agents session itself runs server-side and kept working
-independently, reaching `idle (end_turn)` on its own. Recovery was a small one-off
-script that reused the already-known `session_id` / `coordinator_id` / `subagent_ids`
-/ `environment_id` (from the `managed_agents_session_start` JSON log line printed
-before the kill) to resume exactly where `run_implementation_coordinator()` left off —
-`poll_until_idle()` (instant, since already idle) → audit trail → list/download output
-files → `_extract_archive_to_file_dict()` → `commit_files()` → `open_pr()` →
-`post_comment()` → `archive_session()`.
 
 **Do NOT simply re-run `implementation_coordinator.py` after a kill/timeout like this.**
 `create_agent_session()` runs again and creates a second, duplicate, billable set of
@@ -753,71 +656,19 @@ step 4.5, **not yet wired**). This script does not clone anything itself.
 - `--dry-run`: runs tests and computes everything (including the Claude call) but
   prints to stdout instead of filing ADO Bugs, posting to GitHub, or applying labels.
 
-**Verified 2026-08-03:** unit-tested with synthetic data in Claude.ai chat (no live
-API/GitHub/ADO calls). `py_compile` clean; `smoke_github` (8/8) and `smoke_ado`
-(4/4) re-run clean after the additive `github_helper.py`/`ado_helper.py` changes.
-Confirmed `forge-demo-apps`' frontend `package.json` has `"test": "jest"` (a bare
-script with no args of its own), so `npm test -- --ci --json --outputFile=...`
-correctly forwards those flags to Jest, matching the module docstring's assumption.
+**Frontend runner auto-detection (added during the REQ-2026-03 fix cycle):**
+`_detect_frontend_test_runner()` checks for a `vitest.config.{ts,js,mjs}` file or
+`"vitest"` in `package.json`'s deps, defaulting to `jest`. Vitest's `--reporter=json`
+output is close enough to Jest's schema that `_parse_jest_json()` handles both without a
+separate parser — but see Open Items for its file-collection blind spot (a suite where
+every file fails to *collect* reports 0/0/0 and is currently treated as a pass).
 
-**Real `--dry-run` verified 2026-08-04** against an actual local checkout
-(`C:\Users\mikef\projects\forge-demo-apps-clone`, `services/REQ-2026-01/{backend,frontend}`)
-— first time this script ran real `dotnet test` / `npm test` rather than synthetic
-data. Results: backend 9/11 passed, frontend 38/44 passed, 8 deterministic bug
-candidates computed, Claude wrote the PR report, correctly recommended
-`qa-loop-back` (attempt 1 of 3). Confirms the TRX/Jest-JSON parsing, severity
-heuristic, and retry-attempt logic all work against real tool output, not just
-hand-built fixtures.
-
-**Two Windows-only bugs found and fixed in `_run_shell()` during that run**
-(both in the helper only — no behavior change on the Linux GitHub Actions
-runners this normally runs on):
-1. `subprocess.run(["npm", ...])` raised `FileNotFoundError` on Windows — `npm`
-   is actually `npm.cmd`, and Win32 `CreateProcess` doesn't consult `PATHEXT`
-   the way `cmd.exe` does, so a bare `"npm"` never resolves. Fixed by resolving
-   `command[0]` through `shutil.which()` before passing to `subprocess.run`.
-2. Jest's UTF-8/ANSI output (checkmarks, color codes) crashed a `subprocess`
-   reader thread with `UnicodeDecodeError` under Windows' default `cp1252`
-   text decoding. Fixed by passing `encoding="utf-8", errors="replace"`
-   explicitly. Didn't corrupt the first run's result (frontend parsing reads
-   the JSON report file, not stdout) but would have crashed the "suite failed
-   to produce a report" diagnostic path, which does fall back to a stdout/stderr
-   tail.
-
-**Discovered during that same session: PR #5 was already merged, and the checkout
-had uncommitted local patches never pushed to `forge-demo-apps`.** The dry-run's
-8 failures were run against a checkout someone had hand-patched to even get
-`dotnet restore`/`npm test` to run at all (missing `SendGrid.Extensions.
-DependencyInjection` package ref, missing `using Microsoft.Extensions.
-Configuration;`, an unresolvable `Microsoft.AspNetCore.Http.Features` package
-ref, an invalid Jest config key `setupFilesAfterFramework` instead of
-`setupFilesAfterEnv`, and missing frontend test devDependencies) — none of
-which were ever committed. Filed as **PR #7** (`fix/req-2026-01-test-infra` →
-`main`), reviewed, one stale/contradictory code comment removed, merged
-2026-08-04 (`fcae2b6`). Re-verified with a fully clean checkout
-(`git clean -xdf` in both `backend/` and `frontend/`, fresh `dotnet restore` +
-`npm install`) — **identical 8-failure result**, confirming these are real
-application bugs, not artifacts of the earlier patched state.
-
-**Real (non-dry-run) live run verified 2026-08-04**, against that clean,
-post-PR#7 checkout, invoked manually with `--repo-path` pointing at the local
-clone (no Phase 4 workflow wiring involved — `--pr-number` is only required
-for a real run per the script's own argparse help text; a manually-supplied
-checkout satisfies the "needs a repo on disk" requirement just as well as an
-Actions `actions/checkout` step would):
-- 8 ADO Bugs filed in FORGE-Build: #96–97 (backend, Severity 3-Medium),
-  #98–103 (frontend, Severity 2-High) — all with no parent User Story link
-  (expected; Phase 4 ADO item creation hasn't run for this request yet)
-- PR comment posted: `forge-demo-apps#5` comment
-  (`issuecomment-5184902825`), attempt 1 of 3
-- Label `qa-loop-back` applied to tracking issue `forge-template#2`
-  (alongside the pre-existing `clarification-pending`)
-- Claude call: 3,361 in / 947 out tokens, $0.024288, 15.58s
-
-**Still not exercised: the actual Phase 4 GitHub Actions checkout wiring**
-(step 4.5) — this run used a manually-provided local clone, not an
-Actions-driven checkout. Functionally equivalent for the script's own logic,
-but the workflow-level wiring itself remains unbuilt.
+**`not_applicable` is a real third outcome, not a pass/fail variant (Phase 5 pre-flight
+Fix 3):** a suite with no test script at all (`_frontend_test_script_exists()`) or no
+`*.Tests.csproj` anywhere under the service root (`_resolve_backend_test_dir()`, which
+globs for the real test project rather than assuming a fixed path) is reported as "not
+applicable", never counts against the 3-attempt retry budget, and never files a synthetic
+"suite failed to run" bug.
 
 ### github_helper.py — get_pr() / create_check_run() / create_review_with_comments() / create_single_review_comment() (added Step 3.9)
 
@@ -889,196 +740,112 @@ applies here too.
   summary/overview comment/check-run verdict/label decision to stdout, but
   posts nothing, creates no check run, and applies no label.
 
-**Verified 2026-08-05:** `py_compile` clean throughout.
 
-**Real `--dry-run` first surfaced a genuine false positive**, run against
-the merged PR #5 checkout at `services/REQ-2026-01/`: Gitleaks flagged 1
-Critical finding — a hardcoded fake credential in
-`backend/DocumentApi.IntegrationTests` (`WebApplicationFactory` test setup
-config), the same class of expected-fixture-secret already anticipated in
-the module's own severity-mapping design. Fixed by adding
-`team/gitleaks-allowlist.toml` (Document 7's Flexible/Locked model — team-
-configurable allowlist, `useDefault = true` keeps Gitleaks' full default
-ruleset active everywhere else) with a path regex excluding any
-`.../*test*/...` directory, and wiring `--config` into `_run_gitleaks()`
-(see `github_helper.py` entry above for the four supporting GitHub API
-functions this stage needed). Re-run confirmed the fix: Critical → 0,
-Semgrep/Dependency-Check results unaffected, `check_conclusion` flipped to
-`success`.
+**Verdict gating also considers scanner-run failures, not just findings:**
+`any_tool_failed = any(not r.ran for r in all_results)`; `check_conclusion`/label
+decision now gate on `has_critical OR any_tool_failed` — a scanner that failed to run at
+all (crash, timeout, missing report) blocks merge and withholds `security-approved`
+exactly like a Critical finding does, no new label or retry mechanism introduced.
+Check-run title is a three-way branch: "blocked" / "incomplete — scanner failure" /
+"passed".
 
-**Real (non-dry-run) live run verified 2026-08-05**, against that same
-clean, post-allowlist-fix checkout, invoked manually with `--repo-path`
-pointing at the local clone of the merged PR #5 (same "manual invocation
-satisfies the on-disk-repo requirement" pattern as the QA Agent's real run
-— Phase 4's checkout wiring, step 4.6, still not built):
-- All three scanners ran clean: 0 findings (Semgrep, Gitleaks, Dependency-
-  Check all 0), 0 Critical
-- Overview comment posted to `forge-demo-apps` PR #5
-- `security-check` check run created on PR #5's head commit (`0f5f1c57`),
-  conclusion `success`
-- Label `security-approved` applied to tracking issue `forge-template#2`
-- Claude call: 599 in / 269 out tokens, $0.005832, 5.37s
+**OWASP Dependency-Check specifics:** pinned to **v12.1.0** (the original v9.2.0 predates
+NIST's NVD API 2.0 rollout and silently fails). Requires `NVD_API_KEY` set as a
+`forge-template` Actions secret. Command includes `--exclude "**/node_modules/**"` —
+without it, the general-purpose analyzers walk every file inside `frontend/node_modules`
+on top of the Node Audit Analyzer (which already covers npm deps correctly via
+`package-lock.json`), pushing a full scan past 10 minutes. `_run_dependency_check()`
+captures stdout/stderr on a report-missing failure (matches `_run_semgrep()`'s pattern).
+
+---
 
 ### deploy_agent.py — Stage 6 (Deploy, staging)
 
 Entry point: `python -m core.agents.deploy_agent --issue-number <n> --request-id <id> --repo-path <path> --commit-sha <sha> --pr-number <n> [--dry-run]`
 
-Like QA and Security, this stage needs the actual repository contents on
-disk (`--repo-path`) — it does not clone anything itself. Unlike every
-prior stage, **it never calls Claude/`invoke_agent()`** — unit detection,
-Dockerfile generation, and the PR comment are all deterministic
-string/template work with no judgment call to hand to a model, the same
-"FORGE automatic, not AI judgment" discipline QA's severity classifier and
-Security's severity tables already established, just taken one step
-further (no model call at all, not even for a write-up).
+Needs the actual repository contents on disk (`--repo-path`) — does not clone anything
+itself. Never calls Claude/`invoke_agent()` — unit detection, Dockerfile generation, and
+the PR comment are all deterministic string/template work ("FORGE automatic, not AI
+judgment", same discipline as QA/Security's severity classifiers, taken one step further).
 
-- **Unit detection** walks `services/<request-id>/backend/` for `*.csproj`
-  files (skipping any path with a case-insensitive "test" segment, same
-  convention as `team/gitleaks-allowlist.toml`), classifies each as `web`
-  (references `Microsoft.NET.Sdk.Web`/`Microsoft.AspNetCore.App`) or
-  `worker` (references `Microsoft.Extensions.Hosting`, no ASP.NET
-  reference; also the default for an unclassifiable project, logged as a
-  warning — the safer failure mode, since `web` implies public ingress).
-  `services/<request-id>/frontend/package.json` becomes one additional
-  `frontend` unit if present. Each unit's Container App / image name is
-  `<request-id>-<slug>` (all lowercase — both Docker repository names and
-  Azure Container App names reject uppercase; e.g. `DocumentApi` →
-  `req-2026-01-document-api`).
-- **Dockerfiles are generated from the three new templates
-  (`core/agents/templates/dockerfiles/`) only when a project directory
-  doesn't already have one of its own** — never overwrites an existing
-  Dockerfile. A matching `.dockerignore` is generated the same way (not
-  in the original brief, but required for a correct build — without it,
-  `COPY . .` in the generated templates would overwrite the fresh,
-  correct-platform artifacts from the earlier build stage with
-  host-platform ones, and balloon the build context with node_modules/
-  bin/obj).
-- **Target ports are fixed, not configurable per run:** web units 8080
-  (ASP.NET Core 8+ container default), frontend 3000 (`next start`
-  default), worker units get no ingress at all.
-- **`docker build`/`docker push` run for real in both `--dry-run` and a
-  real run** — same "exercise the real tool, skip only the posting"
-  pattern as QA/Security. `az login --service-principal` (parsing the
-  `AZURE_STAGING_CREDENTIALS` JSON blob) and the read-only `az containerapp
-  show` existence check also run for real in both modes, so the printed
-  dry-run command reflects an accurate create-vs-update decision. Only the
-  `az containerapp create`/`update` mutation itself is print-only (redacted
-  `--registry-password`) in `--dry-run`.
-- **`_detect_design_gaps()`** flags (never blocks) any unit whose project
-  label doesn't appear in `docs/<request-id>/design.md`, surfaced in the PR
-  comment. Checks both the literal identifier and a de-camelCased spaced
-  variant ("EmailWorker" → "Email Worker") case-insensitively — design.md
-  is human-authored prose and never uses the bare camelCase identifier; a
-  literal-only check produced a false-positive gap on `DocumentApi` during
-  this session's own verification (see below).
-- No label applied on success — Document 6's Label Reference table has no
-  deploy-stage label; staging is a verification step, not a release gate.
+**Unit detection:** walks `services/<request-id>/backend/` for `*.csproj` files (skipping
+any path with a case-insensitive "test" segment), classifies each as `web` (references
+`Microsoft.NET.Sdk.Web`/`Microsoft.AspNetCore.App`) or `worker` (references
+`Microsoft.Extensions.Hosting`, no ASP.NET reference; also the default for an
+unclassifiable project — the safer failure mode, since `web` implies public ingress).
+`services/<request-id>/frontend/package.json` becomes one additional `frontend` unit if
+present.
 
-**Verified 2026-08-05:** `py_compile` clean throughout.
+**Unit naming and validation:** each unit's Container App / image name is
+`<request-id>-<slug>`. `_slugify()` treats any non-alphanumeric run (not just PascalCase
+boundaries) as a word separator — `OnCallRosterTracker.Api` → `on-call-roster-tracker-api`.
+`_validate_unit_name()` checks the full name against Docker tag grammar *and* Azure
+Container Apps' naming rules (lowercase alphanumeric + hyphen, starts with a letter, no
+leading/trailing/double hyphen, **under 32 characters**) and **raises `ValueError` rather
+than truncating** — Mike's explicit decision (see Open Items: REQ-2026-03's backend unit
+is currently blocked by this). The backend "web" unit's name is validated *before* either
+cross-service FQDN is derived (below), so an invalid backend name falls back to the
+"no web backend unit" no-wiring warning instead of baking a broken URL into the frontend.
 
-**Real `--dry-run` against the merged PR #5 checkout surfaced a genuine,
-previously-undiscovered app bug**, not a Deploy Agent bug: `next build`
-failed its type-check on `frontend/components/Navigation.tsx:28` —
-`lucide-react` icon components inherit React's full `AriaAttributes`,
-where `aria-hidden` is typed `Booleanish` (`boolean | "true" | "false"`),
-but `NavItem.icon`'s custom prop type declared `aria-hidden` as plain
-`boolean`, making the icons structurally incompatible. Never caught before
-because QA's `npm test` only runs Jest, never `next build`/`tsc`. Fixed on
-`forge-demo-apps` branch `fix/req-2026-01-navigation-aria-types` (widened
-to `React.AriaAttributes["aria-hidden"]`, the exact type React itself
-uses) — **opened as PR #8, deliberately left unmerged pending Mike's
-review**, same "small, separate, mechanical fix" pattern as QA's PR #7.
+**Dockerfiles/`.dockerignore`** are generated from the three templates
+(`core/agents/templates/dockerfiles/`) only when a project directory doesn't already have
+one of its own — never overwrites an existing Dockerfile (Implementation's subagents
+often commit their own). `_ensure_frontend_public_dir()` creates an empty
+`services/<request-id>/frontend/public/` directory pre-build if missing, regardless of
+whether the Dockerfile is Deploy-Agent-generated or pre-existing — fixes a `COPY
+--from=builder /app/public ./public` failure that's hit twice now (REQ-2026-02,
+REQ-2026-03) on apps with no static assets.
 
-**A second, unrelated, pre-existing type error surfaced immediately
-after** in `lib/app-insights.ts:70` — a duplicate `@microsoft/
-applicationinsights-core-js` dependency resolution (hoisted at top-level
-`node_modules` vs. nested inside `applicationinsights-analytics-js/
-node_modules/`), so TypeScript sees two structurally-identical-but-
-nominally-different `ITelemetryPlugin`/`ITelemetryItem` types. **Explicitly
-not investigated or fixed this session, per Mike's direction** — flagged
-as an open follow-up. As a result, **the frontend unit was not verified
-end-to-end this session**: it was parked (its `package.json` renamed aside
-in the local checkout only, no code change) so unit detection would skip
-it, and dry-run/real-run verification proceeded backend-units-only.
+**Fixed target ports:** web units 8080 (ASP.NET Core 8+ container default), frontend 3000
+(`next start` default), worker units get no ingress at all.
 
-**Real (non-dry-run) live run verified 2026-08-05**, backend units only,
-against the same merged-PR-#5 checkout used for QA/Security's real runs:
-- 2 units detected: `req-2026-01-document-api` (web),
-  `req-2026-01-email-worker` (worker)
-- Both Dockerfiles already existed (committed by Stage 3 back in PR #5) —
-  neither template was actually exercised for this run; the templates are
-  verified structurally but not yet by a real from-template build. The
-  Next.js template is similarly unexercised (frontend parked).
-- Both images built and pushed to `forgedemoacr.azurecr.io` for real
-- Both Container Apps created for real via `az containerapp create`
-  against `forge-staging` (`forge-build-rg`, per `team/config.yaml`)
-- PR comment posted: forge-demo-apps#5
-  (issuecomment-5197961121)
-- **`req-2026-01-document-api` confirmed actually working**: its staging
-  FQDN (`req-2026-01-document-api.yellowmeadow-894377a9.canadacentral.
-  azurecontainerapps.io`) resolves and responds over HTTPS (~0.3s once
-  warm; first request timed out during cold-start scale-from-zero,
-  `min_replicas: 0` per `team/config.yaml`, then responded fine on retry).
-  404s on `/` and `/swagger/index.html` are expected (no root route;
-  Swagger UI is Development-only, this container runs
-  `ASPNETCORE_ENVIRONMENT=Production`) — this confirms the ingress/TLS/
-  container layer is genuinely live, not that every route is mapped.
-- **`req-2026-01-email-worker` deployed but is crash-looping — a real,
-  previously-undiscovered gap, not a Deploy Agent bug.** `az containerapp
-  revision list` shows `healthState: Unhealthy` / `runningState: Failed`.
-  Container logs show `System.FormatException: The connection string
-  could not be parsed` from `ServiceBusClient`'s constructor at host
-  startup (`Program.cs:20`) — EmailWorker's hosted service builds its
-  Service Bus client eagerly at startup and crashes immediately with no
-  connection string configured. **Deploy Agent (as scoped this session)
-  has no mechanism at all for wiring application secrets/connection
-  strings (Service Bus, SQL, Blob Storage, SendGrid, App Insights) into
-  the Container App** — only `--image`/`--registry-*`/`--cpu`/`--memory`/
-  `--min-replicas`/`--max-replicas`/`--target-port`/`--ingress` are ever
-  set. DocumentApi doesn't crash the same way because EF Core/Blob clients
-  are constructed lazily (only touched on first actual request), so a
-  missing connection string there just means the *first real API call*
-  would fail, not the whole host at startup — the ingress-level check
-  above cannot distinguish this from full correctness. **This needs an
-  explicit decision (Key Vault references? Container App secrets driven
-  from a new team/config.yaml or GitHub-secrets source? something else?)
-  before EmailWorker can actually run in staging** — flagged here, not
-  designed or built.
-- Two bugs found and fixed in `deploy_agent.py` itself while getting to
-  the clean runs above: an em-dash console-encoding issue in log messages
-  (same class of fix already applied to `security_agent.py`'s log lines —
-  fixed to ASCII `--`), and the design.md-gap false-positive described
-  above (fixed to check both the literal and spaced form).
-- `.env.example` gained `ACR_LOGIN_SERVER`/`ACR_USERNAME`/`ACR_PASSWORD`
-  and `AZURE_STAGING_CREDENTIALS` entries (were previously undocumented
-  there despite being referenced in other project docs).
-- Local tooling: Docker Desktop and Azure CLI (64-bit) already installed
-  and confirmed working per chat 33's setup — no new install steps this
-  session.
+**Cross-service wiring:** `_get_env_default_domain()` (`az containerapp env show ...
+--query properties.defaultDomain`, once per run) plus each unit's deterministic name lets
+a unit's real FQDN be predicted *before that Container App exists* — no chicken-and-egg
+ordering problem. When a backend "web" unit is present and valid, the frontend build gets
+`--build-arg NEXT_PUBLIC_API_BASE_URL=<predicted backend FQDN>`; the backend "web" unit's
+create/update command gets `FRONTEND_ORIGIN=<predicted frontend FQDN>` added to its
+env-vars. Neither is set if there's no web backend unit in the request.
 
-**Still open, not built/fixed this session (explicitly out of scope per
-the brief, or newly flagged):**
-- Frontend unit unverified end-to-end (parked — see PR #8 and the
-  app-insights dependency issue above).
-- EmailWorker's runtime connection-string gap (needs a design decision,
-  not just a fix).
-- Production path, rollback, and Phase 4 GitHub Actions wiring for either
-  environment — all explicitly deferred per the original brief.
+**`docker build`/`docker push` and the read-only `az containerapp show` existence check
+run for real in both `--dry-run` and a real run** (only `az containerapp create`/`update`
+itself is print-only, redacted, in `--dry-run`). **`create` uses `--env-vars`, `update`
+uses `--set-env-vars`** — Azure CLI rejects the other on each (a real bug caught the first
+time this path ran fully live).
+
+**Per-unit build+push+deploy is interleaved in one loop with a `try`/`except` per unit** —
+one unit's build/push/deploy failure no longer blocks a different unit that would
+otherwise succeed. `DeployResult` carries an `error` field; the PR comment shows a
+`❌ **failed** — <error>` row for failed units plus a "N of M unit(s) failed" summary line
+when any exist (wording is conditional on the real count — it used to hardcode "the rest
+were deployed successfully" even at 0-of-N). On any unit failure, a second, distinct
+summary comment is also posted to the FORGE tracking issue, and the run raises so CI still
+reflects a real problem — even though the (partial) PR comment reporting successes is
+always posted.
+
+**`_detect_design_gaps()`** flags (never blocks) any unit whose project label doesn't
+appear in `docs/<request-id>/design.md`, checking both the literal identifier and a
+de-camelCased spaced variant ("EmailWorker" → "Email Worker") case-insensitively.
+
+**No label applied on success** — Document 6's Label Reference table has no deploy-stage
+label; staging is a verification step, not a release gate.
+
+**Known, confirmed-live gap: no app-secrets wiring mechanism at all.** Only
+`--image`/`--registry-*`/`--cpu`/`--memory`/`--min-replicas`/`--max-replicas`/
+`--target-port`/`--ingress` plus the cross-service vars above are ever set — three
+independent apps have now hit this (EmailWorker's Service Bus connection string,
+REQ-2026-02's D365 config, REQ-2026-03's NextAuth `NEXTAUTH_SECRET`). See Open Items.
 
 ---
 
-### Phase 4 — Pipeline Wiring (Build Plan steps 4.1–4.7, 4.9)
+### Pipeline Wiring & Triggers
 
-All seven `.github/workflows/*.yml` files rewritten from `workflow_dispatch`-only
-stubs to real triggers, wired 2026-08-05/06. Every workflow follows the same
-shape: guard clause re-checks trigger state at run time (not just at the
-event, since labels/PR state can change between event and runner start) →
-resolve request-id/PR context → invoke the real stage agent script (no
-`--dry-run`) → label lifecycle cleanup → a final catch-all step posts a
-failure comment if a *pre-agent* glue step failed (the agent scripts
-themselves already self-report their own internal failures per ADR-0011 —
-this only covers the gap before that point, and is skipped whenever the
-agent step actually ran, to never double-post).
+Every `.github/workflows/*.yml` follows the same shape: guard clause re-checks trigger
+state at run time (labels/PR state can change between event and runner start) → resolve
+request-id/PR context → invoke the real stage agent script (no `--dry-run`) → label
+lifecycle cleanup → a catch-all step posts a failure comment if a *pre-agent* glue step
+failed (stage agents self-report their own internal failures per ADR-0011; this only
+covers the gap before that point, skipped whenever the agent step actually ran).
 
 **Trigger mapping:**
 
@@ -1088,1996 +855,182 @@ agent step actually ran, to never double-post).
 | `01-requirements.yml` | `clarification-complete` label | `clarification-complete`, `clarification-pending` |
 | `02-design.yml` | `requirements-approved` label | `requirements-approved` |
 | `03-implementation.yml` | `design-approved` label | `design-approved` |
-| `04-qa.yml` | `repository_dispatch` (`feature-pr-opened`, from forge-demo-apps) | none (qa_agent.py labels itself; a pass also clears a stale `qa-loop-back`/`qc-retry-limit-reached` from an earlier attempt) |
-| `05-security.yml` | `repository_dispatch` (`feature-pr-opened`) | none (security_agent.py labels itself; no retry-loop label exists for this stage) |
-| `06-deploy.yml` | BOTH `qa-approved` AND `security-approved` present | none (Document 6 has no deploy-stage label; `qa-approved`/`security-approved` stay as valid historical markers) |
+| `03b-recover-implementation.yml` | `workflow_dispatch` only, manual | n/a — see "Implementation completion detection & recovery" below |
+| `04-qa.yml` | `repository_dispatch` (`feature-pr-opened`, from forge-demo-apps) | none (qa_agent.py labels itself) |
+| `05-security.yml` | `repository_dispatch` (`feature-pr-opened`) | none (security_agent.py labels itself) |
+| `06-deploy.yml` | BOTH `qa-approved` AND `security-approved` present | none (Document 6 has no deploy-stage label) |
 
-**Cross-repo trigger problem and its fix:** `04-qa.yml`/`05-security.yml` need
-to run off a PR event that happens in `forge-demo-apps`, but a workflow can
-only be triggered by an event in the repo where it's defined. Fixed via
-`repository_dispatch`: `forge-demo-apps` gained its own
-`.github/workflows/notify-forge.yml` (pushed there directly via `gh api`,
-since the FORGE App itself has no `workflows` permission and can't write
-workflow files programmatically) that fires on `pull_request` (`opened`,
-`synchronize`), filters to `feature/*` branches only, and forwards
-`{pr_number, head_sha, head_ref}` to forge-template as a `repository_dispatch`
-event type `feature-pr-opened`, using a GitHub App token freshly scoped to
-forge-template (`actions/create-github-app-token@v3`).
+**Cross-repo trigger:** `forge-demo-apps` has its own `.github/workflows/notify-forge.yml`
+(pushed there directly — the FORGE App has no `workflows` permission and can't write
+workflow files itself) firing on `pull_request` (`opened`, `synchronize`) for `feature/*`
+branches, forwarding `{pr_number, head_sha, head_ref}` to `forge-template` as a
+`repository_dispatch` event `feature-pr-opened`. `forge-demo-apps` also has
+`.github/workflows/design-pr-security-noop.yml`, giving `design/*` PRs a no-op
+`security-check` (`conclusion: success`, clearly labeled as not a real scan) — `main`'s
+branch protection requires that check on every PR, but only `feature/*` PRs ever get a
+real one.
 
-**Three manual prerequisites this required, all completed 2026-08-06:**
-1. The FORGE App (app_id 4388813, installation id 148876680) is now
-   installed on **both** forge-template and forge-demo-apps — confirmed via
-   a JWT-authenticated `GET /repos/.../installation` check on both repos
-   (both return 200 with identical permissions:
-   `checks/contents/issues/pull_requests: write`, `metadata: read`). This had
-   to be done via the GitHub web UI — the API rejects attempts to modify an
-   App's own installation repository list from anywhere other than that UI.
-2. `forge-demo-apps` gained its own copies of `FORGE_APP_CLIENT_ID` (repo
-   variable) and `FORGE_APP_PRIVATE_KEY` (repo secret) — repo secrets/vars
-   don't cross repos in GitHub Actions, so forge-template's existing values
-   weren't visible there.
-3. `notify-forge.yml` itself, pushed to forge-demo-apps' `main`.
+**`request_id` and feature-PR resolution — both fixed to not trust weak signals:**
+- `04-qa.yml`/`05-security.yml` resolve `request_id` via `workflow_glue.py`'s
+  `resolve-request-id` subcommand (scans tracking-issue comments for a prior stage's
+  `<!-- forge:agent-comment ... request_id=... -->` marker), **not** a bash prefix-strip
+  of the branch name. The old prefix-strip silently produced a wrong `request_id` (and a
+  false-positive `qa-approved` with zero real coverage) the one time a `feature/*` branch
+  had extra suffix text.
+- `workflow_glue.py`'s `resolve_feature_pr()` (used by `06-deploy.yml`) asks GitHub
+  directly for the currently-open PR on `feature/<request_id>` (via
+  `github_helper.list_open_prs_by_head()`), instead of trusting the *original*
+  Implementation Coordinator's tracking-issue comment — which goes stale the moment a
+  follow-up feature PR opens on an already-implemented request. Raises `ValueError` on
+  zero or more than one open match rather than silently picking one.
 
-**New scripts:**
-- `core/agents/create_ado_items.py` — no driver existed to wire
-  `ado_helper.py`'s `create_epic`/`create_feature`/`create_user_story` to
-  `docs/<request-id>/ado-work-items.json`. Reads that file (`pipeline-state`
-  branch, moved off `main` — see the Step 4.8 entry below), creates the real
-  Epic → Features → User Stories hierarchy, writes the real
-  IDs back plus a new top-level `primary_user_story_id` key (the first User
-  Story created, in document order — `qa_agent.py`'s
-  `_resolve_parent_story_id()` already looks for exactly this key and had
-  been silently no-op'ing on its absence since Step 3.8). If ANY ADO call
-  fails partway through, posts a failure comment naming what succeeded before
-  the failure (items already created are NOT rolled back — ADO has no
-  multi-item transaction) and exits non-zero, so `02-design.yml` never
-  invokes the Design Agent against a partial traceability chain.
-- `core/agents/workflow_glue.py` — four subcommands used only by the
-  workflows themselves, with no equivalent in any stage agent:
-  `download-issue-attachment` (finds and downloads the BA's intake
-  spreadsheet from the tracking issue's body/comments — handles both GitHub
-  attachment URL shapes), `resolve-request-id` (scans issue comments for any
-  prior stage's `<!-- forge:agent-comment ... request_id=... -->` marker —
-  one tracking issue maps to exactly one request for its whole life),
-  `resolve-feature-pr` (finds the feature PR number/head SHA from the
-  Implementation Coordinator's own tracking-issue comment, for
-  `06-deploy.yml`), `resolve-tracking-issue` (the reverse — finds the
-  tracking issue number from a forge-demo-apps PR body's own "Related FORGE
-  tracking issue: owner/repo#N" line, for `04-qa.yml`/`05-security.yml`,
-  which only ever learn a PR number from the dispatch payload).
-- `github_helper.py` gained `get_issue()` (issue object incl. current labels
-  — needed by every guard clause; didn't exist before since no prior stage
-  needed to re-read an issue's own label set).
+**`create_ado_items.py`** wires `ado_helper.py`'s `create_epic`/`create_feature`/
+`create_user_story` to `docs/<request-id>/ado-work-items.json` (read from the
+`pipeline-state` branch), writing real IDs back plus `primary_user_story_id` (the first
+User Story, in document order — `qa_agent.py`'s `_resolve_parent_story_id()` looks for
+exactly this key). No rollback on partial failure (ADO has no multi-item transaction);
+exits non-zero and posts a failure comment naming what succeeded.
 
-**Design decision made where the brief was silent:** `06-deploy.yml` deploys
-against the feature PR's **HEAD commit**, not a merged one. Nothing in the
-label-driven trigger chain guarantees the PR has been merged by the time both
-`qa-approved`/`security-approved` land (both gate *before* merge, by design —
-see `04-qa.yml`/`05-security.yml`'s own header comments), and
-`deploy_agent.py` only ever needed a commit SHA to tag the image with, not a
-merged one. Confirmed intentional: staging is a pre-merge verification
-environment for the human reviewer (Document 2 §4.8's framing — "a
-verification step, not a release"), not a post-merge release gate.
+**`workflow_glue.py`** also provides `download-issue-attachment` (finds/downloads the
+BA's intake spreadsheet from the tracking issue) and `resolve-tracking-issue` (finds the
+tracking issue number from a forge-demo-apps PR body's "Related FORGE tracking issue:
+owner/repo#N" line).
 
-**Verified 2026-08-06** via a real `repository_dispatch` fired manually
-against the existing PR #5 / tracking issue #2 pair (deliberately not a fresh
-PR — reusing already-completed Stage 3 output to avoid re-running the
-Managed Agents coordinator, whose cost is out of proportion to what this
-verification needed):
-- Confirmed both App-installation and forge-demo-apps secrets prerequisites
-  above were actually in place first (not assumed).
-- Fired `POST /repos/Flamespiker/forge-template/dispatches` with
-  `event_type: feature-pr-opened`, `client_payload: {pr_number: 5, head_sha:
-  "0f5f1c57ea5812537bc6d0150aa55d3722f3b190", head_ref:
-  "feature/REQ-2026-01"}` — the same payload shape `notify-forge.yml`
-  produces for a real event.
-- Both `04-qa.yml` ([run 31068863663](https://github.com/Flamespiker/forge-template/actions/runs/31068863663))
-  and `05-security.yml` ([run 31068863654](https://github.com/Flamespiker/forge-template/actions/runs/31068863654))
-  fired for real off the dispatch, both concluded `success`. Logs confirm the
-  `client_payload` crossed the repo boundary intact (`PR_NUMBER: 5`,
-  `HEAD_SHA: 0f5f1c57...`, `HEAD_REF: feature/REQ-2026-01`), and both guard
-  clauses correctly read PR #5's live state (`closed`, since it's merged) and
-  correctly skipped every downstream step (checkout, toolchain setup, the
-  real `qa_agent.py`/`security_agent.py` invocation) rather than running
-  against a stale event — confirmed no new PR #5 comment resulted.
-- **What this confirms:** the full cross-repo dispatch mechanism, payload
-  shape, and guard-clause decision logic all work correctly end-to-end.
-- **What this does NOT confirm:** a real `qa_agent.py`/`security_agent.py`
-  invocation actually completing through this dispatch path (posting a PR
-  comment, applying a label) — that requires an actually-open PR, which
-  would mean either a new throwaway PR or re-running Stage 3, both
-  deliberately out of scope this session.
+**Branch protection on `forge-demo-apps`' `main`:** requires the `security-check` status
+check (app_id `4388813`) and 1 approving review; no `bypass_pull_request_allowances`
+(GitHub rejects that field outright on a personal-account repo — confirmed via a 422, not
+assumed). `requirements_agent.py`/`create_ado_items.py` write `requirements.md`/
+`ado-work-items.json` to a dedicated, intentionally-unprotected `pipeline-state` branch
+(not `main`) for exactly this reason — `design_agent.py`/`qa_agent.py` read from the same
+branch. **`enforce_admins` is currently `false`**, contradicting the originally-confirmed
+`true` — see Open Items; not something any known session action changed.
 
-**Commit:** `8a702ee` on `main` (all ten Phase 4 files — seven workflows,
-`create_ado_items.py`, `workflow_glue.py`, `github_helper.py`'s `get_issue()`
-addition — committed and pushed together). `55a1384`/`3201fa8` document this
-Phase 4 section itself in `CLAUDE.md`.
-
-**Step 4.8 — branch protection: complete, after resolving a real conflict it
-surfaced (not just a config change).** `forge-demo-apps`'s `main` branch
-protection is live, confirmed via `gh api repos/Flamespiker/forge-demo-apps/
-branches/main/protection`:
-- `required_status_checks.checks`: `[{"context": "security-check", "app_id":
-  4388813}]` (pinned to the FORGE App's own check run from
-  `security_agent.py`'s `create_check_run()`), `strict: false`
-- `required_pull_request_reviews.required_approving_review_count`: `1`,
-  `dismiss_stale_reviews: false`, `require_code_owner_reviews: false`,
-  `require_last_push_approval: false`
-- `enforce_admins: true`, `allow_force_pushes: false`, `allow_deletions: false`,
-  `required_linear_history: false`
-- **No `bypass_pull_request_allowances`** — not needed; see below.
-
-This is what actually makes a Critical security finding block merge (the
-`security-check` check run's `failure` conclusion, not the `security-approved`
-label, per Document 2 §4.7 — the label is informational for humans, this is
-the enforcement mechanism).
-
-**How this actually got applied — first attempt found a real conflict, second
-attempt hit a platform limitation, third attempt resolved it properly:**
-1. First applying required-PR-review protection to `main` would have broken
-   `requirements_agent.py` and `create_ado_items.py`, both of which wrote
-   `requirements.md`/`ado-work-items.json` **straight to `main`** via
-   `commit_files()` — a direct ref update, which required-review protection
-   rejects identically to a `git push`. Found by reading the live source
-   before applying anything, not discovered by breaking something.
-2. Considered adding the FORGE App to
-   `required_pull_request_reviews.bypass_pull_request_allowances.apps`
-   (confirmed the correct field expects the app **slug**, `"forge-pipeline"`,
-   not the numeric app ID — those are two different formats; the app ID
-   *is* used, but only in `required_status_checks.checks[].app_id`). Rejected
-   by GitHub with a 422 (`"Only organization repositories can have users and
-   team restrictions"`) even with only `apps` populated — confirmed
-   empirically that `bypass_pull_request_allowances` cannot be used at all on
-   a personal-account-owned repo like forge-demo-apps, not just its
-   `users`/`teams` sub-fields as the docs' wording alone would suggest.
-3. **Resolution: moved `requirements.md`/`ado-work-items.json` off `main`
-   entirely, onto a dedicated, intentionally-unprotected `pipeline-state`
-   branch** (created once, branched from `main`'s tip — persistent and
-   shared across every request, unlike the per-request `design/<request-id>`/
-   `feature/<request-id>` branches, so neither writer calls `create_branch()`
-   itself). Framing: these two files are pipeline bookkeeping/traceability
-   records, not application code — the real human review for Requirements
-   already happens via the posted issue-comment draft, not a git diff on
-   `main`, so this doesn't rework the approval gate at all.
-   - Writers updated: `requirements_agent.py`, `create_ado_items.py`.
-   - Readers updated to the same branch (explicitly, not via a changing
-     default): `design_agent.py` (`requirements.md`), `qa_agent.py`
-     (`ado-work-items.json`, in `_resolve_parent_story_id()`).
-   - Not affected: `implementation_coordinator.py`/`deploy_agent.py`'s reads
-     of `design.md`/`openapi.yaml`/`tasks.md` — those still land on `main`
-     for real, via a human-reviewed PR, exactly as before.
-   - Verified without spending on a real Requirements/Design run or filing
-     duplicate ADO items: `create_ado_items.py --dry-run` still creates real
-     ADO work items (no dry-run mode exists on ADO's side) and
-     `requirements_agent.py --dry-run` never reaches its `commit_files()`
-     call at all — so neither flag actually exercises the changed branch
-     name. Verified the real mechanism directly instead: read both files
-     from `pipeline-state` (confirmed inherited correctly from `main` at
-     branch-creation), then round-tripped a no-op write via `commit_files()`
-     against `pipeline-state` and confirmed the content came back
-     byte-identical — proves the full blob→tree→commit→ref-update chain
-     works against the new branch.
-   - Commit `780a93f` on `main`.
-4. Protection re-applied cleanly (payload above) once the conflict no longer
-   existed, and read back via a fresh `GET` (not trusted from the `PUT`
-   response) to confirm no `bypass_pull_request_allowances` leaked in from
-   the earlier rejected attempts.
-
-**Not done:**
-- A real end-to-end agent run through the new dispatch path (see above) —
-  requires an actually-open PR, not yet created.
+**`github_helper.py`'s `add_label()` uses the GitHub App installation token, not
+`GITHUB_TOKEN`.** GitHub Actions' anti-recursion rule means a `GITHUB_TOKEN`-authored
+label never triggers a new workflow run — this silently broke `06-deploy.yml`'s
+label-driven dispatch for every agent-applied `qa-approved`/`security-approved` until
+fixed. `post_comment`/`get_issue`/`get_issue_comments`/`remove_label` stay on
+`GITHUB_TOKEN` (none of them need to trigger a downstream label-driven workflow).
 
 ---
 
-### Step 4.10 — Implementation recovery (DRYRUN-2026-01, cross-session)
+### implementation_coordinator.py / managed_agents_wrapper.py — completion detection & recovery
 
-Step 4.10 is a full pipeline dry-run exercising Stages 0–6 end-to-end against
-a fresh intake (request-id `DRYRUN-2026-01`, tracking issue `forge-template#4`),
-being driven from a separate/parallel session. This section documents only
-what happened in *this* session: recovering a stalled Implementation
-Coordinator run and verifying the result. Confirmed with Mike 2026-08-10 that
-`DRYRUN-2026-01`/issue #4 are real and simply hadn't been written back here
-yet — the other session's full Step 4.10 status (Intake/Requirements/Design
-that presumably preceded this, and QA/Security/Deploy that follow it) lands
-here separately when that session concludes.
+Real Stage 3 runs have taken 35-55+ minutes; `wait_for_all_threads_idle()` (in
+`managed_agents_wrapper.py`) is the one real completion signal for the whole stage — the
+coordinator's own `idle`/`end_turn` status can land in under a second (reflecting only its
+first turn ending after kicking off delegation), long before subagents actually finish.
+Polls every 15s up to `_COMPLETION_POLL_TIMEOUT` (default 5400s/90min, override via
+`FORGE_IMPLEMENTATION_COMPLETION_TIMEOUT`). `_ARCHIVE_RETRY_ATTEMPTS` (3, 2s/4s/8s) exists
+only to absorb the separate, genuinely transient idle→running archive-call race — it is
+**not** a substitute for the completion wait.
 
-**A distinct root cause from REQ-2026-01's incident, sharing only the recovery
-principle.** REQ-2026-01's earlier incident (see the `implementation_coordinator.py`
-entry above) was the *local* process/tracker getting killed mid-flight by the
-invoking shell tool's own timeout, while the remote Managed Agents session kept
-working independently. Today's failure was different: the
-`03-implementation.yml` Actions job ran to completion and explicitly failed —
-`managed_agents_wrapper.py`'s session-archive step exhausted its fixed 3-attempt
-exponential-backoff retry (2s/4s/8s) and gave up while Test Writer was still
-legitimately still working underneath. The top-level coordinator had already
-reported `idle`/`end_turn`, but a subagent thread was still active, so the
-archive call kept hitting the same "still running" rejection until the retry
-budget ran out — a genuinely slow-but-healthy session, not a killed process.
-The Managed Agents session itself reached real `idle` shortly after. Per the
-standing rule from REQ-2026-01, the recovery principle still applies even
-though the trigger differs: resume by reusing the known session ID, never
-re-invoke the coordinator.
+**`SessionStillRunningError`** (carries `session_id`/`thread_statuses`, and — attached by
+the coordinator — `coordinator_id`/`environment_id`/`subagent_ids`) is raised when threads
+aren't all idle within the completion-wait ceiling. **This is not a failure** — the session
+is left alive, not archived, specifically so it can be resumed by ID.
+`run_implementation_coordinator()` catches it distinctly: posts a "still running, not
+failed, check back later" comment to the tracking issue (not the generic failure comment)
+and exits `75` (vs. `1` for a real failure).
 
-**Recovery script: `resume_implementation.py`** (repo root, one-off — not a
-permanent module), hardcoding the IDs recovered from the failed job's log:
-`session sesn_01XefEai7XEyGBgAMDxUJh3u`, coordinator `agent_01VMj1F7w1tsRe8wqQXjGcoc`,
-environment `env_01TkNm9Xy5z5ANEVwopaRViR`, 3 subagents. It re-runs only the
-tail end `run_implementation_coordinator()` would have: download the
-already-produced archive → extract → `create_branch()`/`commit_files()` →
-`open_pr()` → `post_comment()` → `archive_session()`.
+**Known gap, confirmed live on REQ-2026-03:** `wait_for_all_threads_idle()` only checks
+thread `status`, never `session.error` events — a session that hits a fatal
+session-level error (e.g. Anthropic billing exhaustion) mid-run has every thread report
+`idle` once nothing can run, indistinguishable from a genuinely finished one. See Open
+Items.
 
-**Run verified 2026-08-06:**
-- Extracted 24 files from a 15,072-byte archive under
-  `services/DRYRUN-2026-01/` — a minimal .NET health-check API
-  (`HealthController`, `HealthCheckResponse`) + xUnit tests + Next.js
-  frontend, consistent with a deliberately small dry-run scope (vs.
-  REQ-2026-01's full DocumentApi/EmailWorker pair)
-- Committed to new branch `feature/DRYRUN-2026-01` (SHA `f99d2a01`) in
-  `forge-demo-apps`
-- Draft **PR #10** opened: "FORGE Implementation: DRYRUN-2026-01"
-- Comment posted to tracking issue `forge-template#4`
-- Session, environment, coordinator, and all 3 subagents archived cleanly —
-  no lingering billed resources, no fallback warning path triggered
+**`--recover-session SESSION_ID`** (CLI mode on `implementation_coordinator.py`,
+`--request-id` still required): derives all resource IDs via `get_session_resource_ids()`
+(a single `GET /sessions/{id}` — no need to dig a `managed_agents_session_start` log line
+out of Actions logs), checks live thread status, and returns cleanly with **no mutation at
+all** if anything is still busy ("not ready yet" is a normal, successful outcome here). If
+idle, runs `_sanity_check_extracted_files()` (rejects an archive under 3 files/500 bytes;
+requires ≥2 files under `services/<request-id>/<unit>/` for each unit `tasks.md` actually
+mentions — doesn't assume every request needs both backend and frontend) before reusing
+the exact same commit/PR/comment path the happy path uses, then archives the session
+itself. `.github/workflows/03b-recover-implementation.yml` is `workflow_dispatch`-only,
+deliberately manual, not automatic or polling — a human deciding "it's been long enough"
+is the intended amount of automation.
 
-**PR #10 spot-checked against a real local checkout:** fetched
-`feature/DRYRUN-2026-01` into `forge-demo-apps-clone` (same local clone used
-for QA/Security's manual runs) and ran `dotnet test` directly against
-`services/DRYRUN-2026-01/backend.tests` — **3/3 passed, 0 failed**
-(`HealthCheckApi.Tests.dll`). Confirms the resumed archive's backend content
-actually builds and its tests actually run, not just that the commit
-succeeded.
-
-**Not exercised in this session:** QA/Security/Deploy stages for
-`DRYRUN-2026-01`, the frontend unit, and whatever Stage 0–2 work in the other
-session preceded this Implementation step. Full Step 4.10 status to be
-written back by that session when it concludes.
-
-### qa_agent.py — backend test directory resolution fix (found via DRYRUN-2026-01)
-
-**Root cause:** `_run_backend_tests()` hardcoded the backend test directory
-as `services/<request-id>/backend` — the API project's own folder — rather
-than the actual xUnit test project's location. Test Writer correctly places
-tests in a sibling folder (e.g. `backend.tests/`); neither Document 3 nor
-Document 7 mandates a specific layout, so the hardcoded path was simply
-wrong, not an enforcement of a documented convention.
-
-**Symptom:** the QA Agent reported "test suite failed to run (build/compile
-error)" for a backend suite that actually passes cleanly — confirmed via a
-local `dotnet test` run: 3/3 passed.
-
-**Fix:** added `_resolve_backend_test_dir()`, which globs for the actual
-`*.Tests.csproj` file under the service root instead of assuming a fixed
-path. Warns (but proceeds) if multiple are found. **Superseded 2026-08-10 by
-the Phase 5 pre-flight Fix 3 below: "no test project found" now resolves to
-`not_applicable`, not a fall-back-and-fail.**
-
-**Verification:** re-ran QA against PR #10 after the fix — backend suite
-came back `ran: true`, 3/3 passed.
-
-**Committed and pushed to `main`:** `e2a123eb45476e501dfca0e0b628297a3f4153f2`.
-
-**Open follow-up, not yet done:** this may also be the root cause of
-REQ-2026-01's long-standing, previously-undiagnosed "QA backend TRX report
-failure" — worth checking that repo's structure against this same pattern to
-confirm, but not verified yet. **Update 2026-08-10: re-ran QA `--dry-run`
-against REQ-2026-01's real local checkout while verifying Fix 3 below —
-backend suite ran cleanly (62/62 passed), no TRX report failure reproduced.**
-Not conclusively "closed" (a single clean run isn't the same as a root-cause
-diagnosis of what the original undiagnosed failure actually was), but it did
-not recur.
+**Standing rule, reconfirmed across four separate incidents (REQ-2026-01,
+DRYRUN-2026-01, REQ-2026-02, REQ-2026-03): never simply re-run
+`implementation_coordinator.py` after a local kill/timeout or an Actions job failure.**
+`create_agent_session()` creates a second, duplicate, billable set of agents/environment/
+session on top of one that may still be running or already finished. Always recover by
+session ID first (`--recover-session`, or check for a `managed_agents_session_start` log
+line / whether `feature/<request-id>` already exists as a sign of prior partial
+completion).
 
 ---
 
-### Phase 5 pre-flight fixes (per `docs/FORGE-Phase5-Preflight-Fixes-Spec.md`)
+## Open Items / Known Gaps
 
-Three fixes made ahead of Phase 5's real App 1 ("Inactive User & License
-Auditor") run, per the spec drafted in Claude.ai chat 41. All three verified
-individually and committed separately, per the spec's own standing
-convention. `docs/FORGE-Phase5-Preflight-Fixes-Spec.md` is the source
-document — this section records only what actually happened running it, not
-a restatement of the spec itself.
-
-**Fix 1 — Managed Agents archive-retry backoff
-(`core/agents/utils/managed_agents_wrapper.py`).** Root cause (DRYRUN-2026-01
-Stage 3 incident, already documented above): `archive_session()` trusted
-only the coordinator's own idle/end_turn signal, with a 3-attempt (~14s)
-retry-with-backoff as the sole cushion — too thin when a subagent thread is
-still legitimately running under an idle coordinator.
-
-- Added `_get_thread_statuses()` (lightweight `GET /sessions/{id}/threads`,
-  no per-thread event fetch) and `_wait_for_subagent_threads_idle()`, called
-  as a new step 0 inside `archive_session()` before the archive call is even
-  attempted. Polls every 5s for up to 120s; returns immediately once every
-  thread reports idle, or immediately (with a warning) if the API doesn't
-  expose a thread status field at all — degrading cleanly to the backoff
-  loop as the sole safety net in that case.
-- Widened `_ARCHIVE_RETRY_ATTEMPTS` from 3 to 6 (same 2×-doubling schedule:
-  2s/4s/8s/16s/32s/64s, ~126s total) as the secondary safety net for the
-  separate idle→running race — unchanged from before, just given more room.
-- Each 400 retry now logs the actual per-thread statuses observed at that
-  attempt (not just "still running"), per the spec's explicit ask.
-- **Resolved the spec's open design fork:** confirmed live via
-  `smoke_managed_agents.py` (10/10 passed) that
-  `GET /v1/sessions/{id}/threads` DOES expose a real, usable `status` field
-  ("idle") on both coordinator and subagent thread objects — this was
-  "not confirmed in current docs" per the spec, and now is. The
-  still-busy/retry-logging code paths themselves were not exercised by this
-  run (the smoke test's subagent finished before the coordinator went idle,
-  so the pre-check found everything already idle on its first poll) —
-  reasoned through rather than reproduced under load; no incident has
-  surfaced to force the busy path deterministically.
-- Committed separately: `cab6995`.
-
-**Fix 2 — `security-check` permanently unsatisfiable on design-stage PRs
-(`forge-demo-apps`).** Root cause (already documented in the Phase 4
-section above): `main`'s branch protection requires `security-check` on
-every PR, but only `feature/*` PRs ever trigger it via
-`notify-forge.yml`/`05-security.yml`. `design/*` PRs sit "Waiting for status
-to be reported" forever.
-
-- Added `.github/workflows/design-pr-security-noop.yml` in
-  `forge-demo-apps` — triggered on `pull_request` (`opened`, `synchronize`),
-  guarded to `design/*` branches both at the job-level `if:` and again via an
-  explicit shell case-statement inside the job (fails loudly, not silently,
-  if that inner check is ever reached on a non-`design/*` ref). Creates a
-  `security-check` check run with `conclusion: success` and a summary that
-  explicitly states this is a no-op, not a real scan, using the same
-  `actions/create-github-app-token@v3` pattern `notify-forge.yml` already
-  uses (Checks: Write permission already granted, no new grant needed).
-- **Had to be pushed via Mike's own `gh` credentials (workflow scope), not
-  the FORGE App's installation token** — `commit_files()` 403'd against
-  `.github/workflows/*` for the same reason `notify-forge.yml` originally
-  needed manual push: the App has no `workflows` permission. Branch
-  `fix/design-pr-security-noop` created via the App token (that part is a
-  normal branch, not a workflow file), the workflow file itself written via
-  `gh api ... --method PUT` under Mike's own token, then draft **PR #11**
-  opened via the App token (opening a PR doesn't need `workflows` either).
-  Left open, unmerged, pending Mike's review at the time this fix was built —
-  matches the existing PR #7/#8 "small mechanical fix, agent doesn't merge
-  its own PR" pattern (ADR-0009). **Merged 2026-08-11 in a follow-up
-  session — see the PR #11 merge entry below.**
-- **Verified live** with a throwaway `design/fix2-smoketest` branch/PR
-  (branched from `fix/design-pr-security-noop` so the new workflow file was
-  actually present in the head ref — a `design/*` branch cut from `main`
-  alone would not have picked it up yet, since `main` won't have the file
-  until PR #11 merges): `security-check` check run appeared within ~20s,
-  `conclusion: success`, with the intended "design-stage PR — not a real
-  scan" summary text. PR's `mergeable_state` was `blocked` only on the
-  still-intact required-review gate, not on the status check. Throwaway PR
-  closed and branch deleted immediately after verification — nothing left
-  behind in `forge-demo-apps` from the test itself.
-- Re-read `main`'s branch protection after all of the above: `checks`,
-  `allow_force_pushes`, `allow_deletions` all unchanged from before this
-  fix's own work.
-- **Flagging, not fixing, a pre-existing discrepancy found while re-checking
-  protection per the spec's own acceptance criteria:** live
-  `enforce_admins.enabled` is currently `false`. This directly contradicts
-  what Step 4.8 (Phase 4 section, above) documented as confirmed —
-  `enforce_admins: true`. Nothing in this session's own work touched
-  `enforce_admins` (confirmed by checking it both before and after Fix 2's
-  changes — `false` both times). Best guess: this is a side effect of
-  whatever admin action was used to force-merge the `DRYRUN-2026-01` design
-  PR past the then-unsatisfiable `security-check` gate — an admin-merge
-  override on a single PR shouldn't normally touch the persistent protection
-  setting, but something did, and it wasn't this session. **Not restored
-  here** — a branch-protection setting is shared infrastructure and the spec
-  explicitly asks to surface exactly this kind of thing rather than resolve
-  it silently. Mike should decide whether to flip it back to `true` (closing
-  the gap `enforce_admins: true` was originally meant to close) now that
-  Fix 2 removes the reason an admin bypass was needed in the first place.
-
-**Fix 3 — QA Agent `not_applicable` outcome
-(`core/agents/qa_agent.py`).** Root cause: `_run_frontend_tests()` assumed
-every service has a real Jest setup; a backend-only service (e.g.
-`DRYRUN-2026-01`, no `"test"` script in `package.json`) got reported as a
-hard failure identical in shape to a genuinely broken suite, burning the
-full 3-attempt retry budget on a non-issue (this is what actually forced the
-manual `qc-retry-limit-reached` → `qa-approved` override on
-`DRYRUN-2026-01` that the Phase 4 write-up alludes to).
-
-- `TestSuiteResult` gained a `not_applicable: bool` field — a real third
-  outcome, not a variant of pass or fail. Never counts against the retry
-  budget, never files an ADO Bug, reported plainly in the PR comment
-  ("Not applicable — no test suite in scope for this service").
-- New `_frontend_test_script_exists()` checks for a `package.json` with a
-  non-empty `"test"` script before ever invoking `npm test`.
-- `_resolve_backend_test_dir()` changed to return `(None, warning)` — not a
-  guessed fallback path — when no `*.Tests.csproj` exists anywhere under the
-  service root at all, so "no test project exists" no longer falls through
-  to the old hardcoded-path-then-fail behavior described in the entry above
-  this one.
-- `suite_run_failed` / `tests_pass` / the synthetic "suite failed to run" bug
-  filing loop all updated to treat `not_applicable` suites as excluded from
-  the verdict entirely, not as failures.
-- Scoped deliberately to inference from what's on disk, per the spec — not
-  the more thorough explicit in-scope/out-of-scope declaration from
-  `design.md`/a manifest field, which is logged in `_frontend_test_script_exists()`'s
-  own docstring as a real future enhancement requiring a Design Agent change.
-- **Verified against two real local checkouts** (`forge-demo-apps-clone`,
-  `--dry-run`, real `dotnet test`/`npm test`, real Claude write-up call — no
-  GitHub/ADO calls in dry-run mode):
-  - `DRYRUN-2026-01` (backend-only): frontend → `not_applicable`, backend →
-    3/3 real pass, `qa-approved` on attempt 1 of 3 — not `qa-loop-back`
-    against a phantom frontend failure.
-  - `REQ-2026-01` (both suites in scope, re-verified for regression): backend
-    62/62 pass, frontend 6 genuine failures correctly detected and bugs
-    computed, `qa-loop-back` on attempt 1 of 3 — confirms `not_applicable`
-    logic doesn't fire when a suite is actually in scope, and doesn't change
-    behavior for a suite that's in scope and genuinely failing.
-- Committed separately: `0560b39`.
-
-**Not done this session, per the spec's own scoping:** `FORGE-context_v42.md`
-is intentionally not updated here — that's the Claude.ai chat's job at the
-close of this mini-cycle, per the standing two-tool convention. Also not
-done: deciding the `enforce_admins` question above, and a root-cause (not
-just non-reproduction) diagnosis of REQ-2026-01's original "QA backend TRX
-report failure."
+1. **Deploy Agent has no app-secrets wiring mechanism** — 3 confirmed occurrences
+   (EmailWorker's Service Bus connection string; REQ-2026-02's D365 config; REQ-2026-03's
+   NextAuth `NEXTAUTH_SECRET`). Needs a real design (Key Vault references vs. Container
+   App secrets driven from `team/config.yaml` vs. something else) rather than another
+   one-off manual patch.
+2. **REQ-2026-03's backend unit name doesn't fit Azure's 32-char Container App limit**
+   even after the `_slugify()` character fix (`req-2026-03-on-call-roster-tracker-api` is
+   38 chars). Mike explicitly declined auto-truncation — needs an explicit naming
+   decision (rename the `OnCallRosterTracker` project directory, shorten the request-id
+   prefix, or design a truncation/hashing scheme) before this unit can deploy.
+3. **No pipeline stage validates that the app actually builds before Stage 6 (Deploy).**
+   QA only runs `vitest`/`jest`/`dotnet test`; the first real `next build`/`docker build`
+   happens inside `deploy_agent.py`. Already let two real issues go undetected until
+   Deploy or a manual investigation (a `lucide-react`/`aria-hidden` type mismatch on
+   REQ-2026-01; a `vitest.config.ts` nested-`vite`-types conflict on REQ-2026-03).
+4. **`qa_agent.py`'s Jest/Vitest JSON parsing has a file-collection blind spot** — a
+   suite where every test file fails to *collect* (not just fails) reports `0 passed / 0
+   failed / 0 total`, currently treated as a clean pass. Already let one real broken
+   REQ-2026-03 frontend suite slip through as `qa-approved` before it was caught by
+   chance.
+5. **QA's `_MAX_RETRIES = 3` only picks which label to apply — it never blocks or gates a
+   re-run.** A passing run always gets `qa-approved` regardless of attempt number;
+   `04-qa.yml` has no attempt-count guard clause. The retry counter also doesn't
+   distinguish real app-test failures from FORGE-tooling/infra noise, so a redundant
+   manual rerun burns a real attempt.
+6. **`wait_for_all_threads_idle()` can't distinguish "genuinely finished" from "every
+   thread hit a fatal session-level error"** (e.g. billing exhaustion mid-run, confirmed
+   live on REQ-2026-03). `run_implementation_stage()` also archives unconditionally once
+   idle, before confirming real output was produced.
+7. **Archive-prefix mismatch, confirmed once on REQ-2026-02, root cause unconfirmed** —
+   the Implementation Coordinator's packaging command may be cwd-relative rather than
+   pinned to the sandbox root. `_extract_archive_to_file_dict()`'s prefix guard is kept
+   strict (rejects, doesn't auto-remap) per Mike's explicit call; worth investigating
+   properly only if it recurs.
+8. **CI-workflow scope creep** — the Implementation Coordinator/subagents have twice
+   (REQ-2026-01, REQ-2026-02) generated unrequested, non-functional
+   `.github/workflows/*.yml` files nested under `services/<id>/` (never discoverable by
+   GitHub Actions there), cleaned up manually both times. Root cause (why the model keeps
+   generating these unprompted) never diagnosed.
+9. **Admin-merge pattern for ad hoc `fix/*` branches — 4 occurrences (PRs #7, #8, #11,
+   #16).** Each hit the permanently-unsatisfiable `security-check` (only `feature/*`/
+   `design/*` branches get dispatched a real or no-op check) plus no review, resolved via
+   `gh pr merge --admin`. Not decided: extend the no-op-check pattern to a `fix/*`-style
+   prefix, adopt a naming convention already covered by an existing dispatch filter (see
+   the branch-naming convention above), or accept admin-merge as standing procedure.
+10. **`enforce_admins` on `forge-demo-apps`' `main` branch protection is currently
+    `false`**, contradicting the originally-confirmed `true` from Step 4.8. Nothing any
+    known session action changed it. Mike's call whether to flip it back now that the
+    design-PR no-op-check fix removed the original reason an admin bypass was needed.
+11. **8 HIGH-severity `next@14.2.35` CVE findings have no 14.x backport** — accepted
+    ongoing risk from the deliberate decision to stay on the 14.x line, not a bug.
+12. **Cost log (`docs/FORGE-pipeline-cost-log.md`) needs REQ-2026-03 figures backfilled**,
+    including the Deploy Agent fix cycle.
+13. **A `forge-template`-level Dependency-Check suppression file** for confirmed dev-only
+    npm findings (esbuild/vite/vitest — `dev: true`, low real-world risk) would be a
+    worthwhile future improvement, not a current risk.
 
 ---
 
-### PR #11 merge (Fix 2 cleanup, 2026-08-11 follow-up session)
-
-Single-purpose follow-up to the Phase 5 pre-flight fixes session above:
-merge PR #11 (the `design/*` `security-check` no-op workflow) into `main` on
-`forge-demo-apps`. No Phase 5 work started in this session.
-
-- **Re-verified before merging, not assumed unchanged:** pulled the live PR
-  #11 diff and byte-diffed it against the exact file content verified last
-  session — identical, no drift (trigger filter, in-job branch-prefix guard,
-  and the check-run summary text distinguishing this from a real Security
-  Agent pass were all still intact).
-- **Confirmed the throwaway verification PRs were actually cleaned up**:
-  both PR #12 (the first, mis-based attempt) and PR #13 (the one that
-  actually verified the fix) show `state: closed`; branch
-  `design/fix2-smoketest` returns 404 (deleted). No leftover test artifacts.
-- **Merged PR #11** — merge commit
-  `2e00e3f3c3dbda2723349b8127233bb473eddc9c`. Required an admin-privilege
-  merge (`gh pr merge --admin`): PR #11's own head branch
-  (`fix/design-pr-security-noop`) is not itself `design/*`, so the new
-  workflow's own job-level guard correctly skipped on this PR and never
-  produced a `security-check` run for it — a one-time bootstrapping
-  limitation of this specific fix (it can't satisfy its own required check
-  on the branch that introduces it), not a bypass of the review/scan
-  requirement it exists to enforce for `design/*` PRs going forward. Zero
-  reviews were also present at merge time. `enforce_admins: false` (see
-  above) is what made the admin override possible at all.
-- **Re-verified branch protection on `main` immediately after merge**, fresh
-  `GET`, not trusted from any cached state: `required_status_checks.checks`
-  = `[{"context":"security-check","app_id":4388813}]` (unchanged),
-  `enforce_admins.enabled` = `false` (unchanged — expected and accepted per
-  this session's brief, not something this session touched or was asked to
-  touch), `allow_force_pushes`/`allow_deletions` both `false` (unchanged).
-  Nothing changed as a side effect of the merge itself.
-- Confirmed `.github/workflows/design-pr-security-noop.yml` is now present
-  on `main` (blob sha `622d3bc3...`, matching the blob created when the file
-  was first written to the fix branch — content didn't change in transit).
-- **Not done, deliberately out of scope for this cleanup task:** the
-  `enforce_admins` question flagged above is still Mike's open call, not
-  decided or changed here.
-- **Follow-up, same session:** merged branch `fix/design-pr-security-noop`
-  (tip `148099a7...`, confirmed matching PR #11's merged head before
-  deleting) removed via `DELETE /git/refs/heads/fix/design-pr-security-noop`
-  at Mike's explicit request, confirmed gone via a follow-up 404 on the
-  branch lookup.
-
----
-
-### REQ-2026-02 (Phase 5, App 1) — Stage 3 completion-detection fix and a formal recovery tool (2026-08-11)
-
-Session started as "monitor Phase 5 App 1 (Inactive User & License Auditor)
-through the fully automated, label-triggered pipeline." Found on arrival that
-Stages 0–2 had already run (issue `forge-template#5`: Intake questions
-answered, `requirements.md`/`ado-work-items.json` committed, design PR
-[#14](https://github.com/Flamespiker/forge-demo-apps/pull/14) merged,
-`design-approved` applied) and Stage 3 had already **failed** — this section
-covers diagnosing and fixing that failure, not the Stage 0–2 work itself.
-
-**Root cause, confirmed live, not assumed:** the `03-implementation.yml` run
-([31451985838](https://github.com/Flamespiker/forge-template/actions/runs/31451985838))
-failed with `Coordinator session ... completed but did not produce
-'implementation.tar.gz'`. A read-only poll of the session's own thread
-statuses (`GET /sessions/{id}/threads`) showed it was NOT stuck —
-`forge-coordinator`/`backend_agent`/`frontend_agent` were idle but
-`test_writer_agent` was still genuinely `running`, well past the job's own
-failure. The coordinator's top-level session status had gone `idle
-(end_turn)` in **under half a second** after the initial message — reflecting
-only the coordinator's first turn ending after kicking off delegation, not
-real completion of the multi-agent work. Real completion (all four threads
-idle, `implementation.tar.gz` produced) took **~37 minutes**
-(`2026-08-11T02:19:08Z` → `T02:55:47Z`) — consistent with, not an outlier
-against, REQ-2026-01's already-logged 38.5 min (dry run) / 55.2 min (real)
-durations in `docs/FORGE-pipeline-cost-log.md`. Phase 5 pre-flight Fix 1's
-~246s total wait budget (120s thread pre-check + 6-attempt/~126s archive
-retry-backoff) was never going to be enough for a real run, and that was
-visible from the cost log alone before Fix 1 shipped — flagged, not
-re-litigated.
-
-**Fix 1 (`core/agents/utils/managed_agents_wrapper.py`) — completion
-detection and archive-retry are now two separate mechanisms, not one
-conflated loop:**
-- New `SessionStillRunningError(RuntimeError)` — carries `session_id`,
-  `thread_statuses`, and (attached by `run_implementation_stage()`)
-  `coordinator_id`/`environment_id`/`subagent_ids`. Raised when threads
-  aren't all idle within the completion-wait ceiling. **Not a failure** — the
-  session is left alive, not archived, specifically so it can be resumed by
-  ID later.
-- `_wait_for_subagent_threads_idle()` renamed to public
-  `wait_for_all_threads_idle()` — the ONE real completion signal for the
-  whole stage. Ceiling widened from 120s to `_COMPLETION_POLL_TIMEOUT`
-  (default 5400s/90 min, overridable via
-  `FORGE_IMPLEMENTATION_COMPLETION_TIMEOUT`), chosen with ~1.6x headroom over
-  the largest real duration logged so far (55.2 min). Poll interval widened
-  5s → 15s. Per-tick logging now only fires when thread statuses actually
-  change (was logging every tick — noisy over a 90-minute ceiling).
-- `_ARCHIVE_RETRY_ATTEMPTS` reduced 6 → 3 (2s/4s/8s, ~14s total) — it no
-  longer does the real waiting (that regressed to premature-retry-as-backoff,
-  which was the actual bug: a 400 from `archive` while a thread is genuinely
-  still running isn't new information every retry). Now purely absorbs the
-  separate, genuinely transient idle→running archive-call race from the
-  Phase 2.9 build notes, on a session `wait_for_all_threads_idle()` has
-  already confirmed idle.
-- `archive_session()` no longer catches its own completion-wait step —
-  `SessionStillRunningError` propagates untouched; the archive call is never
-  reached on a still-running session.
-- `run_implementation_stage()` restructured: `poll_until_idle()` (still just
-  confirms the coordinator's own turn ended without a `session.error`) →
-  `wait_for_all_threads_idle()` (the real gate) → audit trail fetched
-  *before* archiving (unconfirmed whether an archived session's threads stay
-  queryable — kept the original safer order) → `archive_session()`.
-  `SessionStillRunningError` re-raised with the extra IDs attached and
-  deliberately NOT archived; any other exception still gets a best-effort
-  archive attempt so failures don't leak billed resources.
-- New `get_session_resource_ids(session_id)` — derives `coordinator_id`
-  (`agent.id`), `environment_id`, and `subagent_ids`
-  (`agent.multiagent.agents[].id`) directly from `GET /sessions/{id}`,
-  confirmed live to carry all three. Means a recovery tool needs only a
-  session ID, not a dig through a GitHub Actions log for the
-  `managed_agents_session_start` line. Also surfaces `usage` (token/cost) —
-  confirmed live this closes the "not yet confirmed to return it" open item
-  from chat 28 (see the pipeline cost log update below).
-- `get_thread_statuses()` (was `_get_thread_statuses`) made public for the
-  same reason.
-
-**Fix 2 (`.github/workflows/03-implementation.yml`) — job `timeout-minutes`
-raised 60 → 120.** Necessary, not optional: Fix 1's new completion-wait
-ceiling is 90 minutes, but the GitHub Actions runner would have SIGKILLed the
-whole job at the old 60-minute mark before the script's own graceful
-still-running handling ever got a chance to run — the exact same
-process-killed-out-from-under-a-live-session failure mode as the original
-REQ-2026-01/DRYRUN-2026-01 incidents, just moved one layer up. 120 minutes
-gives the 90-minute internal ceiling ~30 minutes of buffer for setup and the
-commit/PR steps.
-
-**Fix 3 (`core/agents/implementation_coordinator.py`) — formal recovery
-tool, replacing the ad hoc uncommitted script pattern used for
-DRYRUN-2026-01 and (initially, before being redirected mid-session) for this
-same incident:**
-- `run_implementation_coordinator()` now catches `SessionStillRunningError`
-  distinctly from a real failure: posts a clearly-worded "still running, not
-  failed, check back" comment to the tracking issue (session ID + live
-  per-thread status, explicit instruction not to re-apply `design-approved`)
-  instead of the generic failure comment, then re-raises. `main()` exits
-  `75` for this case (vs. `1` for a real failure) — an arbitrary but
-  documented convention so tooling can tell the two apart; the issue comment
-  is the real human-facing signal.
-- New `--recover-session SESSION_ID` CLI mode (`--request-id` still
-  required): derives all resource IDs via `get_session_resource_ids()`,
-  checks live thread status directly, and returns cleanly with no
-  monorepo/GitHub mutation at all if anything is still busy — "not ready
-  yet" is a normal, successful outcome here, not an error. If idle, sanity-
-  checks the archive (`_sanity_check_extracted_files()` — below) before
-  reusing the exact same commit/PR/comment logic the happy path uses
-  (factored out to `_commit_and_open_pr()`, so there is exactly one copy of
-  that logic, not two), then archives the session itself (left alive
-  precisely so this recovery could reach it).
-- New `.github/workflows/03b-recover-implementation.yml` —
-  `workflow_dispatch` ONLY (session ID / issue number / request ID / dry-run
-  as inputs), deliberately not automatic, scheduled, or polling. A human
-  deciding "it's been long enough, let's check" is the intended amount of
-  automation — auto-recovery would remove the one checkpoint that has
-  already caught real issues in manual recoveries (see the two findings
-  below).
-- New `_sanity_check_extracted_files()`: rejects an archive under
-  `_MIN_ARCHIVE_FILES`(3)/`_MIN_ARCHIVE_BYTES`(500), and — for each unit
-  (`backend`/`frontend`) that `tasks.md` actually mentions — requires ≥2
-  files under `services/<request-id>/<unit>/`. Deliberately does NOT
-  hardcode "every request needs both units" (DRYRUN-2026-01 was legitimately
-  backend-only); ties the check to what that request's own tasks.md called
-  for. Verified against 4 constructed cases (realistic two-unit, legitimate
-  backend-only, truncated-missing-frontend, degenerate single-file) — the
-  two truncated cases both correctly raised.
-- Wired into the happy path too (`run_implementation_coordinator()`), not
-  just the recovery path.
-
-**Two real, previously-latent issues the recovery process itself caught —
-exactly what the sanity checks/format checks exist for, not hypothetical:**
-1. **Cross-repo issue reference format.** `workflow_glue.py`'s
-   `resolve_tracking_issue()` greps a PR body for `<source_repo>#N`; a bare
-   `#5` (no `owner/` prefix) is what broke QA/Security's dispatch on the
-   DRYRUN-2026-01 recovery. Checked before touching anything this time:
-   `FORGE_GITHUB_OWNER=Flamespiker` is set, and `_commit_and_open_pr()`
-   reuses the same qualified-format logic as the original happy path — PR
-   #15's body confirmed to contain `Flamespiker/forge-template#5` before
-   relying on it.
-2. **Archive rooted at the wrong prefix — OPEN, unconfirmed root cause, guard
-   reverted to strict.** REQ-2026-02's archive was tarred as `REQ-2026-02/...`,
-   not the `services/REQ-2026-02/...` the coordinator's own system prompt
-   asked for — `_extract_archive_to_file_dict()`'s existing prefix guard
-   correctly rejected every member on the first dry run rather than silently
-   committing to a wrong path. A remap fallback was added same-session to
-   unblock the recovery, then **deliberately reverted the same day** once
-   reviewed: it was a standing, general loosening of the guard for every
-   future run (both the recovery path and the normal happy path), based on
-   a single occurrence with no reproducibility test (n=1) and only a
-   plausible-but-unverified hypothesis for why it happened (the system
-   prompt's packaging command is a path relative to the coordinator's shell
-   cwd at the time, which is never explicitly pinned to the sandbox root —
-   plausible if the coordinator or a subagent `cd`'d into `services/` at
-   some point before packaging, but not confirmed). `_extract_archive_to_file_dict()`
-   is back to hard-failing on any prefix mismatch, for both callers.
-   **Logged as an open item, not a closed finding — if this recurs, that's
-   real evidence to act on with a proper fix, not a reason to bring the
-   fallback back on a guess.**
-
-**REQ-2026-02 recovered for real using the new tool** (not a synthetic
-test — this was the live incident): dry run first (confirmed 69 files, all
-correctly remapped and sanity-checked, back when the now-reverted fallback
-was still in place) → real run → committed to `feature/REQ-2026-02` (69
-files) → draft **PR [#15](https://github.com/Flamespiker/forge-demo-apps/pull/15)**
-opened → comment posted to issue #5 → session + environment + coordinator +
-all 3 subagents archived cleanly. QA and Security both fired automatically
-via the existing `repository_dispatch` wiring the moment the PR opened (no
-special-casing needed for a recovered PR) — **QA came back `qa-loop-back`
-(real backend/frontend build/compile errors, attempt 1 of 3, unexamined —
-separate app-code work for Mike)**, **Security initially came back
-`security-approved`** with 0 Critical / 7 Medium (Semgrep flagging a mutable
-GitHub Actions tag reference in the generated `backend-ci.yml`/`frontend-ci.yml`).
-
-**CI workflow scope creep — OPEN, confirmed second occurrence of the same
-coordinator behavior, not fixed at the root.** REQ-2026-01 already had this
-exact issue (unrequested `services/REQ-2026-01/backend/.github/workflows/ci.yml`,
-dead weight since GitHub only discovers workflows at the true repo root,
-`git rm`'d before merge). Checked whether REQ-2026-02's two Semgrep-flagged
-files were the same pattern: confirmed via `gh api .../pulls/15/files` —
-both `services/REQ-2026-02/.github/workflows/{backend-ci.yml,frontend-ci.yml}`
-were nested under the service directory, never discoverable by GitHub
-Actions, and nothing in the coordinator's or any subagent's system prompt
-asks for CI workflow files at all. **Two occurrences now — this is a real
-recurring coordinator behavior pattern, not a one-off, though the
-underlying cause (why the model keeps generating these unprompted) has
-still never been diagnosed, only removed after the fact both times.**
-Removed both files from PR #15 (`delete_files()`, new addition to
-`github_helper.py` — no prior stage needed to delete a monorepo file
-before this) and posted a PR comment making explicit that this is dead-code
-cleanup, not a security fix: Security's 7 Medium findings against those two
-files are moot as a side effect of the files being gone, not because they
-were investigated or remediated in place. Confirmed, not assumed: the
-deletion commit fired `notify-forge.yml`'s `synchronize` trigger, both
-QA/Security re-ran automatically, and Security came back genuinely clean
-(`✅ Clear`, `security-approved` re-applied).
-
-**Side effect worth flagging: the cleanup commit also consumed one of QA's
-3 retry attempts.** `qa_agent.py` counts attempts from prior PR comments,
-so this synchronize-triggered re-run counted as "attempt 2 of 3" against
-the exact same real backend/frontend build error the CI-file deletion had
-nothing to do with — Mike now has one fewer real retry attempt on this PR
-than if the cleanup had been deferred until after a real fix, or done in a
-way that didn't re-trigger QA. Not reverted or worked around this session;
-flagging so it's a known cost of the cleanup, not a surprise later.
-
-**Real cost data pulled for REQ-2026-02 and logged in
-`docs/FORGE-pipeline-cost-log.md`:** `GET /sessions/{id}`'s own `usage`
-object carries `active_seconds` and `list_cost` — confirmed live (closing
-the "not yet confirmed" item from chat 28) at 6,684,549 cache-read tokens,
-138,996 output tokens, 2,218.4 active seconds, `list_cost.amount: "663"`
-(units not cross-checked against the Console, read as ~$6.63).
-
-**Resolved by the end of this session (follow-up to the initial report):**
-- `design-approved` cleared from issue #5 (`gh issue edit ... --remove-label`)
-  — it was left applied after the manual recovery since the workflow step
-  that normally clears it never ran (the automated `03-implementation.yml`
-  job had already failed before that point, and the recovery tool doesn't
-  touch trigger labels). Confirmed via a follow-up label read: only
-  `qa-loop-back`/`security-approved` remain.
-- The archive-prefix auto-remap fallback was reverted to strict rejection
-  (see above) — this was raised as "loosened general behavior on a guess,"
-  Mike's call was to revert, done.
-- The four completion-detection/recovery-tool commits, the revert commit,
-  and the `delete_files()` commit were all pushed to `main` (see commit list
-  below) — not left local-only.
-
-**Still genuinely open, logged as open items rather than closed findings —
-neither is fixed at the root:**
-- **Archive-prefix deviation:** guard is strict again, but *why* the
-  coordinator rooted the archive wrong on REQ-2026-02 is still just a
-  hypothesis (system prompt's packaging command is cwd-relative, never
-  pinned to the sandbox root) — not confirmed, not reproduced. If it
-  recurs, that's the signal to actually investigate, not guess again.
-- **CI workflow scope creep:** two occurrences now (REQ-2026-01,
-  REQ-2026-02), both manually `git rm`/`delete_files()`'d after the fact.
-  The coordinator/subagent system prompts still don't ask for CI files and
-  nothing was changed in them this session to stop a third occurrence —
-  this is a confirmed recurring pattern with no root-cause fix yet, only a
-  cleanup response that's now been applied twice.
-- `SessionStillRunningError`'s propagation through a *fresh*
-  `run_implementation_stage()` call (as opposed to the recovery path, which
-  calls `wait_for_all_threads_idle()`/`archive_session()` directly) was not
-  exercised live — reproducing it deliberately would mean spending on a new
-  real Stage 3 session just to hit the timing window. Reasoned through, not
-  reproduced under load, same honesty standard the original Fix 1 held
-  itself to.
-- QA's `qa-loop-back` result on PR #15 (real backend/frontend build errors,
-  now at attempt 2 of 3 after the CI-file-cleanup commit consumed one
-  attempt) is unexamined — separate app-code work for Mike, out of scope
-  for this session's own brief.
-
----
-
-### PR #15 QA fix, deploy-trigger bug, and REQ-2026-02 staging deploy (same day, follow-up)
-
-Mike merged PR #15 after QA/Security passed on attempt 3 of 3, then
-reported the Deploy Agent hadn't triggered. Three genuinely separate real
-bugs surfaced chasing that down to an actual live staging deploy — none
-guessed, all reproduced directly.
-
-**Bug 1 — `06-deploy.yml` never fires off an agent-applied label, only a
-human-applied one. Confirmed, not assumed, via real run history.**
-`06-deploy.yml` triggers on `issues: types: [labeled]`, gated on both
-`qa-approved` and `security-approved` being present. Both are applied by
-`qa_agent.py`/`security_agent.py` via `add_label()`, which used
-`GITHUB_TOKEN`. GitHub Actions has a documented anti-recursion rule:
-actions performed with the default `GITHUB_TOKEN` never trigger a NEW
-workflow run (exempting only `workflow_dispatch`/`repository_dispatch`).
-Checked `06-deploy.yml`'s full run history: the only successful run ever
-was triggered by `qa-approved` being applied by `Flamespiker` (a human,
-personal token) on DRYRUN-2026-01 — every agent-applied label, before and
-after, produced zero deploy runs. **This silently affected every request
-that passes QA/Security cleanly without a human touching a label in
-between — not something specific to REQ-2026-02.** Every other stage
-transition is either human-applied or uses `repository_dispatch`
-(exempt); Stage 6 was the only one relying on an agent-applied label.
-
-Fix: `add_label()` (`core/agents/utils/github_helper.py`) switched to the
-GitHub App installation token. Confirmed no knock-on effects first:
-`get_installation_token()`'s existing lookup (via `FORGE_TARGET_REPO`)
-already resolves to the same installation id (`148876680`) for both
-forge-template and forge-demo-apps — no change needed there.
-`post_comment`/`get_issue`/`get_issue_comments`/`remove_label` stay on
-`GITHUB_TOKEN` since none of them need to trigger a downstream
-label-driven workflow. Also corrected a stale docstring on
-`post_comment()` claiming the App wasn't installed on forge-template — it
-has been since the Phase 4 step 4.8 retrofit. Smoke-tested against the
-`forge-smoke-test` label on issue #1 before trusting it live, then used
-for real: re-applied `qa-approved` on issue #5 (after first confirming
-via a full grep of every workflow that nothing listens for `unlabeled`
-events, and that `qa_agent.py`'s retry counter is comment-based, not
-label-based, so the toggle was safe) — `06-deploy.yml` fired for real
-this time. Committed separately (`9f54135`).
-
-**Bug 2 — frontend `package-lock.json` was generated with the wrong
-npm/Node version.** The resulting real deploy run built the backend image
-fine, then failed on the frontend's `npm ci` inside the Dockerfile.
-First attempts to pull the real error out of the Actions log kept
-surfacing only npm's generic `ci` usage/help trailer, not the actual
-reason — traced to a genuinely truncated/lost log line, resolved by
-reproducing directly: `npm ci` succeeds fine against this repo's
-`package.json`/`package-lock.json` pair locally (npm 11.6.2/Node 24.11.1)
-but fails inside the actual `node:20-alpine` deploy image (npm 10.8.2)
-with `Missing: @emnapi/core@1.11.3` / `Missing: @emnapi/runtime@1.11.3
-from lock file` — npm 10 and 11 resolve platform-conditional optional
-dependencies differently, and `npm ci` is strict about exact sync.
-Root-caused because the Jest rewrite's lockfile had only ever been
-regenerated/tested locally, never inside the actual deploy target.
-
-Fix: regenerated `package-lock.json` by running `npm install` *inside* a
-real `node:20-alpine` container (not locally), extracted it via `docker
-cp`, and verified `npm ci` now succeeds both inside that same image and
-locally. Full Jest suite re-confirmed 44/44 passing, `next build`/`next
-lint` both clean, against the regenerated lockfile.
-
-**Bug 3 — missing `public/` directory breaks the Dockerfile's final
-stage.** Even past Bug 2, `COPY --from=builder /app/public ./public`
-failed with `"/app/public": not found` — this app has no static assets
-and therefore no `public/` directory at all; Git doesn't track empty
-directories, so nothing ever created one. Fixed with
-`public/.gitkeep`. Verified the complete multi-stage Dockerfile (`deps`
-→ `builder` → `runner`) now builds end-to-end with zero errors.
-
-**Non-bug, worth recording so it doesn't get re-investigated:** partway
-through verifying Bug 2's fix, a `next build` run threw `Cannot read
-properties of null (reading 'useContext')` across every page including
-Next's own internal `/404`/`/500` — looked like a real regression at
-first. Root cause: a Windows path-casing artifact specific to this local
-machine (the real folder is `C:\Users\mikef\Projects\...`, capital P, but
-builds were being invoked via git-bash's lowercase `/c/Users/mikef/projects/...`
-mount, so webpack saw two differently-cased copies of the same module and
-crashed). Confirmed by building the identical code from an unambiguous
-path — clean pass. Cannot occur on the real Linux CI runners; no code
-change needed or made for it.
-
-**Also encountered and resolved, infrastructure not code:** Docker
-Desktop was found hung (daemon unresponsive to `docker version` even
-after 20s+ timeouts, despite all `Docker Desktop`/`com.docker.*`
-processes showing `Responding: True` in `Get-Process`) partway through
-reproducing Bug 2. Killed all Docker-related processes and relaunched
-`Docker Desktop.exe`; daemon came back responsive (server 24.0.7) within
-~30s. Not a code issue, just a local-machine note in case it recurs.
-
-**Delivery, since `feature/REQ-2026-02` no longer exists** (PR #15's
-branch was deleted on merge, confirmed via a 404 on the branch lookup —
-so Bugs 2/3's fixes couldn't just be pushed to the old branch): opened a
-new, small, separate PR **[#16](https://github.com/Flamespiker/forge-demo-apps/pull/16)**
-off `main` (same "mechanical fix, agent doesn't merge its own PR" pattern
-as PRs #7/#8/#11) containing only the lockfile regen and `public/.gitkeep`
-— no application/business logic touched. **Left open, unmerged** (per
-ADR-0009). Since Deploy Agent's own design already tolerates deploying an
-unmerged commit SHA, `deploy_agent.py` was invoked manually against PR
-#16's head commit (`77aac8a`) to actually unblock staging now rather than
-wait on a merge — same "manual invocation satisfies the requirement"
-pattern already used for QA/Security's own real runs earlier in this
-project.
-
-**Real (non-dry-run) deploy verified live, both units, both confirmed
-actually serving traffic (not just CLI-reported success):**
-- `req-2026-02-auditor-api` (backend): `https://req-2026-02-auditor-api.yellowmeadow-894377a9.canadacentral.azurecontainerapps.io/api/health`
-  → HTTP 200, `{"status":"healthy"}`.
-- `req-2026-02-frontend` (frontend): `https://req-2026-02-frontend.yellowmeadow-894377a9.canadacentral.azurecontainerapps.io/`
-  → HTTP 200. **First time this project's frontend deploy path has been
-  verified end-to-end** — REQ-2026-01's frontend was parked (unrelated
-  app-insights dependency issue) and never actually deployed.
-- Deploy comment posted to PR #16. No label applied (Document 6 has no
-  deploy-stage label, unchanged from prior deploys).
-
-**Not done this session, flagged rather than resolved:**
-- PR #16 is unmerged — Mike's call whether/when to merge it. Since its
-  head branch isn't `feature/*` or `design/*`, `notify-forge.yml` won't
-  dispatch QA/Security for it, so the `security-check` required status
-  check will be permanently unsatisfiable on this PR the same way it was
-  for `design/*` PRs before Fix 2 — merging it will need the same kind of
-  admin override PR #11 needed (`enforce_admins` is still `false`, so
-  that path is open), or a deliberate decision about how to handle
-  non-`feature/*`/`design/*` fix PRs generally. Not designed or built.
-- The two deploy bugs (lockfile npm-version mismatch, missing `public/`)
-  were never caught earlier because this project's frontend Docker deploy
-  path had never been exercised end-to-end before now for ANY request —
-  REQ-2026-01's frontend was parked. Worth considering whether Deploy
-  Agent (or CI generally) should build the frontend Docker image earlier
-  in the pipeline (e.g. at PR-open time) so a `npm ci`/lockfile issue
-  surfaces before Stage 6, not after everything else has already passed.
-  Flagged, not designed.
-
----
-
-### R-001 descope to a license-status report (REQ-2026-02, follow-up session)
-
-Root cause confirmed live (not guessed): a Dataverse metadata investigation
-against `EntityDefinitions(LogicalName='systemuser')/Attributes` found no
-field matching login/logon/signin/last-activity anywhere among `systemuser`'s
-221 attributes in this environment. R-001's original "inactive user" audit
-scope was formally descoped by Mike as a result — `GET /api/users/inactive`
-became `GET /api/users/license-status`, a license-status report only (no
-login timestamps, no inactivity filter). Backend DTOs/service/repository
-renamed to match (`LicensedUserDto`, `LicenseStatusResponseDto`,
-`LicenseStatusService`/`ILicenseStatusService`); frontend columns/CSV/copy
-updated so the UI doesn't imply data it no longer has;
-`AppConstants.INACTIVITY_THRESHOLD_DAYS` removed. `openapi.yaml` and both
-READMEs updated to match. Real backend tests 49/49, frontend tests 38/38,
-`next build`/`next lint` clean before opening a PR. Where real login-activity
-data could come from (Graph/Entra sign-in activity, a custom Dataverse
-field, or Dataverse audit history) is an open question, not resolved here —
-logged as exactly that, an open question, not a TODO with an assumed answer.
-
-**A genuinely new pipeline bug found and root-caused during this work**
-(not present in any prior session's notes): the first attempt used branch
-name `feature/REQ-2026-02-license-status-fix`. `04-qa.yml`/`05-security.yml`
-derive `request_id="${HEAD_REF#feature/}"` — a bash prefix-strip that
-assumes the branch is exactly `feature/<request-id>`, nothing more. Stripping
-`feature/` left `REQ-2026-02-license-status-fix`, not `REQ-2026-02`, so both
-agents looked for a nonexistent `services/REQ-2026-02-license-status-fix/`.
-Security crashed loudly (`FileNotFoundError`); QA got a **silent false
-positive** — found nothing at the wrong path, correctly-but-wrongly treated
-everything as `not_applicable` (Phase 5 Fix 3's own logic, working exactly
-as designed, just fed a wrong path), and applied `qa-approved` on zero real
-test coverage. Fixed by renaming the branch to the conforming
-`feature/REQ-2026-02` (not by touching pipeline code) — re-run confirmed
-real coverage (87/87 tests) and a genuine Security pass. The false
-`qa-approved` label from the broken run was removed from tracking issue #5
-before re-running. **Not fixed at the root**: `04-qa.yml`/`05-security.yml`'s
-`request_id` derivation is still a bare prefix-strip with no validation that
-the result matches a real `services/<request_id>/` directory — a
-differently-named `feature/*` branch would silently reproduce this exact
-QA false-positive again. Flagged, not built.
-
-**A second, separate pipeline gap found while watching Deploy auto-fire**:
-when the (corrected) `qa-approved` label landed via the App token, `06-deploy.yml`
-fired automatically as designed — but `workflow_glue.py`'s
-`resolve_feature_pr()` finds "the feature PR" by reading the *original
-Implementation Coordinator's comment* on the tracking issue, which still
-pointed at PR #15 (the original Stage 3 implementation PR, merged days
-earlier). It has no notion of "the current open feature PR for this
-request" — so the automatic deploy tried to rebuild PR #15's old,
-pre-descope commit, not the new fix. This is a structural gap for any
-follow-up feature PR on a request that's already been through
-Implementation once, not specific to this fix. Worked around the same way
-PR #16 was handled: `deploy_agent.py` invoked manually against PR #18's real
-merge commit (`9e4054c`, then `d8823cf` after PR #16 also merged — see
-below). Not fixed at the root — `resolve_feature_pr()`'s comment-anchored
-lookup is unchanged.
-
-**PR #16 (frontend deploy fix, open since the prior session) admin-merged
-this session, at Mike's explicit request**, once it became the direct
-blocker for the above manual deploy: `deploy_agent.py`'s build-then-deploy
-loop (`deploy_agent.py:590-626` — builds+pushes **every** unit first, *then*
-runs `az containerapp create/update` for every unit in a separate pass) means
-a single unit's build failure aborts before ANY unit's Container App gets
-touched, even ones that built fine. So PR #18's backend image built and
-pushed to ACR cleanly, but the frontend build failed on the exact bug PR #16
-fixes, and the whole run aborted before the backend's Container App was
-ever updated — the real fix was pushed to the registry but never actually
-went live until PR #16 merged and the deploy was re-run. Confirmed before
-merging: PR #16 was 3 purely mechanical files (regenerated
-`package-lock.json`, `public/.gitkeep`, the previously-only-auto-generated
-backend `Dockerfile`), no application logic. `gh pr merge --admin` used
-(same as PR #11) since PR #16's branch (`fix/req-2026-02-frontend-deploy`)
-hit the identical two-part block PR #18 hit initially: no review
-(`reviewDecision: REVIEW_REQUIRED`) plus a `security-check` that can never
-populate on a non-`feature/*`/non-`design/*` branch.
-
-**Standing item, explicitly logged per Mike's request rather than fixed —
-do not lose this count before it's actually decided:** PR #16 admin-merging
-is the **fourth** occurrence of this exact pattern — an ad hoc `fix/*`
-branch for a small mechanical fix, hitting the permanently-unsatisfiable
-`security-check` (because `notify-forge.yml` only dispatches for
-`feature/*`/`design/*` branches) plus no human review, resolved by admin
-override each time:
-1. PR #7 — `fix/req-2026-01-test-infra`
-2. PR #8 — `fix/req-2026-01-navigation-aria-types`
-3. PR #11 — `fix/design-pr-security-noop`
-4. PR #16 — `fix/req-2026-02-frontend-deploy`
-
-Fix 2 (the `design-pr-security-noop.yml` no-op check) already solved this
-exact class of problem for `design/*` branches specifically. It was never
-generalized to cover ad hoc `fix/*` branches, and four occurrences in is
-long enough that this is a real recurring cost (an admin override every
-time), not a one-off. Options for whenever this gets decided: extend the
-no-op-check pattern to any branch prefix used for these mechanical fixes,
-adopt a fixed naming convention for them that's already covered by an
-existing dispatch filter, or accept admin-merge as the standing procedure
-and stop treating it as a gap. Not decided here — logged only so the count
-is not lost.
-
-**Two more real, previously-undiscovered `deploy_agent.py` bugs found while
-verifying the live REQ-2026-02 frontend after this deploy — both patched as
-one-off, throwaway fixes on the running Azure resources only, `deploy_agent.py`
-itself untouched, so both will reproduce on the next real deploy of any
-request's frontend unit:**
-
-1. **`NEXT_PUBLIC_API_BASE_URL` is never passed as a Docker build-arg, for
-   any unit, on any request.** The frontend Dockerfile declares `ARG
-   NEXT_PUBLIC_API_BASE_URL=""` (empty default); `_docker_build()`
-   (`deploy_agent.py:345-352`) runs a bare `docker build -f ... -t ... <context>`
-   with no `--build-arg` anywhere in the file (confirmed:
-   `grep -n "NEXT_PUBLIC_API_BASE_URL\|build-arg" deploy_agent.py` returns
-   nothing). Next.js bakes `NEXT_PUBLIC_*` vars in at build time, so every
-   deployed frontend build has always shipped with an empty base URL — the
-   client's `fetch()` calls resolve to a same-origin relative path against
-   the frontend container itself, which has no such route, so Next.js's own
-   404 HTML page comes back instead of JSON. `apiClient.ts`'s JSON-parse
-   fallback then surfaces a generic "An unexpected error occurred" — a
-   real, silent, 100%-of-the-time failure that nothing in this project's
-   prior verification ever caught, because every past frontend check only
-   confirmed `/` returns 200, never that the actual data fetch succeeds.
-   **Not just a missing line, either**: `run_deploy_agent()` builds+pushes
-   *all* units in one loop (`deploy_agent.py:590-594`) before creating/
-   updating *any* Container App in a second loop (`:600-626`), so the
-   backend's real FQDN doesn't exist yet at the point the frontend image
-   would need it as a build-arg on a brand-new deploy. A real fix needs
-   either a build-order change (backend first, discover FQDN, then build
-   frontend) or a predictable FQDN computed from the environment's fixed
-   domain suffix + the unit's deterministic name — plausible (Container
-   Apps FQDNs are `<app-name>.<env-suffix>.<region>.azurecontainerapps.io`,
-   and the suffix/region are fixed per environment) but unconfirmed, not
-   designed.
-2. **`FRONTEND_ORIGIN` is never set on any backend Container App either** —
-   confirmed via `az containerapp show ... properties.template.containers[0].env`
-   on the live `req-2026-02-auditor-api`: no `FRONTEND_ORIGIN` entry at all.
-   `Program.cs` defaults it to `http://localhost:3000` when unset, so the
-   CORS policy only ever allows `localhost` — a real deployed frontend
-   origin gets no `Access-Control-Allow-Origin` header back at all
-   (confirmed by curling the backend with `-H "Origin: <real frontend
-   URL>"` and finding the header absent). Even with bug 1 fixed, a real
-   browser's cross-origin fetch would still be CORS-blocked, surfacing a
-   *different* generic error ("Unable to reach the Auditor API — check
-   your network connection and try again.", the `NETWORK_ERROR` branch)
-   rather than the JSON-parse-fallback one. `deploy_agent.py` never sets
-   this env var for any unit on any request either.
-
-**Manual patch applied to unblock REQ-2026-02 specifically** (per Mike's
-explicit direction, `deploy_agent.py` deliberately not touched):
-`docker build --build-arg NEXT_PUBLIC_API_BASE_URL=<real backend FQDN>` →
-new tag `d8823cf...-fix-buildarg` → pushed to ACR → `az containerapp update
---image` on `req-2026-02-frontend`; `az containerapp update --set-env-vars
-FRONTEND_ORIGIN=<real frontend FQDN>` on `req-2026-02-auditor-api`. Verified
-both empirically (not assumed): the deployed JS bundle now shows the real
-backend URL concatenated before `/api/users/license-status`; the backend's
-CORS response now echoes the exact frontend origin back in
-`Access-Control-Allow-Origin`; **Mike confirmed live in a real browser** —
-page loads real data, no error banner. Neither fix touched application
-source or `deploy_agent.py` — both are Azure-resource-only patches specific
-to this one running app, and will need to be reapplied (or `deploy_agent.py`
-fixed at the root) the next time this app is redeployed from scratch, or
-for any other request's frontend unit.
-
-**Follow-up the same session: the "unconfirmed" caveat on bugs 1/2's fix
-shape is now resolved — confirmed empirically, not assumed.** `az
-containerapp env list --resource-group forge-build-rg --query
-"[].{name:name, defaultDomain:properties.defaultDomain}"` returns
-`defaultDomain` at the **environment** level (`forge-staging` →
-`yellowmeadow-894377a9.canadacentral.azurecontainerapps.io`, matching
-exactly what both REQ-2026-02 units' real FQDNs have been built from all
-along). This means a unit's FQDN (`f"{unit.name}.{env_domain}"`) is fully
-predictable **before that unit's Container App exists** — there is no
-chicken-and-egg ordering problem after all. Bug 1 (missing
-`NEXT_PUBLIC_API_BASE_URL` build-arg) and bug 2 (missing `FRONTEND_ORIGIN`)
-both have a concrete, verified fix shape now, not just a flagged gap:
-
-1. **Missing `NEXT_PUBLIC_API_BASE_URL` build-arg** (`_docker_build()`,
-   `deploy_agent.py:345-352`) — before building a frontend unit, compute the
-   backend unit's expected FQDN via one `az containerapp env show --query
-   properties.defaultDomain` call (done once per run) + the backend unit's
-   already-deterministic name, pass it via `--build-arg`.
-2. **Missing `FRONTEND_ORIGIN`** (`_build_containerapp_command()`,
-   `deploy_agent.py:403-438`) — same predictable-FQDN trick in reverse: add
-   `--set-env-vars FRONTEND_ORIGIN=https://{frontend_fqdn}` to the backend
-   unit's create/update command.
-3. **Batched build-then-deploy** (`run_deploy_agent()`,
-   `deploy_agent.py:590-626`) — builds+pushes *every* unit before running
-   `az containerapp create/update` for *any* unit, so one unit's build
-   failure blocks even a successfully-built unit's deploy (this is exactly
-   what happened to REQ-2026-02's backend earlier this session). Not
-   strictly required to fix 1/2 now that FQDNs are predictable without
-   needing creation order, but a separate, real robustness gap — fix shape:
-   interleave build+push+deploy per unit in one loop instead of two batched
-   passes.
-4. **`resolve_feature_pr()` anchored to the original Implementation
-   Coordinator comment** (`workflow_glue.py`, used by `06-deploy.yml`) —
-   different file/mechanism from 1-3, can't discover a newer follow-up
-   feature PR for a request that's already been through Implementation
-   once (caused the auto-deploy-on-`qa-approved` trigger to target stale
-   PR #15 instead of PR #18 earlier this session). No verified fix shape
-   yet — not investigated as deeply as 1-3.
-
-**Explicit decision, Mike's call: not implemented this session.** All four
-gaps are logged here as confirmed findings (1-3 with a verified fix shape,
-4 without yet) specifically so they're ready to pick up in a dedicated
-pre-Phase-6 session, rather than folded into whatever unrelated work
-surfaces them next.
-
----
-
-### Phase 5 close-out and REQ-2026-02 decommission (2026-08-13)
-
-Phase 5 close-out doc written (`FORGE-Phase5-Closeout.md`) from records
-already in the context doc — no new screenshots/data pulled first, per
-Mike's call. REQ-2026-02's live Azure/D365 resources then decommissioned in
-the same session, with two deliberate deviations from the original teardown
-plan: the D365 Application User was disabled but not deleted (Dataverse
-rejected the delete even post-disable; left as-is — disabled is sufficient
-to close the security exposure); the app registration was kept for
-potential future reuse, only its client secret deleted.
-`req-2026-02-auditor-api`/`req-2026-02-frontend` Container Apps deleted from
-`forge-staging`. `dryrun-2026-01-backend`/`dryrun-2026-01-frontend` and PR
-#10 were both confirmed already gone/closed from an earlier undocumented
-session — crossed off, not re-investigated. ACR images for both apps left
-in place (low-priority). See context doc chat 44 entry and
-`FORGE_Build_Plan_v9.md` for the checklist-level record (renamed from `v8`
-2026-08-13, see the doc-cleanup entry above).
-
----
-
-### Deploy Agent cross-service wiring fixes (per `docs/FORGE-DeployAgent-CrossService-Wiring-Spec.md`)
-
-Three fixes implemented against `core/agents/deploy_agent.py`, each verified
-and committed separately per the spec's own convention. Line numbers below
-are post-drift, confirmed against the real file at the time each fix
-landed, not the spec's own (stale) estimates.
-
-**Fix 1 — `NEXT_PUBLIC_API_BASE_URL` build-arg.** New `_get_env_default_domain()`
-(next to `_get_fqdn()`) runs `az containerapp env show ... --query
-properties.defaultDomain`, raising rather than returning empty/None on
-failure. `_docker_build()` gained an optional `build_args` dict, appending
-`--build-arg KEY=VALUE` pairs. `run_deploy_agent()` computes the backend
-"web" unit's FQDN once (from the environment's `defaultDomain` + the unit's
-deterministic name — confirmed no chicken-and-egg problem, matching the
-spec's own verified premise) and passes it only when building the frontend
-unit; a frontend with no "web" backend unit in the request logs a warning
-and skips the build-arg rather than guessing. Confirmed live:
-`az containerapp env show --resource-group forge-build-rg --name
-forge-staging` returned `yellowmeadow-894377a9.canadacentral.azurecontainerapps.io`,
-matching the spec's assumption exactly. Verified with a local (no ACR push,
-no live Container App touch) build of REQ-2026-02's real frontend via the
-actual `_docker_build()` function, both with and without the fix's
-`build_args` — grep for the backend FQDN inside `/app/.next` found it in
-both the server and client-chunk bundles only in the with-build-arg case
-(exit 0 vs. exit 1 on the negative control), confirming the fix's effect
-empirically rather than by code inspection alone. Committed `2bd8679`.
-
-**Fix 2 — `FRONTEND_ORIGIN` on the backend Container App.**
-`_build_containerapp_command()` gained `extra_env_vars: dict[str, str] |
-None`, building one merged `--set-env-vars KEY=VALUE ...` flag (confirmed
-first that no other `--set-env-vars` usage existed anywhere in the function
-to clobber — there wasn't one). `run_deploy_agent()` reuses Fix 1's already-
-cached `env_default_domain` to derive the frontend unit's FQDN too (no
-second `az` call), passing it as `FRONTEND_ORIGIN` only to the backend
-"web" unit's create/update command. Verified locally (no live `az` calls)
-by calling `_build_containerapp_command()` directly for all four
-create/update × with/without-`extra_env_vars` combinations — confirmed
-exact expected command shape each time. Committed `3acab2c`.
-
-**Fix 3 — interleaved per-unit build+push+deploy.** `run_deploy_agent()`'s
-two batched passes (build-all-then-deploy-all) merged into one loop with a
-per-unit `try/except` — a failure on one unit's build/push/deploy no longer
-blocks a different unit that would otherwise succeed. `DeployResult` gained
-an `error: str | None` field (and `action`/`image` defaults, since a unit
-that fails during its own docker build never reaches the point of having a
-containerapp command built at all). `_build_pr_comment()`'s existing
-per-unit table now renders a `❌ **failed** — <first line of error>` status
-cell for failed units instead of a staging URL, plus a summary line
-("N of M unit(s) failed to deploy") when any exist.
-
-**Design fork surfaced, not resolved silently, per the spec's own
-instruction:** the spec's acceptance criteria only required that (a) other
-units still succeed and (b) the failure is reported against only the
-broken unit — it didn't specify what should happen to the run's own
-success/failure signal (CI exit code, tracking-issue comment) on a
-*partial* failure. There was no existing partial-failure reporting
-precedent anywhere in this agent to "match" (confirmed by reading the
-whole file first: before this fix, ANY exception anywhere aborted the
-entire function immediately, and the only failure surface was one generic
-comment on the FORGE tracking issue — the PR comment was never even
-reached on failure). Resolved by: still posting the (partial) PR comment
-via the existing `post_pr_comment()` on ANY outcome (all successes now
-visible even if a sibling unit failed, which is strictly more information
-than before, not less), and — if any unit failed — additionally posting a
-second, distinct summary comment to the tracking issue via the existing
-`post_comment()`, then raising so the job still exits non-zero. This
-preserves the pre-existing "CI reflects real problems" guarantee while
-adding the new partial-success visibility Fix 3 asks for. The dry-run path
-mirrors this (raises on partial failure too, but posts nothing, per the
-existing dry-run convention of posting nothing at all).
-
-**Verified via local simulation, not a live multi-unit deploy** (mocking
-every function that would touch Docker/Azure/GitHub, feeding one unit a
-forced `_docker_build` failure): confirmed the failing unit's error landed
-in `results` without preventing the second unit from reaching a fully-built
-`az containerapp create` command (including its correct
-`NEXT_PUBLIC_API_BASE_URL` build-arg, itself computed from the backend
-unit's *name* rather than its actual success — confirming Fix 1/2's
-FQDN-prediction mechanism is independent of unit processing order or
-success, exactly as the spec's point 3 asked to confirm explicitly rather
-than assume); confirmed the resulting PR-comment markdown correctly showed
-one failure row, one internal-no-ingress row, and the "1 of 2 failed"
-summary line; confirmed the function raised
-`RuntimeError("Deploy Agent dry-run: 1 of 2 unit(s) failed: ...")` as
-designed. Not verified: a real multi-unit live deploy with a genuine build
-failure — this session did not push to ACR or touch any live Container App
-for Fix 3 (per the same "confirm before touching forge-staging" convention
-already established for Fix 1).
-
-**Incident during this session's Fix 3 verification, caught and cleaned up
-immediately — logged because this project's whole process is built around
-catching exactly this failure mode:** the first version of the local
-simulation script mocked every higher-level function
-(`_docker_build`/`_docker_push`/`_containerapp_exists`/`_get_fqdn`/
-`post_pr_comment`/`post_comment`) but never mocked `_run_shell()` itself,
-and was run with `dry_run=False`. That combination let a **real**
-`az containerapp create` execute against the live `forge-build-rg`/
-`forge-staging` environment, using fake image/registry data. Caught
-immediately via `az containerapp show --name req-sim-frontend
---resource-group forge-build-rg`, which showed a real Container App
-resource with `provisioningState: "Failed"` (image never resolved — no
-real container ever ran, no traffic, nothing pulled). Deleted via `az
-containerapp delete`, confirmed gone via a follow-up `az containerapp show`
-(`ResourceNotFound`) **and** `az containerapp list --resource-group
-forge-build-rg` (only the two legitimate REQ-2026-01 apps remained) — not
-trusted from the delete command's own exit code alone, per Mike's explicit
-instruction. No live impact beyond the stray inert resource itself. Fixed
-the simulation script before re-running: `_run_shell` is now hard-mocked to
-raise `AssertionError` if ever actually called (a safety net independent of
-whether every higher-level function happens to be mocked), and the script
-defaults to `dry_run=True` unless deliberately overridden. Re-ran
-successfully with zero live calls reached.
-
-**Real end-to-end verification against `forge-staging`, per the spec's own
-acceptance criteria — a genuinely live deploy, not a mocked/local test.**
-Ran `python -m core.agents.deploy_agent` for real (no `--dry-run`) against
-REQ-2026-02's actual code in `forge-demo-apps-clone` (`main` @ `d8823cff`,
-confirmed matching `origin/main`), targeting `forge-demo-apps` PR #18 and
-FORGE tracking issue #5.
-
-**First attempt surfaced a real bug, exactly because this was the first
-genuinely live `create` call any of these three fixes had ever gone
-through:** `az containerapp create` takes `--env-vars`; `--set-env-vars`
-(what `_build_containerapp_command()` used for both branches) is
-`update`-only and errors with "unrecognized arguments" — confirmed via
-`az containerapp create --help`/`update --help`. Neither Fix 2's own
-verification (checked the Python-level command list only) nor Fix 3's
-mocked simulation (deliberately hard-mocks `_run_shell` so nothing real
-ever runs) could have caught this — both were scoped that way on purpose,
-to avoid touching `forge-staging` before this dedicated step. The backend
-create failed at CLI arg-parsing, before reaching Azure — confirmed via
-`az containerapp show` (`ResourceNotFound`), so no partial/broken resource
-was left behind by the failed attempt itself. Fixed
-(`_build_containerapp_command()` now uses `--env-vars` for `create`,
-`--set-env-vars` for `update`) and, same commit, widened
-`_build_pr_comment()`'s error snippet from the first line only (usually
-just `"...failed for unit X:"`, no real detail) to the first three
-non-empty lines — the real failure above would otherwise have shown no
-useful error text in the PR comment at all. Committed `e0986d0`.
-
-**Re-run after the fix: both units deployed clean.** `provisioningState:
-Succeeded` for both `req-2026-02-auditor-api` and `req-2026-02-frontend`,
-FQDNs matching the predicted pattern exactly (this run also exercised the
-`update` path for the frontend, since its first-attempt `create` had
-already succeeded — confirms `--set-env-vars` is correct there, unchanged).
-
-- **Fix 1, confirmed against the live-served bundle, not a local build:**
-  `curl`'d the running frontend's actual JS chunk
-  (`/_next/static/chunks/app/page-05411a420c1e92a5.js`) and found the real
-  backend FQDN baked in.
-- **Fix 2, confirmed against the live resource and live HTTP behavior:**
-  `az containerapp show ... properties.template.containers[0].env` shows
-  `FRONTEND_ORIGIN` set to the real frontend FQDN; `curl -H "Origin:
-  <real frontend FQDN>"` against the backend gets back
-  `access-control-allow-origin: <that exact origin>`.
-- **Fix 3, confirmed in two real scenarios, not one:** the first (failing)
-  attempt showed the backend's error isolated from the frontend's success
-  in both the PR comment (per-unit table + "1 of 2 failed" summary) and a
-  distinct tracking-issue comment, while the frontend still deployed for
-  real; the second (clean) attempt shows both units' real staging URLs
-  with the failure-summary line correctly absent. `git diff` between the
-  Fix 3 commit and the `e0986d0` bug-fix commit confirms the per-unit
-  `try/except` loop itself was untouched by the bug fix — only the CLI
-  flag and error-snippet formatting changed — so the live partial-failure
-  behavior observed on the first attempt is the same loop running on the
-  second.
-
-**Non-issue, confirmed via container logs, not assumed:** the real
-`/api/users/license-status` endpoint returned HTTP 500
-(`System.InvalidOperationException: Missing required configuration:
-D365_TENANT_ID`, from `az containerapp logs show`). Expected — REQ-2026-02's
-D365/Dataverse connection was deliberately decommissioned in the Phase 5
-close-out (App User disabled, client secret deleted), and
-`deploy_agent.py` has never wired D365 application config for any
-request (out of scope for this agent). Unrelated to Fix 1/2/3.
-
-**Cleanup, per Mike's explicit direction:** both Container Apps were
-deleted after verification (`az containerapp delete`, both) to restore the
-decommissioned state from the Phase 5 close-out, rather than leaving them
-live. Confirmed actually gone via **both** a follow-up `az containerapp
-show` (`ResourceNotFound` for each) **and** `az containerapp list
---resource-group forge-build-rg` (only the two legitimate REQ-2026-01
-apps remained) — not trusted from the delete commands' exit codes alone.
-ACR images pushed during this verification
-(`req-2026-02-auditor-api:d8823cff...`, `req-2026-02-frontend:d8823cff...`)
-were left in place, consistent with the existing "ACR images left in
-place, low-priority" convention from the original Phase 5 decommission.
-
----
-
-### `request_id` derivation & `resolve_feature_pr()` staleness fixes (per `docs/FORGE-RequestId-FeaturePR-Resolution-Spec.md`)
-
-Two independent structural bugs, confirmed unrelated (different files,
-mechanisms, and consumers — see the spec's own investigation section),
-fixed per spec. Both pre-flight-verified against live file content before
-editing; line numbers in the spec were descriptive, not authoritative, and
-matched the live files as found.
-
-**Fix 1 — `request_id` derivation (`04-qa.yml`, `05-security.yml`).** Both
-workflows previously derived `request_id` via a bare bash prefix-strip
-(`request_id="${HEAD_REF#feature/}"`), with no validation that the result
-named a real `services/<request_id>/` directory — confirmed live as the
-root cause of the exact silent-false-positive class already seen once (the
-REQ-2026-02 `feature/REQ-2026-02-license-status-fix` incident: wrong
-`request_id` → both suites `not_applicable` → `qa-approved` applied with
-zero real test coverage). Fixed by adding a new "Resolve request id" step
-to both workflows, immediately after "Resolve tracking issue number",
-calling the already-existing, already-proven `resolve-request-id` glue
-subcommand (marker-based, same mechanism every stage from
-`01-requirements.yml` onward already trusts) instead of re-parsing
-`HEAD_REF`. Both workflows' two remaining `HEAD_REF`-derived
-`request_id` usages (frontend dependency install in `04-qa.yml`; the QA/
-Security Agent invocation in both files) now read
-`${{ steps.request_id.outputs.request_id }}`. `HEAD_REF` itself left in
-the env block unchanged — no other consumer, no reason to remove it.
-No changes needed to `workflow_glue.py`, `qa_agent.py`, or
-`security_agent.py` for this fix — `resolve-request-id` already existed
-and already did the right thing.
-
-**Verified live, read-only, no mutation:** ran
-`python -m core.agents.workflow_glue resolve-request-id --issue-number 5`
-directly against the real tracking issue for REQ-2026-02 — returned
-`request_id=REQ-2026-02`, confirming the subcommand this fix now relies on
-resolves correctly against real issue history.
-
-**Fix 2 — `resolve_feature_pr()` staleness (`workflow_glue.py`).** The
-function previously scanned tracking-issue comments for the *first*
-`stage=implementation` marker and returned that PR's number/SHA forever —
-stale the moment a follow-up feature PR opened on the same issue (e.g. the
-R-001 descope pattern), with no mechanism to detect or prefer a newer one.
-`06-deploy.yml` uses this to decide what to actually build and deploy, so
-a stale result risks silently deploying a superseded commit.
-
-Fixed by asking GitHub directly for the PR that's actually open right now,
-using Stage 3's own deterministic branch-naming convention
-(`feature/<request_id>`, confirmed in `implementation_coordinator.py`)
-instead of trusting comment history:
-- New `list_open_prs_by_head(branch_name)` in `github_helper.py` — lists
-  open PRs in `forge-demo-apps` whose head branch matches exactly, via the
-  GitHub App installation token (same auth context as `get_pr()`).
-- `resolve_feature_pr()` rewritten: resolves `request_id` via the existing
-  `resolve_request_id()` (stable for the life of the issue), looks up
-  `feature/<request_id>`'s open PRs, and returns the single match. Zero
-  matches or more than one both raise `ValueError` loudly — no silent
-  fallback to "pick the first one." No signature change; `06-deploy.yml`
-  needed no edits at all, since it only ever consumed the function's
-  `pr_number`/`head_sha` outputs, not its internals.
-- `_IMPLEMENTATION_STAGE_MARKER`/`_PR_URL_RE` removed — confirmed via grep
-  first that nothing else in the file referenced either constant, so they
-  were genuinely dead code after the rewrite, not just orphaned by it.
-
-**Verified live and via simulation, per the spec's own acceptance
-criteria:**
-- Real, read-only call against tracking issue #5 (REQ-2026-02):
-  `resolve_feature_pr(5)` raised `ValueError` — correct, since both of
-  REQ-2026-02's feature PRs (#15, #18) are merged/closed and no
-  `feature/REQ-2026-02` PR is currently open. This *is* the real
-  historical case the spec asked to check against (an issue whose
-  Implementation-stage comment points at a since-superseded PR) — the old
-  code would have returned stale PR #15 data forever; the new code
-  correctly refuses to guess instead.
-- Simulated (mocked `list_open_prs_by_head`/`resolve_request_id`, no live
-  API calls) single/zero/multiple-open-PR cases: single → returns
-  `(pr_number, head_sha)` correctly; zero and multiple both raise
-  `ValueError` with the expected message; confirms all three branches
-  independent of live state, since no `feature/*` PR is open anywhere
-  right now to exercise the single-match path live.
-
-**Both fixes:** `py_compile` clean on `workflow_glue.py`/`github_helper.py`;
-both edited workflow YAML files parse cleanly via `yaml.safe_load`. **Committed
-2026-08-13** as two separate commits per the spec's own handoff notes: Fix 1
-(`04-qa.yml` + `05-security.yml` together, `5271342`) and Fix 2
-(`github_helper.py` + `workflow_glue.py` together, `457f1b9`) — both pushed to
-`main`, documented in `7fc46dc`.
-
----
-
-### Security Agent — scanner-failure verdict fix (per `docs/FORGE-SecurityAgent-ScannerFailureVerdict-Spec.md`)
-
-Root cause (first observed live on `DRYRUN-2026-01`, chat 39, never fixed
-until now): `run_security_agent()`'s verdict computation only ever looked
-at `all_findings` — a scanner that failed to execute at all (crash,
-timeout, missing report; `ScanResult.ran=False`) was computationally
-indistinguishable from one that ran clean and found nothing, so
-`security-approved` could auto-apply on an incomplete scan.
-
-Fix, exactly per spec, all in `core/agents/security_agent.py`:
-- `any_tool_failed = any(not r.ran for r in all_results)`, computed right
-  after `all_results` is built.
-- `check_conclusion`/`label_to_apply` now gate on `has_critical or
-  any_tool_failed` — a tool-run failure blocks merge and withholds the
-  label exactly like a Critical finding does, no new label or retry
-  mechanism introduced.
-- `any_tool_failed` added to `summary_for_model`; `_SYSTEM_PROMPT` gained a
-  third case instructing the model to state plainly that the scan is
-  **incomplete** (not that vulnerabilities were found) when a scanner
-  failed with no Criticals present.
-- Check-run title is now a three-way branch: `"Security scan: blocked"` /
-  `"Security scan: incomplete — scanner failure"` / `"Security scan:
-  passed"`.
-- `--dry-run`'s printed "label (not applied)" reason now reflects the real
-  cause (Critical findings vs. scanner failure) instead of a hardcoded
-  Critical-findings string.
-
-**Verified via unit-level checks against `run_security_agent()`'s
-internals** (scanner functions and `invoke_agent()` mocked, `dry_run=True`,
-no live GitHub/Anthropic calls) — all four spec cases passed, including
-the `--dry-run` printed-reason text for each: baseline clean pass
-(`success`/`security-approved`), the fixed case — one tool failed, no
-findings elsewhere, the exact `DRYRUN-2026-01` shape (`failure`/`None`,
-reason correctly names scanner failure), tool failure plus a genuine
-Critical elsewhere (`failure`/`None`, reason correctly still names
-Critical findings as the cause), and total scanner collapse
-(`failure`/`None`). Live confirmation against a real broken scanner
-invocation (the spec's own suggested follow-up) not done this session.
-
-Committed `5492305`. Document 3 §3.5's "open item, not yet fixed in code"
-pointer to this spec (added the same day, see the doc-cleanup entry below)
-was updated to reflect the fix as closed, in the same doc-cleanup commit.
-
-### Doc-cleanup changeset applied (`docs/FORGE-DocCleanup-Changeset-2026-08-13.md`)
-
-Three pre-Phase-6 doc-drift items, batched per Mike's call, applied
-verbatim from the changeset spec (which itself was drafted from the live
-`security_agent.py` and known label-ownership discrepancy, not the other
-way around):
-
-- **`06_Orchestration_v5.md` → `v6`:** Gate 4/5 narrative corrected — QA
-  Agent and Security Agent apply `qa-approved`/`security-approved`
-  automatically on a clean pass, the reviewer's job is to review and
-  confirm, not to apply the label. Label Reference table rows updated to
-  match. The now-redundant footnote describing this as a documented
-  human-owner/actual-agent-owner discrepancy was removed — the table
-  states the true owner directly now, so there's nothing left to disclaim.
-- **`FORGE_Build_Plan_v8.md` → `v9`:** steps 5.7/5.8 reworded to match
-  (agent applies the label automatically; reviewer confirms). Added a new
-  internal `**v9 update**` log entry at the top of the file, consistent
-  with the file's own v6/v7/v8 self-documenting version-log convention.
-- **`03_FORGE_Tooling_v7.md` → `v8`:** §3.5 (Security Tooling) rewritten to
-  describe the real, live-verified architecture — Security Agent invokes
-  Semgrep/Gitleaks/OWASP Dependency-Check directly as CLI subprocesses
-  inside one GitHub Actions job and is the sole poster of every PR
-  comment/check run/label; no GitHub Actions marketplace step for any of
-  the three tools is used anywhere, contrary to what earlier versions of
-  this document said. Table's "Who Provisions"/cost columns corrected to
-  CLI/binary-install language (pip for Semgrep, standalone binary +
-  PATH for Gitleaks, binary + JDK 21 + NVD API key for Dependency-Check).
-  Provisioning checklist step 8 reworded to match. The open item pointing
-  at the scanner-failure-verdict spec was updated to note the fix as
-  closed (commit `5492305`, see above), per the spec's own cross-reference
-  instruction.
-- Old-version files removed on rename per the project's document-
-  supersession convention (Git history is the version record) —
-  `06_Orchestration_v5.md`/`FORGE_Build_Plan_v8.md`/`03_FORGE_Tooling_v7.md`
-  no longer exist; only the new-version filenames do.
-
-Committed `7d03937`. Both this commit and the security-agent fix commit
-(`5492305`) pushed to `main`.
-
----
-
-### REQ-2026-03 (On-Call Roster Tracker) — Design retry, Implementation recovery, and a real PR-hardening cycle (2026-08-15/16/17)
-
-A single long session covering REQ-2026-03 end-to-end from a failed Design
-run through a hardened, re-scanned PR #20. Documented here as one section
-since each step's fix fed directly into the next verification.
-
-**Design Agent (Stage 2) — transient failure, not a repeatable bug.** The
-automated `02-design.yml` run failed with `yaml.safe_load()` rejecting the
-model's `openapi_yaml` (an unquoted colon inside a `message:` example value —
-`"Only coordinators can create ..."` parsed as a new mapping key). Retried
-standalone via `python -m core.agents.design_agent --issue-number 6
---request-id REQ-2026-03` (confirmed this CLI path already exists, same
-pattern as `implementation_coordinator.py`) — **succeeded cleanly on the
-first retry**, no repeat of the bug. Draft PR
-[#19](https://github.com/Flamespiker/forge-demo-apps/pull/19) opened on
-`design/REQ-2026-03`. Since it didn't reproduce, no prompt/validation fix was
-made — logged as a one-off model fluke, not a confirmed repeatable gap.
-Separately confirmed PR #19's `design.md`/`openapi.yaml`/`tasks.md` correctly
-say nothing about the `services/<request-id>/` path convention — that's by
-design: the path is computed deterministically in
-`implementation_coordinator.py` (`service_root = f"services/{request_id}"`)
-from the CLI-supplied request-id, not parsed out of Design's own artifacts.
-
-**Real bug found and fixed while retrying Design: `_build_app_jwt()`'s `exp`
-claim exceeded GitHub's 10-minute `iat`-to-`exp` window.** `github_helper.py`
-computed `exp = now + 600` on top of an `iat` already skewed back 60s for
-clock drift, giving a 660s window — GitHub started hard-rejecting this with
-`401: "'Expiration time' claim ('exp') is too far in the future"`, silently
-blocking every App-token operation project-wide (not specific to Design).
-Fixed by computing `exp` from `issued_at` instead of `now`. Verified live via
-`GET /app` (200 OK) before retrying anything. **Committed `f501146` on
-`main`** (`forge-template` has no branch protection — confirmed via a live
-`gh api .../branches/main/protection` 404 — direct-to-`main` commits are the
-established, intentional pattern for this repo, unlike `forge-demo-apps`).
-
-**Implementation Coordinator (Stage 3) — a genuine Anthropic billing
-exhaustion, confirmed from the real event stream, not inferred from the
-stopping point.** The first real run (session `sesn_0135RbeieLaZVoamUVymowtT`)
-hit a `session.error` of `type: "billing_error"` ("Your credit balance is too
-low...") at the exact moment Test Writer was mid-flight — this event fired at
-the **session level**, not just Test Writer's own thread, so the coordinator
-never got a further turn to package `implementation.tar.gz`. Confirmed this
-was a genuine, previously-undiscovered gap in Fix 1's completion detection
-(from the REQ-2026-02 session): `wait_for_all_threads_idle()` only checks
-thread `status`, never `session.error` events or non-`end_turn` stop reasons,
-so a billing-exhausted session (every thread reports `idle` once nothing can
-run) was indistinguishable from a genuinely finished one. Confirmed via a
-live `GET /sessions/{id}` that this session was fully `terminated` and
-unrecoverable (`resources: []`) — `--recover-session` would correctly refuse
-it ("genuinely failed -- not recoverable by this tool"), consistent with its
-own existing design. Backend/Frontend had each finished real work before the
-billing wall hit (confirmed via each subagent's own thread events: Backend
-wrote 29 files, Frontend 38, both ending in a clean `session.thread_status_idle`)
-but none of it was ever persisted to `/mnt/session/outputs/`, so it's
-unrecoverable — this had to be a fresh run, not a resume.
-
-**Fresh run (session `sesn_01BJBnYKAc6ontnMnUxDFmy8`) succeeded once funds
-were restored**, but the local `implementation_coordinator.py` process itself
-got killed by the invoking shell's own timeout while `run_implementation_stage()`
-was still polling — same class of incident as the REQ-2026-01/DRYRUN-2026-01
-precedents. Per the standing rule, did **not** re-invoke the coordinator.
-Confirmed live the session had actually finished server-side
-(`status: "idle"`, not archived, `implementation.tar.gz` present, 77,439
-bytes) and recovered it via `--recover-session` — dry-run first (88 files,
-sanity check passed), then real: committed to `feature/REQ-2026-03` (SHA
-`763c27c`), draft **PR [#20](https://github.com/Flamespiker/forge-demo-apps/pull/20)**
-opened, session/environment/coordinator/3 subagents all archived cleanly.
-
----
-
-### PR #20 — three CI failures investigated, four real fixes shipped, one Next.js CVE remediation cycle
-
-QA and Security both failed on PR #20's first real run. Investigated each to
-a confirmed root cause (not guessed) before fixing anything, per explicit
-instruction each time.
-
-**Finding 1 — OWASP Dependency-Check: INCOMPLETE, generic error only.**
-`NVD_API_KEY` was never set as a `forge-template` Actions secret (confirmed:
-blank in the live run's env dump, despite a working key existing locally).
-Separately, `security_agent.py`'s `_run_dependency_check()` never captured
-the scanner's `stdout`/`stderr` on a report-missing failure (unlike
-`_run_semgrep()`'s equivalent code) — worse than just "no detail": since the
-`CompletedProcess` was never assigned to a variable, this branch would have
-raised a bare `NameError` instead of a clean `ScanResult`, had `TimeoutExpired`
-not already been ruled out first. **Fixed, committed `a99471f` on `main`** —
-now captures and surfaces a real tail of tool output on this failure path,
-matching the semgrep pattern exactly.
-
-**Finding 2 — Backend "logger is already frozen" (ADO #153–155), fully
-root-caused via a real local repro (not just the error text).** All 6
-integration test classes used `IClassFixture<IntegrationTestFactory>`
-(one `WebApplicationFactory<Program>` host built per class); `Program.cs`
-assigns Serilog's process-wide static `Log.Logger` via `CreateBootstrapLogger()`
-then freezes it in `UseSerilog()`. xUnit runs different test classes in
-parallel by default, so N separate host builds raced to freeze that one
-static logger — non-deterministic, confirmed by reproducing locally and
-hitting a *different* failing test than CI did. **Fixed in `forge-demo-apps`
-on `feature/REQ-2026-03` (commit `42763d0`)**: all 6 classes now share a
-single `IntegrationTestFactory` instance via an xUnit collection fixture
-(`[CollectionDefinition("Integration Tests")]` + `[Collection(...)]` on each
-class) — removes the race by construction (one host, ever) rather than just
-serializing it away, and is faster than disabling parallelization would have
-been. Verified: no test assertions relied on per-class DB isolation (read all
-6 files first); full suite re-run 3× locally, 39/39 passed every time, no
-"frozen" errors; suite runtime dropped from ~22s to 2–7s.
-
-**Finding 3 — Frontend suite silently not collecting.** `qa_agent.py`
-hardcoded Jest-style flags (`--ci --json --outputFile=...`) regardless of
-which runner the target project actually uses; REQ-2026-03's frontend uses
-Vitest (`"test": "vitest run"`), and Vitest's CLI hard-rejects the
-unrecognized `--ci` flag, crashing before collecting a single test — the
-truncated PR comment only showed Vitest's internal call-stack tail, not the
-real `CACError: Unknown option '--ci'`. **Fixed, committed `55f9ee9` on
-`main`**: new `_detect_frontend_test_runner()` checks for a
-`vitest.config.{ts,js,mjs}` file or `"vitest"` in `package.json`'s deps,
-defaulting to `jest` (REQ-2026-02's frontend, unaffected); Vitest's own
-`--reporter=json` output deliberately mirrors Jest's schema closely enough
-that `_parse_jest_json()` handles both without a separate parser. Verified
-against both real checkouts (REQ-2026-03 → vitest detected, no more crash;
-REQ-2026-01 → jest detected, unchanged).
-
-**Re-running the fixes together surfaced a real GitHub Actions gotcha:**
-`gh run rerun` pins to the exact commit SHA that existed at the *original*
-dispatch event, not current `main` — confirmed empirically (the checkout log
-showed the stale `55f9ee9`, not `a99471f`, on a rerun fired after the
-security fix landed). A genuinely fresh `repository_dispatch` (same payload
-shape as the Phase 4 verification) was required to actually test all fixes
-together, and correctly picked up current `main`.
-
-**That fresh run surfaced two more findings, one old and one brand new:**
-- QA came back `qa-approved` (attempt 4/3 — the retry cap only ever gates the
-  *failure* label branch, never blocks a pass; confirmed via `04-qa.yml`
-  having no attempt-count guard clause at all, and via `qa_agent.py`'s own
-  comment: *"Attempt 4 of 3 (retry limit had been reached prior to this run;
-  tests ultimately passed...)"*). But frontend showed `0 passed / 0 failed /
-  0 total` reported as a **pass** — a real, separate, still-unfixed gap:
-  `_parse_jest_json()` only counts individual test pass/fail, never checks
-  whether entire test *files* failed to even collect (Vitest's own
-  `success: false` / per-file `status: "failed"`). Root cause of the 0/0/0:
-  all 4 frontend test files had a pre-existing, unrelated bad-relative-import
-  bug (`../msw/server`/`../utils/testUtils` resolving one directory too high
-  — the real files live at `__tests__/msw/...` and `__tests__/utils/...`,
-  siblings of the test files, not parents). **Fixed, committed `fc647df` on
-  `feature/REQ-2026-03`** — corrected to `./msw/...`/`./utils/...` in all 4
-  files (deliberately left `__tests__/utils/testUtils.tsx`'s own `../msw/server`
-  untouched — it's one directory deeper, so that path was already correct).
-  Verified: `npx vitest run` now genuinely collects and passes 28/28 tests.
-  The `_parse_jest_json()` file-collection-failure gap itself is still open,
-  not fixed.
-- Security's Dependency-Check step got a **specific** error this time (fix 1
-  above worked as designed) — a real 403/404 from the live NVD API despite a
-  correctly-set, correctly-masked `NVD_API_KEY`. Root cause: `05-security.yml`
-  pinned Dependency-Check **v9.2.0** (a 2023 release, predating NIST's NVD API
-  2.0 rollout). Confirmed by reproducing locally with the same key on a newer
-  installed version (worked in ~2 min) vs. the CI failure (8s, too fast to
-  have even attempted a real update). **v12.2.2** (that local install)
-  turned out not to be an official release at all — confirmed via both the
-  GitHub Releases and Tags APIs for `jeremylong/DependencyCheck`; the real
-  latest is **v12.1.0**. **Fixed, committed `b1419a3` on `main`** — bumped the
-  pin, verified by downloading the real v12.1.0 release zip fresh (same
-  `curl`+`unzip` the workflow uses) and running it with the real key against
-  `services/REQ-2026-03/backend`: produced a genuine report, `engineVersion:
-  12.1.0`, 313 dependencies scanned, 5 with real CVE findings, zero NVD
-  errors.
-
-**A second real Dependency-Check gap found and fixed the same session:**
-the general-purpose analyzers (Archive, Assembly, Sonatype OSS Index) were
-walking every individual file inside `frontend/node_modules` — tens of
-thousands of files — on top of the Node Audit Analyzer, which already covers
-npm dependencies correctly via `package.json`/`package-lock.json` without
-touching installed source. This made a full REQ-2026-03 scan exceed 10
-minutes without completing (killed twice). **Note: the actual fix location is
-`security_agent.py`, not `05-security.yml`** — that workflow file only
-installs the binary; the invocation and its flags are built in Python.
-Confirmed first that the Node Audit Analyzer needs no `--enableExperimental`
-or other enabling flag (there's a `--disableNodeAudit` flag but no `--enable`
-equivalent — it's on by default) and that excluding `node_modules` from the
-general scan can't affect it, since it reads `package-lock.json` directly.
-Added `"--exclude", "**/node_modules/**"` to the command list. Verified: full
-backend+frontend scan dropped from >10 min (unfinished, killed twice) to
-~90–170s; zero `node_modules` mentions anywhere in the log; 964 total
-dependencies reported, 643 precisely identified via `pkg:npm/...` URLs
-(confirming Node Audit Analyzer still ran and still covers the npm tree).
-
-**⚠️ This last fix (`--exclude` in `security_agent.py`) was shown as a diff
-with a proposed commit message but was never actually committed** — the
-session moved on to pulling CVE detail before an explicit "commit and push"
-landed for it. It is currently sitting as an uncommitted local change in the
-`forge-template` working tree. Needs an explicit decision (commit it, or
-revisit) before the next real Security run — without it, Dependency-Check
-will very likely time out again on this project's frontend. **Resolved later
-the same session — see the follow-up section below (`fd4a0b7`).**
-
----
-
-### Pulling real CVE detail — one set of false positives, one set of genuine findings
-
-Asked twice to pull exact JSON fields (CVE ID, CVSS, description, fixed
-version) rather than paraphrase — both times surfaced something beyond the
-raw data:
-
-**The 5 .NET findings (pre-`--exclude` scan) are very likely false
-positives, not real vulnerabilities.** Every one matched a *different*
-product than the real NuGet package, all at `confidence: MEDIUM`:
-`Azure.Identity.dll` matched the JavaScript SDK's CPE, not `.net`;
-`Microsoft.AspNetCore.Authentication.OpenIdConnect.dll` matched the generic
-2007 OpenID *protocol* itself, not Microsoft's library;
-`Npgsql.EntityFrameworkCore.PostgreSQL.dll` (57 CVEs) matched the
-**PostgreSQL server binary**, not the .NET driver — its version string
-"8.0.11" coincidentally collides with a real historic server release;
-`System.IO.Pipes.AccessControl.dll` matched **Microsoft Office Access**
-purely on the word "Access"; `System.Threading.Tasks.dll` matched an
-**Android to-do-list app** called Tasks.org purely on the word "Tasks." None
-of this was fixed or suppressed — reported as a finding, not resolved.
-
-**The 5 npm findings (post-`--exclude` scan) are genuine** — matched via
-precise `pkg:npm/...` URLs from `package-lock.json`, not fuzzy CPE guessing:
-`esbuild@0.21.5`, `next@14.2.5`, `postcss@8.4.31`, `vite@5.4.21`,
-`vitest@1.6.1`. Checked devDependency classification via `package-lock.json`'s
-own `dev` flag (npm's authoritative classification, not just package.json's
-top-level section) rather than assuming: **`vite`/`esbuild`/`vitest` are
-genuinely dev-only** (confirmed `dev: true`, reachable only via
-`vitest`/`vite-node`'s own nested tree). **`next` is a real production
-dependency** (`dev: None`, listed directly in `"dependencies"` —
-contradicted the stated premise). **The vulnerable `postcss@8.4.31` copy is
-nested inside `next`'s own tree** (`node_modules/next/node_modules/postcss`,
-`dev: None`) — also effectively production-path, not the safe top-level
-devDependency copy (which resolved to a different, newer 8.5.26).
-
----
-
-### `next` bumped 14.2.5 → 14.2.35; nested `postcss` forced to 8.5.26 via overrides
-
-Two follow-up commits on `feature/REQ-2026-03`, each shown as a diff and
-verified end-to-end before committing.
-
-**`next` → 14.2.35** (latest 14.2.x patch, confirmed via `npm view next
-versions` — deliberately not 15.x, per explicit direction that a major bump
-is a bigger compatibility risk than this fix warrants). `eslint-config-next`
-bumped alongside it (Next.js's own convention — that package tracks `next`'s
-version). **Committed `18ca416`.** Real, mixed result, reported honestly
-rather than oversold: the specifically-targeted `GHSA-f82v-jwr5-mffw` (9.1
-CRITICAL, middleware authorization bypass) is confirmed gone, along with 10
-others. **8 HIGH-severity findings remain** — their advisories list a fix
-only on the 15.x branch, meaning Next.js never backported them to 14.x;
-staying on 14.x is a real ongoing tradeoff, not resolved by this bump. The
-nested `postcss@8.4.31` copy inside `next`'s own tree was confirmed
-**unchanged** by this bump (predicted correctly before checking). Verified:
-frontend 28/28 tests passed (unchanged), backend 39/39 passed (unaffected).
-Also found, confirmed pre-existing and unrelated: `npm run build` fails on a
-TypeScript conflict in `vitest.config.ts` (duplicate `vite` type definitions
-between the top-level package and `vitest`'s own nested copy) — reproduced
-identically against a fresh clone of the original `next@14.2.5` state, so not
-caused by this bump; not fixed, since QA's real invocation never runs
-`next build`.
-
-**Nested `postcss` forced to 8.5.26 via a scoped `npm overrides` entry.**
-Confirmed npm 8.3+/lockfile v2+ support first (this project: lockfileVersion
-3, npm 11.6.2 locally) before applying. A flat top-level
-`"overrides": {"postcss": "8.5.26"}` was rejected by npm itself
-(`EOVERRIDE`: conflicts with the existing direct devDependency range) — fixed
-by scoping the override to `next`'s own dependency specifically
-(`"overrides": {"next": {"postcss": "8.5.26"}}}`), since that's the actual
-intent (only the nested copy needs forcing, not the whole tree). **Getting it
-to actually take effect needed more than a plain `rm -rf node_modules && npm
-install`** — npm's own package cache had already cached the old resolution
-for this specific dependency edge and kept reusing it even against a clean
-`node_modules`, surfacing as a persistent `npm ls` `invalid`/`ELSPROBLEMS`
-error. Required also deleting `package-lock.json` and `npm cache clean
---force` before the override was honored end-to-end. **Committed `82090c8`.**
-Verified: `npm ls postcss` shows only `8.5.26` anywhere in the tree (root
-marked `overridden`, every nested occurrence including `next`'s own copy
-marked `deduped`); a real re-scan confirms both CVEs
-(`CVE-2026-45623`/`CVE-2026-69153`) gone — only one `postcss` entry remains
-in the report at all, 0 vulnerabilities; frontend 28/28 and backend 39/39
-both re-confirmed passing, unaffected.
-
-**Still open, not addressed this session:**
-- 8 remaining HIGH-severity `next` findings with no 14.x backport available.
-- `_parse_jest_json()`'s file-collection-failure blind spot (a fully-broken
-  frontend suite can still report `qa-approved` if every file fails to
-  collect rather than fails a specific test).
-
----
-
-### `security_agent.py`'s `--exclude` fix committed; `vitest.config.ts` build conflict fixed and confirmed Stage-6-only
-
-Two follow-up items from the section above, closed in a later same-project
-session.
-
-**The uncommitted `--exclude "**/node_modules/**"` fix was confirmed still
-sitting locally** (checked `git status` before assuming anything) and
-**committed as `fd4a0b7` on `main`**, using the exact commit message already
-drafted when the diff was first shown.
-
-**The `vitest.config.ts` TypeScript conflict was investigated further, fixed,
-and re-verified.** Pulled the full (2,941-line) `npm run build` error rather
-than the earlier summary: confirmed the exact failure is
-`vitest.config.ts:6:13`, and confirmed it's the *same underlying pattern*
-already found during the Dependency-Check CVE investigation — `vitest/config`'s
-`defineConfig()` types against vitest's own nested `vite@5.4.21`, while
-`@vitejs/plugin-react`'s `react()` types against the top-level `vite@7.3.6`.
-`skipLibCheck: true` was already set in `tsconfig.json` but doesn't help (it
-only skips `.d.ts` files, not real project source like this one). Tested the
-fix live before committing anything: adding `vitest.config.ts`,
-`vitest.setup.ts`, and `__tests__` to `tsconfig.json`'s `exclude` array
-resolves the conflict completely — verified by re-running the build and
-confirming zero mentions of `vitest.config.ts` anywhere, progressing past the
-type-check stage into static page generation. **Committed `6639e09` on
-`feature/REQ-2026-03`.** Re-ran both suites after: frontend 4/4 files, 28/28
-tests passed (unchanged); backend 39/39 passed (unaffected).
-
-A second, separate, unrelated error surfaces immediately after during
-prerendering (`TypeError: Cannot read properties of null (reading
-'useContext')` on `/`, `/404`, `/500`, `/_not-found`, `/audit`) — confirmed
-via mixed path casing in its own stack trace (`C:\Users\mikef\Projects\...`
-alongside `C:\Users\mikef\projects\...`) to be the same local-machine-only
-Windows path-casing artifact already documented for REQ-2026-01. Confirmed
-this persists even invoking the build via PowerShell instead of git-bash —
-it's baked into this machine's `node_modules` own install-time state (first
-populated via a lowercase-mounted shell), not the shell used to invoke the
-build command. Cannot reproduce on a real, case-sensitive Linux CI runner;
-not fixed, not blocking.
-
-**Confirmed via a direct audit of every workflow file: nothing in the current
-pipeline invokes `next build` before Stage 6.** Checked all of
-`00-intake.yml` through `06-deploy.yml` (plus `03b-recover-implementation.yml`)
-for `next build`/`npm run build`/`docker build`/`Dockerfile` — zero matches
-anywhere except inside `06-deploy.yml`'s own invocation of `deploy_agent.py`,
-which runs a real `docker build` against the frontend's own `Dockerfile`.
-That Dockerfile's own "Stage 2: Build the Next.js app" contains `RUN npm run
-build` directly. `04-qa.yml`'s only npm-related step is `npm install --prefix`
-before `qa_agent.py` runs `vitest run` — no build step. This confirms the
-`vitest.config.ts` conflict (now fixed) could only ever have been caught for
-real at Stage 6, never earlier in the pipeline — exactly why it slipped past
-QA on this PR.
-
----
-
-### Open items for next session (REQ-2026-03 / PR #20 arc) — consolidated
-
-Everything below was surfaced during this arc but deliberately not fixed —
-each is a real, confirmed gap, not a guess:
-
-1. **`qa_agent.py`'s `_parse_jest_json()` has a file-collection-failure blind
-   spot.** It only counts individual test pass/fail (`numPassedTests`/
-   `numFailedTests`), and never checks whether entire test *files* failed to
-   even collect (Vitest's own top-level `success: false` / per-file
-   `status: "failed"`). A Vitest run where every file fails to collect
-   reports `0 passed / 0 failed / 0 total` — currently treated as a clean
-   **pass**, not a failure. This is exactly what let a real, unrelated
-   bad-import bug on REQ-2026-03's frontend slip through as `qa-approved`
-   before it was caught by chance while pulling CVE detail (see above; fixed
-   in `fc647df`, but the *classifier gap itself* was never fixed).
-2. **8 HIGH-severity `next@14.2.35` findings have no 14.x backport.** Their
-   advisories list a fix only on the 15.x branch — Next.js never backported
-   them to 14.x. This is an accepted ongoing risk from the explicit decision
-   to stay on the 14.x major line (see the `next` bump section above), not a
-   gap in anything fixed this session. Only resolvable by eventually moving
-   to 15.x, or waiting for an upstream 14.x backport that may never come.
-3. **No pipeline stage before Deploy (Stage 6) validates that the app
-   actually builds.** Confirmed via a direct audit of every workflow file
-   (see immediately above): QA only ever runs `vitest run`/`dotnet test`; the
-   first real `npm run build`/`docker build` in the entire pipeline happens
-   inside `deploy_agent.py`'s Docker build at Stage 6. This is exactly what
-   let both the `vitest.config.ts` type conflict and the local-only
-   path-casing artifact go completely undetected until deliberately
-   investigated this session, on request — nothing in the automated pipeline
-   would have caught either on its own. Worth considering whether Deploy
-   Agent (or QA) should build the frontend earlier in the pipeline, per the
-   near-identical open question already logged for REQ-2026-02's frontend
-   deploy bugs.
-4. **QA's `_MAX_RETRIES` retry cap is not actually enforced anywhere — it
-   only ever picks a label, never blocks a re-run.** Confirmed by reading
-   both `qa_agent.py` and `04-qa.yml` directly: `_MAX_RETRIES` is consulted
-   in exactly one place (`qa_agent.py`'s label-choice branch), and only when
-   `tests_pass` is `False` — a passing run always gets `qa-approved`
-   regardless of attempt number (confirmed live: PR #20's real attempt 4
-   passed and was approved despite already being past the nominal limit of
-   3). `04-qa.yml`'s only guard clause checks PR open-state and head-SHA
-   match — nothing about label state or attempt count. The workflow will
-   keep firing unconditionally on every push, forever; a human is expected to
-   notice `qc-retry-limit-reached` and stop pushing manually, but nothing
-   enforces that. Separately, the retry counter has no concept of
-   "infrastructure/tooling failure" vs. "real app defect" — it just counts
-   every QA comment ever posted, so a redundant manual `gh run rerun` (see
-   above) burned a real attempt for zero new information.
-
----
-
-### REQ-2026-03 Stage 6 Deploy — 0-of-2 failure, four `deploy_agent.py` fixes, two design forks resolved (2026-08-17/18)
-
-Real (non-dry-run) Deploy Agent invocation against REQ-2026-03's merged PR
-#20 commit (`e26363f8`) failed 0 of 2 units on first attempt. Root-caused
-both failures, fixed four confirmed bugs per a dedicated spec
-(`docs/FORGE-DeployAgent-UnitNaming-PublicDir-FailureComment-Spec.md`, drafted
-Claude.ai side), each verified and committed separately.
-
-**Pre-flight verification (before any deploy attempt):** confirmed the local
-`forge-demo-apps-clone` checkout's `main` HEAD exactly matched PR #20's
-`mergeCommit.oid` (`e26363f8beb25a4521fd8a78888a688f31ef689f`, `MERGED`).
-Confirmed no stale deploy existed: one earlier `06-deploy.yml` run (2026-08-15)
-had targeted REQ-2026-03 but self-skipped via its own guard clause (only
-`design-approved`+`qa-approved` present, `security-approved` not yet) — no
-resources were ever created from it. `forge-staging`'s `defaultDomain`
-unchanged. First invocation attempt itself failed for an unrelated reason —
-passing a Windows backslash `--repo-path` unquoted through the Bash tool's
-POSIX shell ate the backslashes before Python saw them, producing a bogus
-"no deployable units" failure comment on issue #6; not a pipeline bug, fixed
-by quoting the path.
-
-**Bug 1 — `_slugify()` produced an invalid Docker tag for any project name
-containing a literal `.`.** Confirmed live: REQ-2026-03's backend csproj
-directory is `OnCallRosterTracker.Api`; the existing slugifier only
-converted PascalCase boundaries to hyphens, leaving the literal `.`
-untouched, so the hyphen inserted before `Api` landed immediately after the
-dot (`...tracker.-api`) — Docker rejects this outright
-(`invalid reference format`). `docker build` never ran; no image, no push,
-no Container App for this unit.
-
-**Bug 2 — frontend Dockerfile's `COPY --from=builder /app/public ./public`
-failed — second confirmed occurrence of the exact REQ-2026-02 bug.**
-`services/REQ-2026-03/frontend` has no `public/` directory (no static
-assets, and Git doesn't track empty directories), so the COPY step failed
-("not found"), aborting the frontend build independently of Bug 1. Fix 3 of
-the earlier Cross-Service Wiring spec's per-unit `try`/`except` isolation
-worked exactly as designed — the frontend attempt still ran after the
-backend failed.
-
-**Fix 1 (`_slugify()` + new `_validate_unit_name()`, commit `8bbd65f`):**
-`_slugify()` now treats any non-alphanumeric run (not just PascalCase
-boundaries) as a word separator, collapsing to a single hyphen —
-`OnCallRosterTracker.Api` → `on-call-roster-tracker-api` (valid characters).
-`_validate_unit_name()` checks the full `<request-id>-<slug>` name against
-Docker's tag grammar and Azure Container Apps' naming rules (confirmed live
-via `az containerapp create --help`: lowercase alphanumeric + hyphen, starts
-with a letter, no leading/trailing/double hyphen, **must be under 32
-characters**) and raises a clear, named `ValueError` instead of letting an
-invalid name reach `docker build`/`az containerapp create` and fail there.
-No regression: `DocumentApi`/`EmailWorker`/`AuditorApi` (REQ-2026-01/02,
-already live) produce identical names to before.
-
-**Design fork #1, surfaced and resolved with Mike before implementing:**
-even after the character fix, REQ-2026-03's full unit name
-(`req-2026-03-on-call-roster-tracker-api`) is **38 characters** — still
-invalid, now on length, not characters. Stripping the generic `.Api` suffix
-only gets to 34 — still over the limit. No truncation scheme was specified,
-so this was flagged rather than guessed at. **Mike's decision: raise a
-clear `ValueError`, do not truncate.** Consequence, accepted: REQ-2026-03's
-backend unit genuinely cannot deploy under the current
-`<request-id>-<slug>` naming convention until a separate naming decision is
-made (e.g. renaming the project directory) — this is an open item, not
-fixed here.
-
-**Fix 3 (backend-name validation before the frontend build-arg, commit
-`6a3d81a`):** `run_deploy_agent()` now validates the backend "web" unit's
-name (via Fix 1) *before* deriving either FQDN for cross-service wiring —
-previously an invalid backend name would still get baked into the
-frontend's `NEXT_PUBLIC_API_BASE_URL` build-arg even though that backend
-unit was guaranteed to fail its own build. On validation failure, falls
-back to the existing "no web backend unit in this request" no-wiring
-warning instead of proceeding with a broken value. Verified via mocked
-simulation (all docker/az/GitHub calls stubbed, `_run_shell` hard-mocked to
-raise if ever called — same safety pattern the Cross-Service Wiring spec
-established after its own live-`containerapp`-creation near-miss): REQ-2026-03
-(invalid backend) → frontend `build_args` is `None`; REQ-2026-01 (valid
-backend, control) → frontend `build_args` unchanged, still carries the real
-FQDN.
-
-**Fix 2 (`_ensure_frontend_public_dir()`, commit `9c732a6`):** creates an
-empty `services/<request-id>/frontend/public/` directory in the local
-checkout, right before the build, if missing.
-
-**Design fork #2, surfaced and resolved with Mike before implementing:** the
-spec's own recommended fix (Option A — make the Dockerfile-generation
-template's COPY line conditional) turned out not to actually fix this
-failure at all: REQ-2026-03's frontend Dockerfile was already committed by
-the Frontend subagent during Implementation (confirmed by reading it
-directly), and Deploy Agent's own rule is to never overwrite an existing
-Dockerfile (`_generate_dockerfile_if_missing()`) — a template-only fix
-would not have touched either of the two real occurrences of this bug (both
-REQ-2026-02 and REQ-2026-03 already had committed Dockerfiles). **Mike's
-decision: fix at the filesystem level instead** — same outcome either way
-(a real directory for `COPY . .` to pick up), works identically regardless
-of whether the Dockerfile was generated or pre-existing. Verified: unit test
-(create once, no-op on repeat) plus a real local `docker build` (no ACR
-push) against REQ-2026-03's actual frontend — completed end-to-end, exit 0;
-the previously-failing COPY step now completes in 0.5s. No regression
-against REQ-2026-02's frontend, which already has a real `public/.gitkeep`
-from its own earlier one-off manual fix.
-
-**Fix 4 (failure-comment wording, commit `71a786a`):** the tracking-issue
-partial-failure comment hardcoded `"-- the rest were deployed
-successfully"` regardless of the actual success count — confirmed live on
-the first REQ-2026-03 attempt (0 of 2 succeeded, comment still claimed a
-partial success). Made the clause conditional on the real count. Verified
-both the all-failed case (now reads "none of this request's unit(s) were
-deployed") and the pre-existing partial-failure case (unchanged wording),
-confirming no overcorrection.
-
-**Final re-run after all four fixes: 1 of 2 units deployed for real.**
-Backend still fails — expected, per the accepted Design fork #1 decision
-(length, not characters). Frontend (`req-2026-03-frontend`) built, pushed to
-ACR, and `az containerapp create` succeeded for real:
-`req-2026-03-frontend.yellowmeadow-894377a9.canadacentral.azurecontainerapps.io`.
-Fix 4 confirmed correct in the real (not simulated) partial-failure case too
-— the posted issue #6 comment correctly read "1 of 2 unit(s) failed... the
-rest were deployed successfully."
-
-**A third, new, previously-undiscovered gap found while verifying the live
-frontend — not fixed, flagged only, same "Deploy Agent doesn't wire
-app secrets" class of gap already documented for EmailWorker's Service Bus
-connection string and REQ-2026-02's D365 config.** `curl`ing the live
-frontend root returns a real HTTP 307 (ingress/TLS layer confirmed
-genuinely live) redirecting to `/api/auth/error?error=Configuration` —
-container logs show `next-auth][error][NO_SECRET]` /
-`MissingSecretError: Please define a 'secret' in production.`. This app uses
-NextAuth (`middleware.ts` + `app/api/auth/[...nextauth]/route.ts`), which
-requires a `NEXTAUTH_SECRET` (and likely other provider config) as a
-Container App env var — `deploy_agent.py` only ever sets
-`--image`/`--registry-*`/`--cpu`/`--memory`/`--min-replicas`/
-`--max-replicas`/`--target-port`/`--ingress` (plus the Cross-Service Wiring
-spec's `NEXT_PUBLIC_API_BASE_URL`/`FRONTEND_ORIGIN`), never arbitrary
-application secrets. **Because the backend never deployed (Design fork #1)
-and the frontend can't render past its own auth-configuration error, the
-requested end-to-end write-path verification (a real POST/PUT/DELETE shift
-claim/release call through the live frontend) could not be performed this
-session** — there is no live backend to call, and no way to reach the
-frontend's actual UI past the auth redirect.
-
-**Open items, explicitly flagged, not fixed:**
-- REQ-2026-03's backend unit name doesn't fit the `<request-id>-<slug>`
-  naming convention under Azure's 32-character limit — needs an explicit
-  naming decision (e.g. renaming the `OnCallRosterTracker.Api` project
-  directory) before this unit can ever deploy as-is.
-- NextAuth's `NEXTAUTH_SECRET` (and any other required auth provider env
-  vars) are never wired by Deploy Agent for any request — a real,
-  now third, occurrence of the "Deploy Agent has no app-secret wiring
-  mechanism" gap.
-- The real write-path (claim/release) verification against a live backend
-  + live frontend for REQ-2026-03 has still never been performed, blocked
-  by both items above.
-
-Per the spec's own standing convention: this session did not update
-`FORGE-context_v56.md` — that's Claude.ai's job at session close.
+## Further reading
+
+- The newest `docs/FORGE-context_v*.md` — Claude.ai-maintained narrative/open-items doc;
+  read this alongside this file each session.
+- `docs/CLAUDE-archive-2026-08-phase3-5.md` — Phase 3/4 build-out + Phase 5 pre-flight
+  fixes, verbatim.
+- `docs/CLAUDE-archive-2026-08-req2026-02.md` — REQ-2026-02 fix cycle, verbatim.
+- `docs/CLAUDE-archive-2026-08-req2026-03.md` — REQ-2026-03 build + PR #20/Deploy cycle,
+  verbatim.
+- `docs/FORGE-pipeline-cost-log.md` — token/Managed Agents/ACR cost tracking.
