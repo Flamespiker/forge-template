@@ -2925,3 +2925,159 @@ each is a real, confirmed gap, not a guess:
    above) burned a real attempt for zero new information.
 
 ---
+
+### REQ-2026-03 Stage 6 Deploy — 0-of-2 failure, four `deploy_agent.py` fixes, two design forks resolved (2026-08-17/18)
+
+Real (non-dry-run) Deploy Agent invocation against REQ-2026-03's merged PR
+#20 commit (`e26363f8`) failed 0 of 2 units on first attempt. Root-caused
+both failures, fixed four confirmed bugs per a dedicated spec
+(`docs/FORGE-DeployAgent-UnitNaming-PublicDir-FailureComment-Spec.md`, drafted
+Claude.ai side), each verified and committed separately.
+
+**Pre-flight verification (before any deploy attempt):** confirmed the local
+`forge-demo-apps-clone` checkout's `main` HEAD exactly matched PR #20's
+`mergeCommit.oid` (`e26363f8beb25a4521fd8a78888a688f31ef689f`, `MERGED`).
+Confirmed no stale deploy existed: one earlier `06-deploy.yml` run (2026-08-15)
+had targeted REQ-2026-03 but self-skipped via its own guard clause (only
+`design-approved`+`qa-approved` present, `security-approved` not yet) — no
+resources were ever created from it. `forge-staging`'s `defaultDomain`
+unchanged. First invocation attempt itself failed for an unrelated reason —
+passing a Windows backslash `--repo-path` unquoted through the Bash tool's
+POSIX shell ate the backslashes before Python saw them, producing a bogus
+"no deployable units" failure comment on issue #6; not a pipeline bug, fixed
+by quoting the path.
+
+**Bug 1 — `_slugify()` produced an invalid Docker tag for any project name
+containing a literal `.`.** Confirmed live: REQ-2026-03's backend csproj
+directory is `OnCallRosterTracker.Api`; the existing slugifier only
+converted PascalCase boundaries to hyphens, leaving the literal `.`
+untouched, so the hyphen inserted before `Api` landed immediately after the
+dot (`...tracker.-api`) — Docker rejects this outright
+(`invalid reference format`). `docker build` never ran; no image, no push,
+no Container App for this unit.
+
+**Bug 2 — frontend Dockerfile's `COPY --from=builder /app/public ./public`
+failed — second confirmed occurrence of the exact REQ-2026-02 bug.**
+`services/REQ-2026-03/frontend` has no `public/` directory (no static
+assets, and Git doesn't track empty directories), so the COPY step failed
+("not found"), aborting the frontend build independently of Bug 1. Fix 3 of
+the earlier Cross-Service Wiring spec's per-unit `try`/`except` isolation
+worked exactly as designed — the frontend attempt still ran after the
+backend failed.
+
+**Fix 1 (`_slugify()` + new `_validate_unit_name()`, commit `8bbd65f`):**
+`_slugify()` now treats any non-alphanumeric run (not just PascalCase
+boundaries) as a word separator, collapsing to a single hyphen —
+`OnCallRosterTracker.Api` → `on-call-roster-tracker-api` (valid characters).
+`_validate_unit_name()` checks the full `<request-id>-<slug>` name against
+Docker's tag grammar and Azure Container Apps' naming rules (confirmed live
+via `az containerapp create --help`: lowercase alphanumeric + hyphen, starts
+with a letter, no leading/trailing/double hyphen, **must be under 32
+characters**) and raises a clear, named `ValueError` instead of letting an
+invalid name reach `docker build`/`az containerapp create` and fail there.
+No regression: `DocumentApi`/`EmailWorker`/`AuditorApi` (REQ-2026-01/02,
+already live) produce identical names to before.
+
+**Design fork #1, surfaced and resolved with Mike before implementing:**
+even after the character fix, REQ-2026-03's full unit name
+(`req-2026-03-on-call-roster-tracker-api`) is **38 characters** — still
+invalid, now on length, not characters. Stripping the generic `.Api` suffix
+only gets to 34 — still over the limit. No truncation scheme was specified,
+so this was flagged rather than guessed at. **Mike's decision: raise a
+clear `ValueError`, do not truncate.** Consequence, accepted: REQ-2026-03's
+backend unit genuinely cannot deploy under the current
+`<request-id>-<slug>` naming convention until a separate naming decision is
+made (e.g. renaming the project directory) — this is an open item, not
+fixed here.
+
+**Fix 3 (backend-name validation before the frontend build-arg, commit
+`6a3d81a`):** `run_deploy_agent()` now validates the backend "web" unit's
+name (via Fix 1) *before* deriving either FQDN for cross-service wiring —
+previously an invalid backend name would still get baked into the
+frontend's `NEXT_PUBLIC_API_BASE_URL` build-arg even though that backend
+unit was guaranteed to fail its own build. On validation failure, falls
+back to the existing "no web backend unit in this request" no-wiring
+warning instead of proceeding with a broken value. Verified via mocked
+simulation (all docker/az/GitHub calls stubbed, `_run_shell` hard-mocked to
+raise if ever called — same safety pattern the Cross-Service Wiring spec
+established after its own live-`containerapp`-creation near-miss): REQ-2026-03
+(invalid backend) → frontend `build_args` is `None`; REQ-2026-01 (valid
+backend, control) → frontend `build_args` unchanged, still carries the real
+FQDN.
+
+**Fix 2 (`_ensure_frontend_public_dir()`, commit `9c732a6`):** creates an
+empty `services/<request-id>/frontend/public/` directory in the local
+checkout, right before the build, if missing.
+
+**Design fork #2, surfaced and resolved with Mike before implementing:** the
+spec's own recommended fix (Option A — make the Dockerfile-generation
+template's COPY line conditional) turned out not to actually fix this
+failure at all: REQ-2026-03's frontend Dockerfile was already committed by
+the Frontend subagent during Implementation (confirmed by reading it
+directly), and Deploy Agent's own rule is to never overwrite an existing
+Dockerfile (`_generate_dockerfile_if_missing()`) — a template-only fix
+would not have touched either of the two real occurrences of this bug (both
+REQ-2026-02 and REQ-2026-03 already had committed Dockerfiles). **Mike's
+decision: fix at the filesystem level instead** — same outcome either way
+(a real directory for `COPY . .` to pick up), works identically regardless
+of whether the Dockerfile was generated or pre-existing. Verified: unit test
+(create once, no-op on repeat) plus a real local `docker build` (no ACR
+push) against REQ-2026-03's actual frontend — completed end-to-end, exit 0;
+the previously-failing COPY step now completes in 0.5s. No regression
+against REQ-2026-02's frontend, which already has a real `public/.gitkeep`
+from its own earlier one-off manual fix.
+
+**Fix 4 (failure-comment wording, commit `71a786a`):** the tracking-issue
+partial-failure comment hardcoded `"-- the rest were deployed
+successfully"` regardless of the actual success count — confirmed live on
+the first REQ-2026-03 attempt (0 of 2 succeeded, comment still claimed a
+partial success). Made the clause conditional on the real count. Verified
+both the all-failed case (now reads "none of this request's unit(s) were
+deployed") and the pre-existing partial-failure case (unchanged wording),
+confirming no overcorrection.
+
+**Final re-run after all four fixes: 1 of 2 units deployed for real.**
+Backend still fails — expected, per the accepted Design fork #1 decision
+(length, not characters). Frontend (`req-2026-03-frontend`) built, pushed to
+ACR, and `az containerapp create` succeeded for real:
+`req-2026-03-frontend.yellowmeadow-894377a9.canadacentral.azurecontainerapps.io`.
+Fix 4 confirmed correct in the real (not simulated) partial-failure case too
+— the posted issue #6 comment correctly read "1 of 2 unit(s) failed... the
+rest were deployed successfully."
+
+**A third, new, previously-undiscovered gap found while verifying the live
+frontend — not fixed, flagged only, same "Deploy Agent doesn't wire
+app secrets" class of gap already documented for EmailWorker's Service Bus
+connection string and REQ-2026-02's D365 config.** `curl`ing the live
+frontend root returns a real HTTP 307 (ingress/TLS layer confirmed
+genuinely live) redirecting to `/api/auth/error?error=Configuration` —
+container logs show `next-auth][error][NO_SECRET]` /
+`MissingSecretError: Please define a 'secret' in production.`. This app uses
+NextAuth (`middleware.ts` + `app/api/auth/[...nextauth]/route.ts`), which
+requires a `NEXTAUTH_SECRET` (and likely other provider config) as a
+Container App env var — `deploy_agent.py` only ever sets
+`--image`/`--registry-*`/`--cpu`/`--memory`/`--min-replicas`/
+`--max-replicas`/`--target-port`/`--ingress` (plus the Cross-Service Wiring
+spec's `NEXT_PUBLIC_API_BASE_URL`/`FRONTEND_ORIGIN`), never arbitrary
+application secrets. **Because the backend never deployed (Design fork #1)
+and the frontend can't render past its own auth-configuration error, the
+requested end-to-end write-path verification (a real POST/PUT/DELETE shift
+claim/release call through the live frontend) could not be performed this
+session** — there is no live backend to call, and no way to reach the
+frontend's actual UI past the auth redirect.
+
+**Open items, explicitly flagged, not fixed:**
+- REQ-2026-03's backend unit name doesn't fit the `<request-id>-<slug>`
+  naming convention under Azure's 32-character limit — needs an explicit
+  naming decision (e.g. renaming the `OnCallRosterTracker.Api` project
+  directory) before this unit can ever deploy as-is.
+- NextAuth's `NEXTAUTH_SECRET` (and any other required auth provider env
+  vars) are never wired by Deploy Agent for any request — a real,
+  now third, occurrence of the "Deploy Agent has no app-secret wiring
+  mechanism" gap.
+- The real write-path (claim/release) verification against a live backend
+  + live frontend for REQ-2026-03 has still never been performed, blocked
+  by both items above.
+
+Per the spec's own standing convention: this session did not update
+`FORGE-context_v56.md` — that's Claude.ai's job at session close.
