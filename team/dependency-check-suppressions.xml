@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+FORGE team-configurable OWASP Dependency-Check suppression file.
+
+Suppresses findings from esbuild/vite/vitest and their transitive
+dependencies: confirmed dev-only npm tooling (devDependencies), never
+present in any deployed frontend Docker image, so a vulnerability in this
+subtree carries a categorically different (near-zero) real-world risk here
+than a production dependency finding. This is a package-identity-based
+suppression (any finding under these dependency trees), not a per-CVE
+allowlist; matches this file's own justification, and mirrors
+team/gitleaks-allowlist.toml's approach of excluding a whole category of
+path, not chasing individual false positives one at a time.
+
+Confirmed live against REQ-2026-03's frontend dependency-check report
+(2026-08-19): dependency-check's Node/npm analyzer reports each
+lockfile-derived dependency's filePath as ".../package-lock.json?ROOT",
+where ROOT is the top-level package that pulled it in, e.g.
+"launch-editor" (a vite transitive dependency) is reported under
+"package-lock.json?vite", not under its own package name. filePath
+matching on that "?ROOT" suffix is therefore the correct mechanism here,
+not packageUrl (which would only match the top-level package's own name,
+missing its transitive dependencies).
+
+Do NOT add next/react findings here: those are production dependencies
+(shipped in the deployed image) and are a separate, already-tracked,
+already-accepted risk (see CLAUDE.md Open Items: "8 HIGH-severity
+next@14.2.35 CVE findings have no 14.x backport"). Suppressing them would
+hide a real, in-production risk category, not a dev-tooling one.
+
+Schema: https://dependency-check.github.io/DependencyCheck/general/suppression.html
+-->
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.4.xsd">
+    <suppress>
+        <notes><![CDATA[
+            esbuild is a devDependency (bundler used by Vite/Vitest during
+            local dev/test only) -- never present in the deployed frontend
+            Docker image.
+        ]]></notes>
+        <filePath regex="true">.*package-lock\.json\?esbuild$</filePath>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+            vite is a devDependency (used only by Vitest's test runner) --
+            never present in the deployed frontend Docker image. Covers
+            vite's own findings and transitive dev-tooling dependencies
+            dependency-check attributes to this root (e.g. launch-editor).
+        ]]></notes>
+        <filePath regex="true">.*package-lock\.json\?vite$</filePath>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+            vitest is a devDependency (test runner, including its optional
+            UI/browser-mode server) -- never present in the deployed
+            frontend Docker image, so its UI dev-server findings (e.g.
+            GHSA-5xrq-8626-4rwp, a Windows-only arbitrary file read when
+            the Vitest UI server is exposed to a network) do not apply to
+            this application's real deployed attack surface.
+        ]]></notes>
+        <filePath regex="true">.*package-lock\.json\?vitest$</filePath>
+    </suppress>
+</suppressions>

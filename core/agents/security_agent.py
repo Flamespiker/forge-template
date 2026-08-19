@@ -144,6 +144,7 @@ _CHECK_RUN_NAME = "security-check"  # must match Build Plan 4.8's branch-protect
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _GITLEAKS_ALLOWLIST_CONFIG = _REPO_ROOT / "team" / "gitleaks-allowlist.toml"
+_DEPENDENCY_CHECK_SUPPRESSION_CONFIG = _REPO_ROOT / "team" / "dependency-check-suppressions.xml"
 
 _SEV_CRITICAL = "Critical"
 _SEV_HIGH = "High"
@@ -318,6 +319,17 @@ def _run_dependency_check(service_dir: str, request_id: str) -> ScanResult:
                    "--exclude", "**/node_modules/**",
                    "--format", "JSON",
                    "--out", results_dir]
+
+        if _DEPENDENCY_CHECK_SUPPRESSION_CONFIG.exists():
+            command.extend(["--suppression", str(_DEPENDENCY_CHECK_SUPPRESSION_CONFIG)])
+        else:
+            logger.warning(
+                "Dependency-Check suppression config not found at %s -- running with no "
+                "suppressions (confirmed dev-only npm findings like esbuild/vite/vitest will "
+                "surface as real findings). Team-configurable; see "
+                "team/dependency-check-suppressions.xml.",
+                _DEPENDENCY_CHECK_SUPPRESSION_CONFIG,
+            )
 
         nvd_api_key = os.environ.get("NVD_API_KEY")
         if nvd_api_key:
