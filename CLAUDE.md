@@ -1263,14 +1263,14 @@ completion).
     manually replayed (`gh api repos/.../dispatches`) to get a real (re-)scan. Distinct
     from the `feature/*` vs. `fix/*` branch-naming issue (#9) — this one bites even on a
     correctly-named `feature/fix-*` branch.
-16. **Cleanup debt from the 2026-08-19 write-path verification session, not urgent:**
-    test user "Mike App Test" (`AzureAdOid=3100bd61-03a4-4ebc-9327-4d2731f172f5`) still
-    has `IsCoordinator=true` in the REQ-2026-03 Postgres DB (a bootstrap artifact needed
-    to create a test shift via the real API) — flip back before treating this app as
-    fully closed out. Two now-irrelevant firewall rules also remain on
-    `forge-req2026-03-pg` (`AllowAdminVerificationIp`, and the earlier stale
-    `AllowContainerAppsEnvOutboundIp` which never actually worked) — harmless, worth
-    clearing when convenient.
+16. ~~**Cleanup debt from the 2026-08-19 write-path verification session, not urgent:**~~
+    — **RESOLVED 2026-08-19.** Test user "Mike App Test"
+    (`AzureAdOid=3100bd61-03a4-4ebc-9327-4d2731f172f5`) flipped back to
+    `IsCoordinator=false` in the REQ-2026-03 Postgres DB, verified via an independent
+    `SELECT` (not just the `UPDATE...RETURNING` clause). Both firewall rules removed
+    (`AllowAdminVerificationIp`, and the stale `AllowContainerAppsEnvOutboundIp` which
+    never actually worked) — verified via `firewall-rule list`, which now shows only
+    `AllowAzureServices`. Postgres server confirmed `Stopped` again after this cleanup.
 
 ---
 
