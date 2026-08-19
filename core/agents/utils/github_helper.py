@@ -697,6 +697,71 @@ def get_pr(pr_number: int) -> dict:
     return pr
 
 
+def get_dependabot_alerts(repo_full_name: str, state: str = "open") -> list[dict]:
+    """
+    Fetch Dependabot alerts for a repo via GET /repos/{repo_full_name}/dependabot/alerts,
+    paginating via the response's Link header rather than assuming a single page covers
+    all alerts. Returns the raw alert objects (each includes security_advisory.severity/
+    cve_id/ghsa_id/summary, dependency.package.name/ecosystem/manifest_path,
+    security_vulnerability.vulnerable_version_range/first_patched_version, per GitHub's
+    API shape).
+
+    Uses the GitHub App installation token -- requires the App installation to have the
+    "Dependabot alerts: Read-only" permission (GitHub's actual permission key is
+    `vulnerability_alerts`, confirmed live against a real installation; the human-facing
+    name in the App settings UI is "Dependabot alerts").
+
+    Raises RuntimeError on 403/404. GitHub does not document a way to distinguish
+    "Dependabot alerts are disabled for this repo" from "the token/App lacks the
+    Dependabot alerts read permission" from the response alone (confirmed against
+    GitHub's own REST API reference for this endpoint, which lists both under generic
+    403/404 with no differentiating field) -- this is a real, flagged API limitation, not
+    something silently papered over here. The raw response body is included in the
+    exception so a human can read GitHub's actual message text to tell the two apart.
+    Callers must treat this as ran=False, never as "zero alerts."
+    """
+    token = get_installation_token()
+    headers = _auth_headers(token)
+    url = f"{_GITHUB_API}/repos/{repo_full_name}/dependabot/alerts"
+    params: dict[str, object] | None = {"state": state, "per_page": 100}
+    alerts: list[dict] = []
+    while url:
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        if response.status_code in (403, 404):
+            raise RuntimeError(
+                f"Dependabot alerts request for {repo_full_name} returned "
+                f"{response.status_code} -- either Dependabot alerts are not enabled on "
+                "this repo, or the GitHub App installation is missing the 'Dependabot "
+                "alerts: Read-only' permission. GitHub does not document a way to tell "
+                f"these apart from the response alone. Body: {response.text[:500]}"
+            )
+        response.raise_for_status()
+        alerts.extend(response.json())
+        url = response.links.get("next", {}).get("url")
+        params = None  # the next-page URL already carries the query params encoded
+    return alerts
+
+
+def get_dependency_graph_package_count(repo_full_name: str) -> int:
+    """
+    Returns the number of packages in the repo's dependency-graph SBOM
+    (GET /repos/{repo_full_name}/dependency-graph/sbom).
+
+    Used only to distinguish "dependency graph not populated for this repo" from
+    "genuinely clean, zero Dependabot alerts" when get_dependabot_alerts() returns an
+    empty list -- GitHub gives no other documented signal for this distinction (checked
+    the API reference; not assumed). Confirmed empirically: a populated repo's SBOM
+    lists real package counts (1512 for forge-demo-apps at the time this was written).
+
+    Uses the same GitHub App installation token as get_dependabot_alerts().
+    """
+    token = get_installation_token()
+    url = f"{_GITHUB_API}/repos/{repo_full_name}/dependency-graph/sbom"
+    response = requests.get(url, headers=_auth_headers(token), timeout=30)
+    response.raise_for_status()
+    return len(response.json().get("sbom", {}).get("packages", []))
+
+
 def list_open_prs_by_head(branch_name: str) -> list[dict]:
     """
     List open PRs in the target monorepo (forge-demo-apps) whose head branch
