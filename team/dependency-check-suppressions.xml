@@ -28,6 +28,16 @@ already-accepted risk (see CLAUDE.md Open Items: "8 HIGH-severity
 next@14.2.35 CVE findings have no 14.x backport"). Suppressing them would
 hide a real, in-production risk category, not a dev-tooling one.
 
+Each <suppress> block also carries <vulnerabilityName regex="true">.*</vulnerabilityName>
+purely to satisfy the XSD, which requires at least one vulnerability-matching
+child element (cve/vulnerabilityName/cwe/cvssBelow/etc.) after the file/package
+matcher: a file/package matcher alone is REJECTED (confirmed live: the CI
+run this file was first added in silently failed to load with a
+SuppressionParseException, meaning dependency-check ran with no suppression
+applied at all until this fix). The actual suppression logic here is the
+filePath match; the vulnerabilityName wildcard is a required formality, not
+an additional filter.
+
 Schema: https://dependency-check.github.io/DependencyCheck/general/suppression.html
 -->
 <suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.4.xsd">
@@ -38,6 +48,7 @@ Schema: https://dependency-check.github.io/DependencyCheck/general/suppression.h
             Docker image.
         ]]></notes>
         <filePath regex="true">.*package-lock\.json\?esbuild$</filePath>
+        <vulnerabilityName regex="true">.*</vulnerabilityName>
     </suppress>
     <suppress>
         <notes><![CDATA[
@@ -47,6 +58,7 @@ Schema: https://dependency-check.github.io/DependencyCheck/general/suppression.h
             dependency-check attributes to this root (e.g. launch-editor).
         ]]></notes>
         <filePath regex="true">.*package-lock\.json\?vite$</filePath>
+        <vulnerabilityName regex="true">.*</vulnerabilityName>
     </suppress>
     <suppress>
         <notes><![CDATA[
@@ -58,5 +70,6 @@ Schema: https://dependency-check.github.io/DependencyCheck/general/suppression.h
             this application's real deployed attack surface.
         ]]></notes>
         <filePath regex="true">.*package-lock\.json\?vitest$</filePath>
+        <vulnerabilityName regex="true">.*</vulnerabilityName>
     </suppress>
 </suppressions>
