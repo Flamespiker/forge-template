@@ -53,13 +53,10 @@ is running through the full pipeline. Phases 1-5 are complete:
   self-redirect-loop bug found in the frontend's own `lib/auth.ts` (PR #21, merged);
   Security Agent's dependency scanner swapped from OWASP Dependency-Check to GitHub
   Dependabot alerts (see security_agent.py below) after Dependency-Check timed out
-  twice consecutively in CI. **Still blocked:** real Azure AD login end-to-end, and
-  therefore the claim/release write-path verification — a fresh single-tenant Azure AD
-  app registration exists (`AZURE_AD_CLIENT_ID=b59886c1-12ac-42c1-895f-5fafa8e57318`,
-  tenant `af2dd50c-3bc0-4e26-9973-e3af4b64dbf9`) but is wired to neither the frontend
-  (`AZURE_AD_CLIENT_ID`/`SECRET`/`TENANT_ID`, deliberately not wired yet) nor the
-  backend (`appsettings.json`'s `AzureAd` section still has literal placeholders,
-  `__AZURE_TENANT_ID__`/`__AZURE_CLIENT_ID__`) — see Open Items.
+  twice consecutively in CI. **Resolved same day (later 2026-08-19 session):** Azure AD
+  wired to both frontend and backend, a real staging Postgres provisioned, and the
+  claim/release write-path verified end-to-end via direct HTTP + DB checks — see "Azure
+  AD wiring + Postgres provisioning" below. Former Open Item #14 closed.
   Full narrative: `docs/CLAUDE-archive-2026-08-req2026-03.md` and the newest
   `docs/FORGE-context_v*.md` (maintained by the Claude.ai side of the two-tool
   workflow).
@@ -818,6 +815,19 @@ false-positive class (Open Item #13, now resolved differently — see below).
   .../vulnerability-alerts` (404→204) and the App's own installation permissions, not
   assumed from "done."
 
+**Stale-image-after-merge pattern (recurring — second-plus occurrence, 2026-08-19):** a
+merged fix PR does not guarantee the running container reflects it. REQ-2026-03's
+frontend "too many redirects" bug (reported live, post-deploy) turned out to be PR #21's
+*already-merged* `pages.signIn` fix — the deployed image was still tagged from the
+earlier pre-fix commit (`e26363f...`, the PR #20 merge SHA) because nothing rebuilt the
+frontend after PR #21 landed. Same failure shape as the earlier missing
+`frontend/public/` directory issue (REQ-2026-02/03, see `_ensure_frontend_public_dir()`
+above) — "verbally confirmed deployed" and "actually deployed" keep turning out to be
+different things. After merging any fix PR, confirm the fix is actually present in the
+redeployed image's build SHA (diff the deployed image's source commit against the fix
+commit via `az containerapp show --query properties.template.containers[0].image`), not
+just that the PR shows merged on GitHub.
+
 ---
 
 ### deploy_agent.py — Stage 6 (Deploy, staging)
@@ -960,6 +970,80 @@ Bus connection string, REQ-2026-02's D365 config, REQ-2026-03's NextAuth
   `NEXTAUTH_URL`-misconfiguration redirect loop (fixed by the `NEXTAUTH_URL` wiring), then
   by a real app-code bug (`pages.signIn` self-reference, PR #21, merged — see Current
   Build Phase).
+
+### Azure AD wiring + Postgres provisioning (added 2026-08-19, REQ-2026-03 write-path verification)
+
+**Azure AD wiring — confirmed pattern, reusable for future apps:**
+- Frontend: `AZURE_AD_CLIENT_ID` / `AZURE_AD_TENANT_ID` as plain env vars (normal
+  `--set-env-vars` deploy path — not secrets), `AZURE_AD_CLIENT_SECRET` via the existing
+  `_wire_keyvault_secret()` primitive (`app_secret_key='azuread-secret'`) — no new
+  wiring mechanism needed.
+- Backend (ASP.NET Core + `Microsoft.Identity.Web`): confirmed real config-binding is
+  `.AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"))` (verified
+  via grep across every `.cs` file — no custom `TokenValidationParameters` override
+  anywhere), so the standard double-underscore env var convention (`AzureAd__TenantId`,
+  `AzureAd__ClientId`, `AzureAd__Audience`) applies safely.
+- `AzureAd__Audience` must match the exact "Application ID URI" string shown under the
+  app registration's **Expose an API** blade in the Portal — for a default (non-custom)
+  registration this is `api://<client-id>`, but this must be confirmed per-registration
+  via the Portal, not assumed, since a Contributor-scoped deploy SP typically lacks
+  Graph read access to check this itself (`az ad app show` → `AuthorizationFailed` under
+  `forge-deploy-staging`, confirmed live) — this requires a human with Portal access or a
+  properly-permissioned `az login`.
+
+**`az login` MFA workaround (confirmed twice now):** the default Windows auth broker
+flow (plain `az login`) has unreliably failed to surface an MFA prompt. Use
+`az login --use-device-code` instead when switching to a personal elevated account for
+any bootstrap operation the staging SP can't perform (resource provider registration,
+first-time resource creation, role assignments). Always confirm the account actually
+switched with `az account show --query user.name -o tsv` before proceeding, and confirm
+the switch-back to the SP the same way afterward.
+
+**Azure Database for PostgreSQL Flexible Server — new pattern, first use this session:**
+- Provisioned for REQ-2026-03's backend: Burstable B1MS, 32GB storage (Azure's storage
+  floor — cannot go smaller; storage can only be increased later, never decreased),
+  Canada Central.
+- Real Canada Central pricing (via the Azure Retail Prices API, not the commonly-cited
+  US East figure): compute $0.0185/hr (~$13.51/mo continuous), storage $0.1265/GB/mo
+  (~$4.05/mo, billed regardless of stop/start state), backup free at this size. **~$17.56/mo
+  if left running continuously; ~$4.05/mo floor when stopped.**
+- `az postgres flexible-server stop` pauses compute billing immediately but **not**
+  storage billing. Server auto-restarts after 7 days if never manually started again —
+  fine as long as it's touched at least weekly during active testing.
+- Do **not** pass `--public-access None` on server-create if firewall rules will be
+  needed afterward — firewall rule operations are not supported without public access
+  enabled (hit and fixed live this session).
+- Container Apps' documented static outbound IP (`properties.staticIp` on the
+  environment) is **not** reliably usable for narrow firewall allowlisting in a no-VNet
+  `WorkloadProfiles` config — tested and failed live (`TimeoutException` connecting from
+  the backend). The working fallback is the broad `AllowAzureServices` sentinel rule
+  (`0.0.0.0`–`0.0.0.0`), a known tradeoff (opens to any Azure-internal source, not just
+  this Container App) — test the narrow option first rather than reaching for the broad
+  rule by default.
+- Connection string format for `Npgsql.EntityFrameworkCore.PostgreSQL`: ADO.NET
+  key=value format, not a `postgres://` URI — confirm against the actual `.csproj`
+  package reference and any fallback default already in `Program.cs` before assuming
+  which format a given app expects.
+- Container Apps managed identity is **not automatic** — check `identity.type` before
+  assuming a Key Vault-wiring primitive will work; REQ-2026-03's backend had
+  `type: "None"` and needed identity enabled (`az containerapp identity assign
+  --system-assigned`) plus the Key Vault Secrets User role granted before
+  `_wire_keyvault_secret()` would succeed.
+- azure-cli 2.89.0 flag names differ from some documented examples: `--database-name` →
+  `--name` (for `flexible-server db create`), `--rule-name` → `--name`/`--server-name`
+  split (for `firewall-rule create`). Worth double-checking exact flags against `--help`
+  on this install rather than assuming older docs/examples match.
+
+**REQ-2026-03 write-path verification — passed, confirmed clean this session:**
+`POST /api/v1/shifts/{id}/claim` and `DELETE /api/v1/shifts/{id}/claim` both verified via
+real HTTP calls (a real signed Azure AD bearer token, tenant `af2dd50c-...`) **and**
+direct DB query (`psql` via a throwaway `docker run postgres:16-alpine`) — not just API
+response trust. Invalid operations (double-claim, release-when-unclaimed) correctly
+rejected with `409` and produce **zero** spurious audit entries — confirms the
+audit-write code path only runs on the success branch. Known minor bug, not blocking:
+the `SHIFT_ALREADY_CLAIMED` error message text ("claimed by someone else") is imprecise
+for the self-claim-retry case (same user re-claiming their own already-held shift);
+status code and rejection logic are correct, only the wording is off.
 
 ---
 
@@ -1163,22 +1247,12 @@ completion).
     then superseded), the whole dependency scanner was swapped from OWASP Dependency-Check
     to GitHub Dependabot alerts (see security_agent.py above). Native per-alert dismissal
     replaces the suppression-file mechanism going forward.
-14. **Backend AzureAd config still placeholder — blocks real Azure AD login end-to-end
-    for REQ-2026-03.** `services/REQ-2026-03/backend/OnCallRosterTracker.Api/
-    appsettings.json`'s `AzureAd` section (`TenantId`/`ClientId`/`Audience`, read by
-    `Microsoft.Identity.Web`'s `AddMicrosoftIdentityWebApi`) still has literal placeholder
-    strings (`__AZURE_TENANT_ID__`/`__AZURE_CLIENT_ID__`), never wired to a Container App
-    env var. `ShiftsController` (claim/release included) is `[Authorize]`-gated with no
-    alternate/simpler auth path — there is no way to exercise the write-path without a
-    real, validating Azure AD token. A fresh single-tenant app registration already
-    exists (`AZURE_AD_CLIENT_ID=b59886c1-12ac-42c1-895f-5fafa8e57318`, tenant
-    `af2dd50c-3bc0-4e26-9973-e3af4b64dbf9`, created manually by Mike) but is wired to
-    neither the frontend nor the backend yet — deliberately not wired pending Mike's
-    decision, not a guess. Per the existing code (`lib/auth.ts`'s
-    `api://${AZURE_AD_CLIENT_ID}/access_as_user` scope + the backend's `Audience` also
-    set to the client ID), this is already a single-registration design (one app serving
-    both the OAuth client and the exposed API) — not an open "one or two registrations"
-    question.
+14. ~~**Backend AzureAd config still placeholder — blocks real Azure AD login end-to-end
+    for REQ-2026-03.**~~ — **RESOLVED 2026-08-19.** Both frontend and backend wired
+    (see "Azure AD wiring + Postgres provisioning" above); a real Postgres Flexible
+    Server provisioned; claim/release write-path verified end-to-end via real HTTP +
+    direct DB query. `AzureAd__Audience` confirmed as `api://b59886c1-12ac-42c1-895f-5fafa8e57318`
+    (the default, non-custom Application ID URI) via the Portal.
 15. **Ad hoc PRs need the `Related FORGE tracking issue: <owner>/<repo>#N` body line
     added manually if not opened by a FORGE stage agent.** `workflow_glue.py`'s
     `resolve_tracking_issue()` (used by `04-qa.yml`/`05-security.yml`) requires this
@@ -1189,6 +1263,14 @@ completion).
     manually replayed (`gh api repos/.../dispatches`) to get a real (re-)scan. Distinct
     from the `feature/*` vs. `fix/*` branch-naming issue (#9) — this one bites even on a
     correctly-named `feature/fix-*` branch.
+16. **Cleanup debt from the 2026-08-19 write-path verification session, not urgent:**
+    test user "Mike App Test" (`AzureAdOid=3100bd61-03a4-4ebc-9327-4d2731f172f5`) still
+    has `IsCoordinator=true` in the REQ-2026-03 Postgres DB (a bootstrap artifact needed
+    to create a test shift via the real API) — flip back before treating this app as
+    fully closed out. Two now-irrelevant firewall rules also remain on
+    `forge-req2026-03-pg` (`AllowAdminVerificationIp`, and the earlier stale
+    `AllowContainerAppsEnvOutboundIp` which never actually worked) — harmless, worth
+    clearing when convenient.
 
 ---
 
