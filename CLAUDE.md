@@ -42,11 +42,24 @@ is running through the full pipeline. Phases 1-5 are complete:
   wiring, the `request_id`/`resolve_feature_pr()` fixes, the security scanner-failure
   verdict fix): `docs/CLAUDE-archive-2026-08-req2026-02.md`.
 - **Phase 6 (App 2, `REQ-2026-03`)** — in progress. Stages 0-5 complete and approved
-  (PR #20 merged). Stage 6 (Deploy): both frontend and backend now live in staging —
+  (PR #20 merged). Stage 6 (Deploy): both frontend and backend live in staging —
   the backend unit's naming blocker was resolved 2026-08-18 by
   `_finalize_unit_name()`'s truncation+hash scheme (see "Unit naming and validation"
   below); real re-run confirmed the backend Container App at
   `req-2026-03-on-call-rost-5bb949.yellowmeadow-894377a9.canadacentral.azurecontainerapps.io`.
+  **2026-08-19 fix cycle** (app-secrets wiring + a real frontend auth bug, both closed
+  out): `NEXTAUTH_SECRET` and `NEXTAUTH_URL` wired to `req-2026-03-frontend` (see
+  `_wire_keyvault_secret()` under deploy_agent.py below); a real `pages.signIn`
+  self-redirect-loop bug found in the frontend's own `lib/auth.ts` (PR #21, merged);
+  Security Agent's dependency scanner swapped from OWASP Dependency-Check to GitHub
+  Dependabot alerts (see security_agent.py below) after Dependency-Check timed out
+  twice consecutively in CI. **Still blocked:** real Azure AD login end-to-end, and
+  therefore the claim/release write-path verification — a fresh single-tenant Azure AD
+  app registration exists (`AZURE_AD_CLIENT_ID=b59886c1-12ac-42c1-895f-5fafa8e57318`,
+  tenant `af2dd50c-3bc0-4e26-9973-e3af4b64dbf9`) but is wired to neither the frontend
+  (`AZURE_AD_CLIENT_ID`/`SECRET`/`TENANT_ID`, deliberately not wired yet) nor the
+  backend (`appsettings.json`'s `AzureAd` section still has literal placeholders,
+  `__AZURE_TENANT_ID__`/`__AZURE_CLIENT_ID__`) — see Open Items.
   Full narrative: `docs/CLAUDE-archive-2026-08-req2026-03.md` and the newest
   `docs/FORGE-context_v*.md` (maintained by the Claude.ai side of the two-tool
   workflow).
@@ -702,11 +715,12 @@ Four new functions, all using the GitHub App installation token against
 Entry point: `python -m core.agents.security_agent --issue-number <n> --request-id <id> --pr-number <n> --repo-path <path>`
 
 Like QA (Step 3.8), Security needs the actual repository contents on disk —
-not just individual file reads via the Contents API — to run Semgrep,
-Gitleaks, and OWASP Dependency-Check against `services/<request-id>/` under
-`--repo-path`. This script does not clone anything itself; the same "local
-checkout satisfies the manual-invocation case" pattern from the QA Agent
-applies here too.
+not just individual file reads via the Contents API — to run Semgrep and
+Gitleaks against `services/<request-id>/` under `--repo-path`. This script
+does not clone anything itself; the same "local checkout satisfies the
+manual-invocation case" pattern from the QA Agent applies here too. The
+third scanner, dependency vulnerabilities, is API-based (Dependabot, see
+below) and does not need the local checkout at all.
 
 - Runs all three scanners unconditionally, even if one fails — `ScanResult.ran`
   (set from report-file presence, not process exit code, same principle as
@@ -718,9 +732,9 @@ applies here too.
     its own). Test/fixture paths are excluded entirely via
     `team/gitleaks-allowlist.toml` before a finding can even reach this
     classifier — see below.
-  - **OWASP Dependency-Check** → CVSS thresholds (≥9.0 Critical, ≥7.0 High,
-    ≥4.0 Medium, else Low; cvssv3 preferred, cvssv2 fallback, Medium default
-    if neither score is present).
+  - **Dependabot** → `security_advisory.severity` arrives pre-computed as
+    critical/high/medium/low; mapped 1:1, Medium default if a future alert
+    somehow lacks the field.
   - **Semgrep** → ERROR→High, WARNING→Medium, INFO→Low. Can never produce a
     Critical under this fixed table.
 - `has_critical` (any Critical finding across all three tools) drives both
@@ -753,13 +767,56 @@ exactly like a Critical finding does, no new label or retry mechanism introduced
 Check-run title is a three-way branch: "blocked" / "incomplete — scanner failure" /
 "passed".
 
-**OWASP Dependency-Check specifics:** pinned to **v12.1.0** (the original v9.2.0 predates
-NIST's NVD API 2.0 rollout and silently fails). Requires `NVD_API_KEY` set as a
-`forge-template` Actions secret. Command includes `--exclude "**/node_modules/**"` —
-without it, the general-purpose analyzers walk every file inside `frontend/node_modules`
-on top of the Node Audit Analyzer (which already covers npm deps correctly via
-`package-lock.json`), pushing a full scan past 10 minutes. `_run_dependency_check()`
-captures stdout/stderr on a report-missing failure (matches `_run_semgrep()`'s pattern).
+**Dependency scanner swapped from OWASP Dependency-Check to GitHub Dependabot alerts
+(2026-08-19)** — see `docs/FORGE-DependencyScanner-Dependabot-Swap-Spec.md` for the full
+spec. Root cause, not just a tool swap: Dependency-Check timed out twice consecutively in
+CI at its 1800s ceiling (confirmed live: NVD database sync much slower over GitHub
+Actions' network path than locally — local cold-cache run ~6-7 min, CI timed out at 30
+min both times), and separately required a suppression file to handle a CPE-fuzzy-matching
+false-positive class (Open Item #13, now resolved differently — see below).
+
+- `_run_dependabot_check(repo_full_name, request_id)` replaces `_run_dependency_check()`
+  entirely — same `ScanResult` interface, so `has_critical`/`any_tool_failed` gating is
+  unchanged. Confirmed live: **18 seconds** for the Security Agent step in CI (vs. two
+  prior 30-minute timeouts).
+- `github_helper.py`'s `get_dependabot_alerts(repo_full_name, state)` paginates via the
+  `Link` header and raises `RuntimeError` on 403/404 — confirmed against GitHub's own REST
+  API reference that it does **not** document a way to distinguish "Dependabot alerts
+  disabled for this repo" from "the App installation lacks the permission" from the
+  response alone; the raw response body is included in the exception so a human can read
+  GitHub's actual message text. A real, flagged API limitation, not papered over.
+- The App's actual granted permission key is `vulnerability_alerts` (confirmed live via
+  the App's own JWT against `GET /app/installations`) — not `dependabot_alerts`, despite
+  that being the human-facing name everywhere else (App settings UI, casual conversation).
+- `get_dependency_graph_package_count(repo_full_name)` (SBOM package count) is a secondary
+  check used only when `get_dependabot_alerts()` returns an empty list, to distinguish
+  "dependency graph not populated" from "genuinely clean repo" — GitHub gives no other
+  documented signal for this. Confirmed empirically: `forge-demo-apps`' SBOM reports 1512
+  real packages.
+- Dependabot alerts are **repo-wide**, not path-scoped like Dependency-Check's
+  `--scan services/<request-id>/` was — `_run_dependabot_check()` filters to
+  `dependency.manifest_path` starting with `services/<request_id>/`. Confirmed necessary
+  live: 102 total open alerts across REQ-2026-01/02/03 combined, only ~28 under
+  REQ-2026-03; without the filter every PR would see every other request's findings too.
+- Native per-alert dismissal (`PATCH /repos/{owner}/{repo}/dependabot/alerts/{n}`,
+  `state: dismissed`, `dismissed_reason`) replaces the suppression-file mechanism for
+  future dev-only findings — `dismissed_comment` is capped at **280 characters**
+  (confirmed live via a real 422). Dismissal stays a manual human action (via `gh api` or
+  the Security tab); the Security Agent does not auto-dismiss anything — that's a
+  deliberately separate, still-open design question.
+- `_TOOL_TIMEOUT_SECONDS` reduced **1800s → 600s** after confirming Semgrep/Gitleaks's
+  real run times first (live CI: Semgrep ~4.6s, Gitleaks ~0.05s) — neither needed the old
+  ceiling, which existed only for Dependency-Check's NVD sync.
+- `team/dependency-check-suppressions.xml` is left on disk (git history preserved) but no
+  longer referenced by `security_agent.py`. `NVD_API_KEY` Actions secret left configured
+  for now, in case of rollback.
+- Prerequisites (Mike, manual, one-time): Dependabot alerts + dependency graph enabled on
+  both repos (Settings → Code security and analysis), and the `forge-pipeline` App's
+  installation granted the "Dependabot alerts: Read-only" permission with the
+  installation re-approved. Both were confirmed **missing** on first check, then confirmed
+  **present** after Mike completed them — verified live both times via `GET
+  .../vulnerability-alerts` (404→204) and the App's own installation permissions, not
+  assumed from "done."
 
 ---
 
@@ -855,11 +912,54 @@ de-camelCased spaced variant ("EmailWorker" → "Email Worker") case-insensitive
 **No label applied on success** — Document 6's Label Reference table has no deploy-stage
 label; staging is a verification step, not a release gate.
 
-**Known, confirmed-live gap: no app-secrets wiring mechanism at all.** Only
-`--image`/`--registry-*`/`--cpu`/`--memory`/`--min-replicas`/`--max-replicas`/
-`--target-port`/`--ingress` plus the cross-service vars above are ever set — three
-independent apps have now hit this (EmailWorker's Service Bus connection string,
-REQ-2026-02's D365 config, REQ-2026-03's NextAuth `NEXTAUTH_SECRET`). See Open Items.
+**App-secrets wiring (`_wire_keyvault_secret()`, added 2026-08-19) — see Open Items #1 for
+what's still unresolved.** Three independent apps had hit this gap (EmailWorker's Service
+Bus connection string, REQ-2026-02's D365 config, REQ-2026-03's NextAuth
+`NEXTAUTH_SECRET`) before a generic primitive was built:
+
+- `_wire_keyvault_secret(env_var_name, kv_secret_name, app_secret_key, container_app_name,
+  resource_group, vault_name)` wires an *already-existing* Key Vault secret into a
+  Container App as an env var, via a Key Vault reference resolved through the app's own
+  system-assigned managed identity (`identityref:system`) — never a plain Container App
+  secret, never plaintext in `config.yaml`/git. Does **not** create or rotate the secret
+  value — raises if `kv_secret_name` doesn't already exist, rather than silently skipping
+  the env var or fabricating a value.
+- `app_secret_key` (the Container App's own internal secret reference name) is a
+  **separate parameter** from `kv_secret_name` (the Key Vault secret's own name) —
+  confirmed live via `az containerapp secret set --help` that the former is capped at
+  **20 characters**, a different, unrelated constraint from the latter (no such limit).
+  Reusing one name for both breaks for any Key Vault secret name longer than 20 chars.
+- Exposed via a `--wire-keyvault-secret` CLI mode on `deploy_agent.py` (not wired into the
+  normal per-unit deploy loop) since there is still no machine-readable convention
+  anywhere — checked `.env.example`, `design.md`, `tasks.md`, `package.json`, all agent
+  code — for an app to declare which secrets it needs (Open Items #1). Normal deploy-flow
+  CLI args remain required when this flag isn't passed.
+- Bootstrap infra (one-time, done manually under Mike's own account — the staging deploy
+  SP only has Contributor on `forge-build-rg`, insufficient to register the
+  `Microsoft.KeyVault` resource provider or create RBAC role assignments): Key Vault
+  **`forge-build-kv`** in `forge-build-rg`; staging SP granted **"Key Vault Secrets
+  Officer"** scoped to just this vault (can read/write secrets, cannot grant RBAC roles to
+  anything else); each Container App needing a secret gets its own system-assigned
+  managed identity, granted **"Key Vault Secrets User"** (read-only), also scoped to just
+  the vault — never the resource group or subscription.
+- `NEXTAUTH_URL` (next-auth's own canonical site URL — a full `https://` URL, confirmed
+  against next-auth's warning text and this app's `.env.example`, not a bare hostname) is
+  **not** a secret and doesn't go through Key Vault — it's wired via the same
+  `--set-env-vars` mechanism `FRONTEND_ORIGIN` already uses, computed from the same
+  `frontend_fqdn` the cross-service wiring block already derives, added directly to the
+  normal per-unit deploy loop. Known structural limitation: `frontend_fqdn` is only
+  computed today when a backend "web" unit also exists (inherited from the existing
+  `FRONTEND_ORIGIN` cross-service-wiring gate) — a future frontend-only app would silently
+  get `NEXTAUTH_URL` withheld too. Flagged in-code, not fixed — fixing it means decoupling
+  `frontend_fqdn`'s computation from `backend_web_unit`'s existence, a real (if small)
+  restructuring beyond mirroring the existing pattern.
+- Verified live for REQ-2026-03: `NEXTAUTH_SECRET` (Key Vault secret
+  `req-2026-03-nextauth-secret`, app secret key `nextauth-secret`) and `NEXTAUTH_URL`
+  (plain env var) both attached to `req-2026-03-frontend`; the `/api/auth/error?error=
+  Configuration` redirect (missing-secret symptom) is gone, replaced first by a
+  `NEXTAUTH_URL`-misconfiguration redirect loop (fixed by the `NEXTAUTH_URL` wiring), then
+  by a real app-code bug (`pages.signIn` self-reference, PR #21, merged — see Current
+  Build Phase).
 
 ---
 
@@ -990,11 +1090,16 @@ completion).
 
 ## Open Items / Known Gaps
 
-1. **Deploy Agent has no app-secrets wiring mechanism** — 3 confirmed occurrences
-   (EmailWorker's Service Bus connection string; REQ-2026-02's D365 config; REQ-2026-03's
-   NextAuth `NEXTAUTH_SECRET`). Needs a real design (Key Vault references vs. Container
-   App secrets driven from `team/config.yaml` vs. something else) rather than another
-   one-off manual patch.
+1. **Deploy Agent had no app-secrets wiring mechanism — the wiring *primitive* is now
+   built (2026-08-19), but the harder question is still open.** `_wire_keyvault_secret()`
+   (see deploy_agent.py above) solves "how do we wire an already-known secret into a
+   Container App" — Key Vault references via managed identity, generic, reusable. It does
+   **not** solve "how does Deploy Agent learn a given app needs a given secret in the
+   first place" — that's still pure tribal knowledge, confirmed zero machine-readable
+   declaration exists anywhere (checked `.env.example`, `design.md`, `tasks.md`,
+   `package.json`, all agent code). Every wiring so far (REQ-2026-03's
+   `NEXTAUTH_SECRET`/`NEXTAUTH_URL`) has been a manual, one-off `--wire-keyvault-secret`
+   invocation, not something Deploy Agent decides to do on its own.
 2. ~~**REQ-2026-03's backend unit name doesn't fit Azure's Container App name length
    limit**~~ — **RESOLVED 2026-08-18.** `deploy_agent.py`'s `_validate_unit_name()`
    (raise-only) replaced with `_finalize_unit_name()` (deterministic truncation + 6-char
@@ -1050,9 +1155,40 @@ completion).
     ongoing risk from the deliberate decision to stay on the 14.x line, not a bug.
 12. **Cost log (`docs/FORGE-pipeline-cost-log.md`) needs REQ-2026-03 figures backfilled**,
     including the Deploy Agent fix cycle.
-13. **A `forge-template`-level Dependency-Check suppression file** for confirmed dev-only
-    npm findings (esbuild/vite/vitest — `dev: true`, low real-world risk) would be a
-    worthwhile future improvement, not a current risk.
+13. ~~**A `forge-template`-level Dependency-Check suppression file** for confirmed
+    dev-only npm findings~~ — **RESOLVED DIFFERENTLY, 2026-08-19.** Rather than build the
+    suppression file (which was briefly built, then hit a real XSD gotcha — a
+    `<suppress>` block needs a vulnerability-matching child element, not just a
+    file/package matcher, confirmed live via `SuppressionParseException` — fixed once,
+    then superseded), the whole dependency scanner was swapped from OWASP Dependency-Check
+    to GitHub Dependabot alerts (see security_agent.py above). Native per-alert dismissal
+    replaces the suppression-file mechanism going forward.
+14. **Backend AzureAd config still placeholder — blocks real Azure AD login end-to-end
+    for REQ-2026-03.** `services/REQ-2026-03/backend/OnCallRosterTracker.Api/
+    appsettings.json`'s `AzureAd` section (`TenantId`/`ClientId`/`Audience`, read by
+    `Microsoft.Identity.Web`'s `AddMicrosoftIdentityWebApi`) still has literal placeholder
+    strings (`__AZURE_TENANT_ID__`/`__AZURE_CLIENT_ID__`), never wired to a Container App
+    env var. `ShiftsController` (claim/release included) is `[Authorize]`-gated with no
+    alternate/simpler auth path — there is no way to exercise the write-path without a
+    real, validating Azure AD token. A fresh single-tenant app registration already
+    exists (`AZURE_AD_CLIENT_ID=b59886c1-12ac-42c1-895f-5fafa8e57318`, tenant
+    `af2dd50c-3bc0-4e26-9973-e3af4b64dbf9`, created manually by Mike) but is wired to
+    neither the frontend nor the backend yet — deliberately not wired pending Mike's
+    decision, not a guess. Per the existing code (`lib/auth.ts`'s
+    `api://${AZURE_AD_CLIENT_ID}/access_as_user` scope + the backend's `Audience` also
+    set to the client ID), this is already a single-registration design (one app serving
+    both the OAuth client and the exposed API) — not an open "one or two registrations"
+    question.
+15. **Ad hoc PRs need the `Related FORGE tracking issue: <owner>/<repo>#N` body line
+    added manually if not opened by a FORGE stage agent.** `workflow_glue.py`'s
+    `resolve_tracking_issue()` (used by `04-qa.yml`/`05-security.yml`) requires this
+    line in the PR body; `design_agent.py`/`implementation_coordinator.py` always write
+    it, but a human- or Claude-opened ad hoc fix PR (e.g. PR #21) does not, by default —
+    confirmed live: both QA and Security failed outright on `resolve-tracking-issue`
+    until the PR body was edited to add the line and the `repository_dispatch` event was
+    manually replayed (`gh api repos/.../dispatches`) to get a real (re-)scan. Distinct
+    from the `feature/*` vs. `fix/*` branch-naming issue (#9) — this one bites even on a
+    correctly-named `feature/fix-*` branch.
 
 ---
 
