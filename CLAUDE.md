@@ -87,9 +87,41 @@ was closed 2026-08-20. Phases 1-6 are complete:
   live HTTP smoke test (real bearer tokens) was explicitly skipped this cycle. Temp
   firewall rule and Postgres start were both cleaned up (rule removed, server
   re-stopped) immediately after.
+
+  **Live HTTP smoke test completed 2026-08-20 — fix fully verified, this item is now
+  closed.** Real Azure AD bearer tokens (device-code sign-in as two existing test
+  identities, `MikeTest1` and `Mike Test 2` — captured manually via the live frontend's
+  own browser sign-in + devtools Network tab, since the API's app registration doesn't
+  authorize the Azure CLI as a client, and neither `az account get-access-token
+  --resource api://...` nor an MSAL device-code flow against it will mint a token) hit
+  the live backend directly against the single existing Open shift
+  (`3999a386-03f2-4a12-a3de-d105f867fffe`), reused sequentially for both cases (no new
+  shift creation needed, since neither test identity is a coordinator). Both cases
+  deliberately claimed with a stale pre-claim `rowVersion` (not a freshly re-fetched
+  one) to exercise the actual fixed code path — the `StaleRowVersion` concurrency
+  branch, per the PR #22 fix description above — rather than any other route that might
+  reach the same error code.
+  - **Self-claim-retry:** `409 SHIFT_ALREADY_CLAIMED`, `"You have already claimed this
+    shift."` — self-specific wording confirmed, not the "someone else" variant.
+  - **Other-user-claim:** `409 SHIFT_ALREADY_CLAIMED`, `"This shift was just claimed by
+    someone else — please refresh and choose another."` — confirmed.
+  - **Audit regression check:** `AuditEntries` went from 4 → 8 rows (one clean
+    Claimed/Released pair per case); the rejected self-retry and the rejected
+    other-user attempt wrote **zero** spurious rows — confirms the audit-write path is
+    unaffected by this fix, exactly as expected.
+  - `Users` table went 1 → 3 rows (`MikeTest1`/`Mike Test 2` auto-provisioned on first
+    authenticated call, both `IsCoordinator=false`) — expected first-login behavior, not
+    an anomaly.
+  - Shift confirmed back to `Open` after both cases. Token handoff file
+    (`~/forge-smoke-test-tokens.txt`, outside both repos, confirmed absent from `git
+    status`), the temporary firewall rule, and the Postgres server were all cleaned up
+    and independently re-verified (rule list shows only `AllowAzureServices`; server
+    `state` confirmed `Stopped`; az CLI confirmed back on the `forge-deploy-staging` SP
+    session) immediately after.
+
   Full narrative: `docs/CLAUDE-archive-2026-08-req2026-03.md` and the newest
   `docs/FORGE-context_v*.md` (maintained by the Claude.ai side of the two-tool
-  workflow).
+  workflow) — the "still not run" open item there should be marked closed to match.
 
 **Standing convention — ad hoc fix-PR branch naming (decided 2026-08-13):** use
 `feature/fix-<short-description>`, not `fix/*` — `fix/*` branches never get dispatched
