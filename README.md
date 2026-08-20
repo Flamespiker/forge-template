@@ -94,6 +94,7 @@ In your FORGE repository, go to **Settings → Secrets and variables → Actions
 | `ACR_LOGIN_SERVER` | Your Azure Container Registry's login server (e.g., `yourregistry.azurecr.io`) |
 | `ACR_USERNAME` | Registry admin username (Azure Portal → your ACR → Settings → Access keys) |
 | `ACR_PASSWORD` | Registry admin password (same location) |
+| `AZURE_STAGING_CREDENTIALS` | One JSON blob — `{"clientId":"...","clientSecret":"...","subscriptionId":"...","tenantId":"..."}` — for a service principal with Contributor on the resource group containing your staging Container Apps environment. Used by the Deploy Agent to authenticate `az login --service-principal` before pushing revisions. |
 
 **Variables** (Settings → Secrets and variables → Actions → Variables tab)
 
@@ -101,7 +102,7 @@ In your FORGE repository, go to **Settings → Secrets and variables → Actions
 |---|---|
 | `FORGE_APP_CLIENT_ID` | Your GitHub App's Client ID — used by the `actions/create-github-app-token` Action; not a secret, this value is publicly visible on the App's settings page |
 
-**Container Apps deployment credentials:** the secrets above cover pushing images to your registry. Authenticating the Deploy Agent to push new *revisions* into your Container Apps environments themselves is a separate, later concern that isn't finalized yet — it will likely need its own service principal or managed identity. Don't assume a secret named `AZURE_CREDENTIALS` (or similar) exists until that work defines it; check the Orchestration Manager Guide for the current, authoritative list.
+**Container Apps deployment credentials:** in addition to the registry secrets above, the Deploy Agent needs its own service principal (`AZURE_STAGING_CREDENTIALS`, in the table above) to authenticate against your Container Apps environment and push new revisions — Contributor on the resource group is sufficient. This principal cannot register new Azure resource providers or create RBAC role assignments; any one-time bootstrap work of that kind (e.g. provisioning a Key Vault, granting a managed identity a role) needs a human with elevated access instead.
 
 ### 4. Edit `team/config.yaml` (5 min)
 
@@ -128,20 +129,21 @@ intake_method: issue_attachment   # or: repo_path
 
 ### 5. Provision Azure Container Apps environments (5 min)
 
-Run the setup script to create both environments with the default FORGE configuration:
+Create both environments with the Azure CLI, matching the defaults `team/config.yaml` expects:
 
 ```bash
-./scripts/bootstrap-azure.sh \
-  --resource-group your-rg \
-  --location canadacentral \
-  --registry yourregistry
+az containerapp env create \
+  --name forge-staging --resource-group your-rg --location canadacentral
+
+az containerapp env create \
+  --name forge-production --resource-group your-rg --location canadacentral
 ```
 
-This creates:
+Then size each environment's Container Apps to match:
 - **forge-staging** — scale to zero, max 2 replicas, 0.25 vCPU / 0.5 Gi
 - **forge-production** — min 1 replica, max 5, 0.5 vCPU / 1.0 Gi
 
-> **If provisioning manually instead of via the script:** the Azure CLI (`az containerapp env create`) can create a Container Apps environment directly, with no extra steps. The Azure **Portal**, by contrast, currently only offers environment creation as a byproduct of creating an actual Container App — if you're clicking through the Portal rather than running the script, create a throwaway Container App using the built-in quickstart image, choose "Create new" for the environment during that flow, then delete just the placeholder Container App afterward (the environment persists on its own). The CLI path avoids this workaround entirely.
+> **Provisioning via the Azure Portal instead:** the Portal currently only offers environment creation as a byproduct of creating an actual Container App — create a throwaway Container App using the built-in quickstart image, choose "Create new" for the environment during that flow, then delete just the placeholder Container App afterward (the environment persists on its own). The CLI path above avoids this workaround entirely.
 
 Also create two **GitHub Environments** in your FORGE repo (**Settings → Environments**) — named plainly `staging` and `production`. These are a different, GitHub-native concept from the Azure Container Apps environment names above (`forge-staging`/`forge-production`) — don't conflate the two:
 - **`staging`** — no required reviewers, so staging deploys automatically
@@ -221,9 +223,7 @@ your-forge-instance/
 │   └── personas/           # Optional agent persona overrides
 ├── templates/
 │   └── forge-intake-template.xlsx
-├── tracking/               # Per-request tracking issue metadata
-└── scripts/
-    └── bootstrap-azure.sh
+└── tracking/               # Per-request tracking issue metadata
 ```
 
 Your application code lives in your **target monorepo** — not here. FORGE opens branches and PRs there on your behalf.
@@ -255,7 +255,7 @@ Per full pipeline run (estimate — measure your actuals during App 1):
 | Managed Agents runtime (Stage 3 only) | ~$0.08–0.32 USD (session-hour billing, in addition to token costs — estimate 1–4 hours per implementation run) |
 | Azure Container Registry | ~$0.17/day (no pause option — only delete/recreate stops the charge) |
 | GitHub Actions minutes | Included in most plans |
-| Security tooling (Semgrep, Gitleaks, OWASP Dependency-Check) | Free (open source) |
+| Security tooling (Semgrep, Gitleaks, GitHub Dependabot) | Free (open source / included with GitHub) |
 
 No net-new SaaS contracts are required with the default tool choices.
 

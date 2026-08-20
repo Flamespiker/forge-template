@@ -25,6 +25,9 @@ python-dotenv>=1.0.0
 # ADR-0011: switched from claude-agent-sdk to this package; see that ADR for rationale.
 anthropic>=0.120.2
 
-# Semgrep — SAST scanner for the Security Agent (Stage 5). Gitleaks and OWASP
-# Dependency-Check are NOT pip-installable — separate binary installs, see CLAUDE.md.
+# Semgrep — SAST scanner for the Security Agent (Stage 5). Gitleaks is NOT
+# pip-installable — a separate binary install, see CLAUDE.md. The third scanner,
+# dependency vulnerabilities, is API-based (GitHub Dependabot alerts) and needs
+# no local install at all — see CLAUDE.md's security_agent.py section for the
+# 2026-08-19 swap away from OWASP Dependency-Check.
 semgrep>=1.90.0
