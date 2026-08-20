@@ -858,6 +858,18 @@ def run_deploy_agent(
         # QA/Security's --dry-run.
         _docker_login(acr_login_server, acr_username, acr_password)
 
+        # Real az login + real read-only existence checks, dry-run or not —
+        # only the create/update mutation itself is print-only in dry-run.
+        # Must happen before the cross-service wiring block below: that block
+        # calls _get_env_default_domain(), which runs `az containerapp env
+        # show` -- a real az CLI call that fails with "Please run 'az login'"
+        # if attempted before this. Confirmed live 2026-08-20: this ordering
+        # bug silently blocked every fully-automated deploy for any request
+        # with both a frontend and a "web" backend unit (Open Item #18) --
+        # every past successful deploy was a manual local run where the
+        # operator's own shell was already authenticated.
+        _az_login(azure_credentials)
+
         # Cross-service wiring: a frontend unit needs the backend's FQDN baked
         # in at build time (Next.js NEXT_PUBLIC_* vars are build-time-only),
         # and the backend needs the frontend's FQDN for CORS. Both derived
@@ -904,10 +916,6 @@ def run_deploy_agent(
                     "-- flagged, not fixed, since that's a structural change beyond mirroring "
                     "the existing FRONTEND_ORIGIN pattern).", frontend_unit.name,
                 )
-
-        # Real az login + real read-only existence checks, dry-run or not —
-        # only the create/update mutation itself is print-only in dry-run.
-        _az_login(azure_credentials)
 
         # Build+push+deploy interleaved per unit (not two batched passes) --
         # one unit's failure must not block a different unit that would
