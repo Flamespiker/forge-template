@@ -1,6 +1,6 @@
-# FORGE Context — v59
+# FORGE Context — v60
 **Session date:** 2026-08-19
-**Carries forward from:** v58
+**Carries forward from:** v59
 
 ---
 
@@ -14,9 +14,20 @@ Two-repo model: `forge-template` (public, orchestration/agents) and `forge-demo-
 
 ## Current state
 
-**Active build:** Phase 6, App 2 — REQ-2026-03 (On-Call Roster Tracker). **Fully deployed and functionally verified end-to-end this session** — frontend, backend, Azure AD SSO, and a real Postgres backing store are all live, and the write-path (claim/release) has been proven with real HTTP calls plus direct DB verification. This closes the last blocker carried forward from v58.
+**Phase 6 (Repeatability) is CLOSED as of this session.** Mike's decision: the repeatability proof is considered complete with two apps — App 1 (REQ-2026-02, read-heavy, D365-backed) and App 2 (REQ-2026-03, write-heavy, Postgres-backed, real Azure AD SSO). No third app planned. This resolves the last open question carried forward from v59.
+
+**Active build:** Phase 6, App 2 — REQ-2026-03 (On-Call Roster Tracker) — fully deployed and functionally verified end-to-end (frontend, backend, Azure AD SSO, real Postgres backing store all live; write-path claim/release proven with real HTTP calls plus direct DB verification, per v59). No further build work on App 2 this session; this session was closeout and documentation only.
 
 ### Resolved this session
+
+1. **Phase 6 closeout decision.** Mike confirmed the two-app repeatability proof (App 1 + App 2) satisfies Phase 6's goal. Remaining App 2 cleanup items (test-user flag, firewall rules, registration rename) are tracked below as post-closeout housekeeping, not blockers to calling the phase done.
+2. **Three pending doc updates from v58 applied** (Dependabot swap, drafted v58, applied this session):
+   - `03_FORGE_Tooling_v7.md` → **v8**: §3.5 default dependency scanner swapped from OWASP Dependency-Check to GitHub Dependabot alerts (native, API-based, no Actions job); Dependency-Check retained as a documented alternative. Cost Summary (§8) and Provisioning Checklist (§4 item 8) updated to match. Root cause and the 30-min-timeout→18-second live result carried into a new §3.5 note.
+   - `07_Customization_Ref_v2.md` → **v3**: Security Tooling table's dependency scanner row updated to Dependabot alerts as default, Dependency-Check moved to the substitution option.
+   - `09-forge-readme_v6.md` → **v7**: Cost reference table's security tooling row updated to name Dependabot alerts instead of Dependency-Check.
+   - All three are one-doc-per-chat convention exceptions — done together in this session at Mike's explicit request to close out the batch.
+
+### Resolved in v59 (prior session, carried forward for record)
 
 1. **Azure AD wiring — Steps 1 & 2, RESOLVED.**
    - Frontend (`req-2026-03-frontend`): `AZURE_AD_CLIENT_ID`/`AZURE_AD_TENANT_ID` wired as plain env vars; `AZURE_AD_CLIENT_SECRET` generated fresh in the Portal and wired via the existing `_wire_keyvault_secret()` primitive (`app_secret_key='azuread-secret'`, new KV secret `req-2026-03-azuread-secret`). Verified live: `/api/auth/providers` returns a fully-formed `azure-ad` entry with real signin/callback URLs.
@@ -57,17 +68,25 @@ Two-repo model: `forge-template` (public, orchestration/agents) and `forge-demo-
 
 ### Still open / next session's starting point
 
-- **Cleanup debt (not urgent):** test user "Mike App Test" (`AzureAdOid=3100bd61-03a4-4ebc-9327-4d2731f172f5`) still has `IsCoordinator=true` in the DB — a bootstrap artifact, needed to create a test shift via the real API since no self-service coordinator path exists. Flip back before treating this app as fully closed out.
-- **Firewall rule cleanup (not urgent):** `forge-req2026-03-pg` still has two now-irrelevant rules — `AllowAdminVerificationIp` (added this session for direct `psql` verification) and the earlier stale, never-functional `AllowContainerAppsEnvOutboundIp`. Both harmless, worth clearing when convenient.
+**Phase 6 is closed. These are post-closeout housekeeping items, not blockers — pick up whenever convenient, no active build required to address any of them:**
+
+- **Cleanup debt (not urgent):** test user "Mike App Test" (`AzureAdOid=3100bd61-03a4-4ebc-9327-4d2731f172f5`) still has `IsCoordinator=true` in the DB — a bootstrap artifact, needed to create a test shift via the real API since no self-service coordinator path exists. Flip back before treating App 2 as fully closed out.
+- **Firewall rule cleanup (not urgent):** `forge-req2026-03-pg` still has two now-irrelevant rules — `AllowAdminVerificationIp` (added in v59 for direct `psql` verification) and the earlier stale, never-functional `AllowContainerAppsEnvOutboundIp`. Both harmless, worth clearing when convenient.
 - **Registration rename** — still recommended (`FORGE-REQ-2026-03-OnCallRoster` → something like `FORGE-DemoApps-SSO`), still not done. Cosmetic only, carried forward from v58.
-- **102 Dependabot alerts repo-wide, 74 outside REQ-2026-03** — future triage pass needed, not urgent. Carried forward from v58.
-- **Doc updates drafted, not yet applied** (Mike has the text from the v58 session): `03_FORGE_Tooling_v7.md` §3.5, `07_Customization_Ref_v2.md` Security Tooling table, `09-forge-readme_v6.md` cost table — all reflecting the Dependabot swap. Carried forward from v58, unchanged this session.
+- **102 Dependabot alerts repo-wide, 74 outside REQ-2026-03** — future triage pass needed, not urgent. Carried forward from v58/v59.
 - **`SHIFT_ALREADY_CLAIMED` error message wording** — minor bug, self-claim-retry case gets a misleading "claimed by someone else" message. Worth a ticket, not urgent.
-- **Phase 6 completion** — with App 2 now fully deployed and write-path verified, the remaining question is whether Mike considers Phase 6's repeatability proof complete with two apps, or whether a third app is planned before closing the phase out. Not yet decided.
+
+**Doc updates:** all three drafted from v58 (`03_FORGE_Tooling` §3.5, `07_Customization_Ref` Security Tooling table, `09-forge-readme` cost table) are now applied — see "Resolved this session" above. No further doc updates outstanding.
+
+**Next phase:** not yet defined. With Phase 6 closed, next session's starting point is whatever Mike decides comes after repeatability — a new phase kickoff, or FORGE considered feature-complete for now pending the housekeeping items above.
 
 ---
 
 ## Key learnings & principles (new this session)
+
+**One-doc-per-chat is suspendable by explicit request, not a hard rule.** Mike explicitly asked to batch four document updates (context doc + three Dependabot-swap doc updates) into a single session rather than four separate chats, given they were small, mechanically similar edits reflecting an already-decided, already-drafted change. Treated as a one-time exception for this batch, not a standing change to the convention.
+
+
 
 **Stale-image-after-merge is a recurring failure shape, not a one-off.** This is at least the second time a merged fix PR didn't match the actually-running container (earlier: missing `frontend/public/` directory recurrence; this session: the NextAuth redirect-loop fix). Confirming a fix is present in the *redeployed image's build SHA* — not just "PR shows merged on GitHub" — is now a documented CLAUDE.md pattern.
 

@@ -5,6 +5,8 @@
 **Audience:** Orchestration Managers  
 **Purpose:** Single-source-of-truth table showing every FORGE configuration item and whether it is locked, team-configurable within constraints, or fully open to team discretion.
 
+**v3 changelog (2026-08-19):** Security Tooling table — default dependency vulnerability scanner updated from OWASP Dependency-Check to GitHub Dependabot alerts, reflecting Document 3 §3.5's swap.
+
 ---
 
 ## How to Read This Document
@@ -87,7 +89,7 @@ If a row has a note, read it — the note defines the boundary exactly.
 | Critical finding blocks merge | **Locked** | A Critical severity finding from any security tool sets a failing check run, blocking merge automatically. Enforced by branch protection, not agent judgment. |
 | Default SAST tool (Semgrep Community) | **Flexible** | Default is Semgrep Community. Teams may substitute GitHub Advanced Security (CodeQL) or another SAST tool, documented in `team/config.yaml`. The tool must run in GitHub Actions and produce results consumable by the Security Agent. |
 | Default secrets detection tool (Gitleaks) | **Flexible** | Default is Gitleaks. May be substituted with GitHub Advanced Security Secret Scanning. Same consumption requirement applies. |
-| Default dependency vulnerability scanner (OWASP Dependency-Check) | **Flexible** | Default is OWASP Dependency-Check. May be substituted with Snyk or similar. Same consumption requirement applies. |
+| Default dependency vulnerability scanner (GitHub Dependabot alerts) | **Flexible** | Default is GitHub Dependabot alerts (swapped from OWASP Dependency-Check, 2026-08-19, after repeated CI timeouts — see Document 3 §3.5). API-based, not an Actions job. May be substituted with OWASP Dependency-Check, Snyk, or similar. Same consumption requirement applies. |
 | Severity categorization schema (Critical / High / Medium / Low) | **Locked** | Used consistently across SAST, secrets, and dependency scanning outputs. The Security Agent's inline PR comments use this schema. |
 
 ---
