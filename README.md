@@ -204,7 +204,7 @@ What you can change in `team/config.yaml` and `team/stack-preferences.yaml` with
 - Container Apps resource sizing (within approved ranges)
 - Linting ruleset
 
-See `docs/07-forge-customization-reference.md` for a full list of what is locked, flexible, and fully open.
+See `docs/07_Customization_Ref_v3.md` for a full list of what is locked, flexible, and fully open.
 
 ---
 
@@ -234,14 +234,14 @@ Your application code lives in your **target monorepo** — not here. FORGE open
 
 | Document | Purpose |
 |---|---|
-| [FORGE Introduction](docs/00-forge-introduction.md) | What FORGE is and why — start here if you're evaluating |
-| [Product Specification](docs/01-forge-product-specification.md) | Personas, feature set by pipeline stage, NFRs |
-| [Architecture Document](docs/02-forge-architecture-document.md) | Event-driven orchestration, agent topology, two-repo model, traceability |
-| [Tool & Licensing Inventory](docs/03-forge-tool-licensing-inventory.md) | Every tool, license, cost — including security tooling defaults |
-| [Governance Model](docs/04-forge-governance-model.md) | RFC process, ADRs, decision authority, core vs team layer boundaries |
-| [AI Foundations Guide](docs/05-forge-ai-foundations-guide.md) | How LLMs and agents work — required reading for all developers using FORGE |
-| [Orchestration Manager Guide](docs/06-forge-orchestration-manager-guide.md) | Full setup, gate-by-gate operations, failure handling, production checklist |
-| [Customization Reference](docs/07-forge-customization-reference.md) | ~65 items explicitly marked Locked / Flexible / Fully Open |
+| [FORGE Introduction](docs/00%20FORGE%20Introduction.md) | What FORGE is and why — start here if you're evaluating |
+| [Product Specification](docs/01_FORGE_ProductSpec_v2.md) | Personas, feature set by pipeline stage, NFRs |
+| [Architecture Document](docs/02-forge-architecture-document-v4.md) | Event-driven orchestration, agent topology, two-repo model, traceability |
+| [Tool & Licensing Inventory](docs/03_FORGE_Tooling_v8.md) | Every tool, license, cost — including security tooling defaults |
+| [Governance Model](docs/04_FORGE_Governance-v2.md) | RFC process, ADRs, decision authority, core vs team layer boundaries |
+| [AI Foundations Guide](docs/05_FORGE_AI_Foundation_v2.md) | How LLMs and agents work — required reading for all developers using FORGE |
+| [Orchestration Manager Guide](docs/06_Orchestration_v6.md) | Full setup, gate-by-gate operations, failure handling, production checklist |
+| [Customization Reference](docs/07_Customization_Ref_v3.md) | ~65 items explicitly marked Locked / Flexible / Fully Open |
 
 ---
 
@@ -264,6 +264,6 @@ No net-new SaaS contracts are required with the default tool choices.
 ## Getting help
 
 - **Setup issues:** Check the `verify-setup` workflow output first — it identifies the failing component
-- **Pipeline failures:** See the [Orchestration Manager Guide](docs/06-forge-orchestration-manager-guide.md) failure handling section
+- **Pipeline failures:** See the [Orchestration Manager Guide](docs/06_Orchestration_v6.md) failure handling section
 - **Proposing a core layer change:** Open a GitHub Discussion in this repository under the RFC category
-- **Questions about what you can customize:** See the [Customization Reference](docs/07-forge-customization-reference.md)
+- **Questions about what you can customize:** See the [Customization Reference](docs/07_Customization_Ref_v3.md)
