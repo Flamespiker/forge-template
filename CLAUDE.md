@@ -26,8 +26,9 @@ security → deploy) with human approval gates at each stage.
 
 ## Current Build Phase
 
-**FORGE is in Phase 6 (Repeatability)** — App 2 (`REQ-2026-03`, On-Call Roster Tracker)
-is running through the full pipeline. Phases 1-5 are complete:
+**FORGE has completed Phase 6 (Repeatability)** — App 2 (`REQ-2026-03`, On-Call Roster
+Tracker) ran through the full pipeline; its FORGE tracking issue (`forge-template#6`)
+was closed 2026-08-20. Phases 1-6 are complete:
 
 - **Phase 3 (Agent Implementation)** and **Phase 4 (Pipeline Wiring)** — complete.
   All seven `.github/workflows/*.yml` files are wired with real triggers/guard clauses;
@@ -41,9 +42,11 @@ is running through the full pipeline. Phases 1-5 are complete:
   fix cycle (Stage 3 recovery tooling, the deploy-trigger/label-token bug, cross-service
   wiring, the `request_id`/`resolve_feature_pr()` fixes, the security scanner-failure
   verdict fix): `docs/CLAUDE-archive-2026-08-req2026-02.md`.
-- **Phase 6 (App 2, `REQ-2026-03`)** — in progress. Stages 0-5 complete and approved
-  (PR #20 merged). Stage 6 (Deploy): both frontend and backend live in staging —
-  the backend unit's naming blocker was resolved 2026-08-18 by
+- **Phase 6 (App 2, `REQ-2026-03`)** — complete and closed out (tracking issue closed
+  2026-08-20; code retained in `forge-demo-apps`, staging Container Apps/Postgres left
+  running — no decommission requested, unlike Phase 5's App 1). Stages 0-5 complete
+  and approved (PR #20 merged). Stage 6 (Deploy): both frontend and backend live in
+  staging — the backend unit's naming blocker was resolved 2026-08-18 by
   `_finalize_unit_name()`'s truncation+hash scheme (see "Unit naming and validation"
   below); real re-run confirmed the backend Container App at
   `req-2026-03-on-call-rost-5bb949.yellowmeadow-894377a9.canadacentral.azurecontainerapps.io`.
