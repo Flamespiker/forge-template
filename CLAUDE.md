@@ -1335,32 +1335,53 @@ completion).
     `AllowAzureServices`. Postgres server confirmed `Stopped` again after this cleanup.
 17. ~~**`workflow_glue.py`'s `resolve_feature_pr()` can't find ad hoc fix PRs for
     Deploy — confirmed live on PR #22 (the `SHIFT_ALREADY_CLAIMED` wording fix).**~~ —
-    **CODE FIX APPLIED 2026-08-20 (per
-    `docs/FORGE-DeployAgent-ResolveFeaturePR-AdHocFix-Spec-v2.md`), live re-verification
-    still outstanding.** `resolve_feature_pr()` now tries the original
-    `feature/<request_id>` branch match first (Step 1, unchanged, zero behavior change
-    for the common case), and — only if that finds nothing — falls back to scanning
-    every open PR in `forge-demo-apps` (new `github_helper.list_open_prs()`, paginated
-    via the Link header, `per_page=100`) for one whose body references this tracking
-    issue via the same `Related FORGE tracking issue: owner/repo#N` line
-    `resolve_tracking_issue()` reads (parsing now shared via a single
-    `_parse_tracking_issue_number()` helper both functions call, not two independently
-    -maintained regexes). Raises `ValueError` on zero or more than one match at
-    whichever step resolves it, same strictness as before — never silently guesses.
-    Item #15's separate gap (an ad hoc PR missing the tracking-issue body line
-    entirely) is explicitly out of scope here: Step 2 correctly finds nothing in that
-    case and the existing manual remediation still applies.
-    **Verified so far: unit-level simulation only** (monkeypatched
-    `list_open_prs_by_head()`/`list_open_prs()`/`get_pr()` covering all six spec
+    **RESOLVED AND LIVE-VERIFIED 2026-08-20** (per
+    `docs/FORGE-DeployAgent-ResolveFeaturePR-AdHocFix-Spec-v2.md`). `resolve_feature_pr()`
+    now tries the original `feature/<request_id>` branch match first (Step 1, unchanged,
+    zero behavior change for the common case), and — only if that finds nothing — falls
+    back to scanning every open PR in `forge-demo-apps` (new
+    `github_helper.list_open_prs()`, paginated via the Link header, `per_page=100`) for
+    one whose body references this tracking issue via the same `Related FORGE tracking
+    issue: owner/repo#N` line `resolve_tracking_issue()` reads (parsing now shared via a
+    single `_parse_tracking_issue_number()` helper both functions call, not two
+    independently-maintained regexes). Raises `ValueError` on zero or more than one match
+    at whichever step resolves it, same strictness as before — never silently guesses.
+    Item #15's separate gap (an ad hoc PR missing the tracking-issue body line entirely)
+    is explicitly out of scope here: Step 2 correctly finds nothing in that case and the
+    existing manual remediation still applies.
+    Verified two ways: (1) unit-level simulation (monkeypatched
+    `list_open_prs_by_head()`/`list_open_prs()`/`get_pr()`) covering all six spec
     acceptance criteria — branch-match regression, PR #22's actual shape via the
     fallback, zero-match wording, multi-match on both Step 1 and Step 2, and
-    `resolve_tracking_issue()`'s callers confirmed byte-identical). **Not yet verified
-    live** — since `06-deploy.yml` only triggers on a `labeled` webhook event (the
-    separate quirk noted below, not fixed by this change), doing so needs either a
-    fresh ad hoc fix PR cycle or a manual label re-add/remove/re-add against a real
-    `qa-approved`+`security-approved` PR. The manual `deploy_agent.py
-    --commit-sha`/`--pr-number` workaround used for PR #22 is no longer needed *if* this
-    fix holds live, but that "if" hasn't been checked yet.
+    `resolve_tracking_issue()`'s callers confirmed byte-identical; (2) a real live run —
+    opened a throwaway ad hoc PR (`forge-demo-apps#23`, README-only diff, tracking-issue
+    body line present), removed and re-added `security-approved` on issue #6 to fire a
+    fresh `labeled` webhook, and confirmed via `gh run view` that `06-deploy.yml`'s
+    "Resolve feature PR number and head commit SHA" step succeeded, resolving PR #23's
+    real number and head SHA via the Step 2 fallback (no open PR existed on
+    `feature/REQ-2026-03` — PR #20 is long since merged). Test PR closed and branch
+    deleted immediately after; issue #6's labels confirmed back to their original state
+    (`design-approved`, `qa-approved`, `security-approved`).
+
+18. **New, previously-hidden bug uncovered by Item #17's live verification:
+    `deploy_agent.py`'s `_az_login()` runs too late relative to
+    `_get_env_default_domain()`.** In `run_deploy_agent()`, the cross-service FQDN lookup
+    (`_get_env_default_domain()`, needed whenever a request has both a frontend and a
+    "web" backend unit — true for REQ-2026-03) runs at line ~893, but `_az_login()`
+    doesn't run until line ~910 — so `az containerapp env show` executes before the CLI
+    has ever authenticated in that process. Confirmed live: the same test run above got
+    all the way through Docker ACR login, then failed with `RuntimeError: az containerapp
+    env show failed ... ERROR: Please run 'az login' to setup account.` — before any
+    `docker build`/`push` or Container App create/update, so no live resource was
+    actually touched. The prior automated run (2026-08-20T03:25, pre-fix) never reached
+    this far — it died earlier, at the old `resolve_feature_pr()` bug (Item #17) — so this
+    ordering bug has silently blocked **every** fully-automated deploy for any two-unit
+    (frontend + backend-web) request, for as long as the pipeline has existed; every past
+    successful REQ-2026-03 deploy was a manual local `deploy_agent.py` invocation, where
+    the operator's own shell already had `az login` done ahead of time. Not fixed this
+    session — flagged for the next pass (move `_az_login(azure_credentials)` ahead of the
+    cross-service-wiring block, or make `_get_env_default_domain()` trigger login itself
+    if not already authenticated).
 
 ---
 
