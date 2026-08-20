@@ -1333,23 +1333,34 @@ completion).
     (`AllowAdminVerificationIp`, and the stale `AllowContainerAppsEnvOutboundIp` which
     never actually worked) — verified via `firewall-rule list`, which now shows only
     `AllowAzureServices`. Postgres server confirmed `Stopped` again after this cleanup.
-17. **`workflow_glue.py`'s `resolve_feature_pr()` can't find ad hoc fix PRs for
-    Deploy — confirmed live on PR #22 (the `SHIFT_ALREADY_CLAIMED` wording fix).** It
-    looks for an open PR on branch `feature/<request_id>` literally — correct for the
-    original per-request implementation branch, but an ad hoc `feature/fix-*` PR
-    doesn't match it, so `06-deploy.yml`'s guard clause raises outright
-    (`ValueError: No open PR found on branch 'feature/REQ-2026-03'...`) even once both
-    `qa-approved`/`security-approved` are genuinely present. Distinct from Open Item
-    #15 (QA/Security's `resolve_tracking_issue()`, already fixed) — this one is
-    Deploy-specific and previously undocumented. Separately (not this item, just an
-    observed quirk worth noting): `06-deploy.yml` only triggers on a `labeled` webhook
-    event, so when both labels are already present from a prior cycle, QA/Security
-    passing again doesn't re-fire it at all — re-triggering needs an actual label
-    add/remove/re-add. Worked around this session via a manual `deploy_agent.py`
-    invocation with explicit `--commit-sha`/`--pr-number`, not a fix. Undecided:
-    generalize `resolve_feature_pr()` to find any open PR referencing the tracking
-    issue (mirroring `resolve_tracking_issue()`'s approach), or leave ad hoc fix PRs on
-    a permanent manual-deploy path.
+17. ~~**`workflow_glue.py`'s `resolve_feature_pr()` can't find ad hoc fix PRs for
+    Deploy — confirmed live on PR #22 (the `SHIFT_ALREADY_CLAIMED` wording fix).**~~ —
+    **CODE FIX APPLIED 2026-08-20 (per
+    `docs/FORGE-DeployAgent-ResolveFeaturePR-AdHocFix-Spec-v2.md`), live re-verification
+    still outstanding.** `resolve_feature_pr()` now tries the original
+    `feature/<request_id>` branch match first (Step 1, unchanged, zero behavior change
+    for the common case), and — only if that finds nothing — falls back to scanning
+    every open PR in `forge-demo-apps` (new `github_helper.list_open_prs()`, paginated
+    via the Link header, `per_page=100`) for one whose body references this tracking
+    issue via the same `Related FORGE tracking issue: owner/repo#N` line
+    `resolve_tracking_issue()` reads (parsing now shared via a single
+    `_parse_tracking_issue_number()` helper both functions call, not two independently
+    -maintained regexes). Raises `ValueError` on zero or more than one match at
+    whichever step resolves it, same strictness as before — never silently guesses.
+    Item #15's separate gap (an ad hoc PR missing the tracking-issue body line
+    entirely) is explicitly out of scope here: Step 2 correctly finds nothing in that
+    case and the existing manual remediation still applies.
+    **Verified so far: unit-level simulation only** (monkeypatched
+    `list_open_prs_by_head()`/`list_open_prs()`/`get_pr()` covering all six spec
+    acceptance criteria — branch-match regression, PR #22's actual shape via the
+    fallback, zero-match wording, multi-match on both Step 1 and Step 2, and
+    `resolve_tracking_issue()`'s callers confirmed byte-identical). **Not yet verified
+    live** — since `06-deploy.yml` only triggers on a `labeled` webhook event (the
+    separate quirk noted below, not fixed by this change), doing so needs either a
+    fresh ad hoc fix PR cycle or a manual label re-add/remove/re-add against a real
+    `qa-approved`+`security-approved` PR. The manual `deploy_agent.py
+    --commit-sha`/`--pr-number` workaround used for PR #22 is no longer needed *if* this
+    fix holds live, but that "if" hasn't been checked yet.
 
 ---
 
