@@ -1363,25 +1363,37 @@ completion).
     deleted immediately after; issue #6's labels confirmed back to their original state
     (`design-approved`, `qa-approved`, `security-approved`).
 
-18. **New, previously-hidden bug uncovered by Item #17's live verification:
+18. ~~**New, previously-hidden bug uncovered by Item #17's live verification:
     `deploy_agent.py`'s `_az_login()` runs too late relative to
-    `_get_env_default_domain()`.** In `run_deploy_agent()`, the cross-service FQDN lookup
-    (`_get_env_default_domain()`, needed whenever a request has both a frontend and a
-    "web" backend unit — true for REQ-2026-03) runs at line ~893, but `_az_login()`
-    doesn't run until line ~910 — so `az containerapp env show` executes before the CLI
-    has ever authenticated in that process. Confirmed live: the same test run above got
-    all the way through Docker ACR login, then failed with `RuntimeError: az containerapp
-    env show failed ... ERROR: Please run 'az login' to setup account.` — before any
-    `docker build`/`push` or Container App create/update, so no live resource was
-    actually touched. The prior automated run (2026-08-20T03:25, pre-fix) never reached
-    this far — it died earlier, at the old `resolve_feature_pr()` bug (Item #17) — so this
-    ordering bug has silently blocked **every** fully-automated deploy for any two-unit
-    (frontend + backend-web) request, for as long as the pipeline has existed; every past
-    successful REQ-2026-03 deploy was a manual local `deploy_agent.py` invocation, where
-    the operator's own shell already had `az login` done ahead of time. Not fixed this
-    session — flagged for the next pass (move `_az_login(azure_credentials)` ahead of the
-    cross-service-wiring block, or make `_get_env_default_domain()` trigger login itself
-    if not already authenticated).
+    `_get_env_default_domain()`.**~~ — **FIXED AND VERIFIED 2026-08-20.** In the old
+    code, the cross-service FQDN lookup (`_get_env_default_domain()`, needed whenever a
+    request has both a frontend and a "web" backend unit — true for REQ-2026-03) ran
+    before `_az_login()` did, so `az containerapp env show` executed before the CLI had
+    ever authenticated in that process. Confirmed live: a test run got all the way
+    through Docker ACR login, then failed with `RuntimeError: az containerapp env show
+    failed ... ERROR: Please run 'az login' to setup account.` — before any `docker
+    build`/`push` or Container App create/update, so no live resource was touched. The
+    prior automated run (2026-08-20T03:25, pre-Item-#17-fix) never reached this far — it
+    died earlier at the old `resolve_feature_pr()` bug — so this ordering bug had
+    silently blocked **every** fully-automated deploy for any two-unit (frontend +
+    backend-web) request for as long as the pipeline has existed; every past successful
+    REQ-2026-03 deploy was a manual local `deploy_agent.py` invocation, where the
+    operator's own shell was already authenticated.
+    **Fix:** moved `_az_login(azure_credentials)` to immediately after `_docker_login()`,
+    ahead of the entire cross-service-wiring block (including the `backend_web_unit`
+    name-finalization and `_get_env_default_domain()` call) — same single call, no
+    signature change, no change to what it's called with. The old call site
+    (immediately before the per-unit build/push/deploy loop) was removed rather than
+    left as a redundant second call.
+    **Verified directly** (not via a full `deploy_agent.py` dry-run, which per its own
+    design does real `docker build`/`push` even in `--dry-run` — unnecessary cost just to
+    test call ordering): imported `_az_login()`/`_get_env_default_domain()`/
+    `_load_staging_config()` directly and ran them back-to-back in the new order against
+    the real `forge-staging` environment — `az login` succeeded, and the same domain
+    lookup that failed in CI now returned `yellowmeadow-894377a9.canadacentral.
+    azurecontainerapps.io` (matches the known live domain) with zero errors. az CLI
+    session confirmed unchanged afterward (same `forge-deploy-staging` SP as before — no
+    switch, no cleanup needed).
 
 ---
 
