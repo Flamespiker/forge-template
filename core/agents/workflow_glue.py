@@ -38,7 +38,11 @@ Four subcommands:
       Coordinator comment -- that went stale the moment a follow-up feature
       PR was opened on the same tracking issue (e.g. a post-implementation
       fix/descope), since the comment always points at the *first* PR ever
-      opened, not the currently open one.
+      opened, not the currently open one. If no PR is found on that branch
+      (an ad hoc fix PR, e.g. feature/fix-<description>, per CLAUDE.md's
+      standing branch-naming convention), falls back to scanning every open
+      PR's body for a "Related FORGE tracking issue: owner/repo#N" line
+      matching this issue -- confirmed necessary live on PR #22.
 
   resolve-tracking-issue --pr-number N
       The reverse of resolve-feature-pr: given a forge-demo-apps PR number
@@ -64,6 +68,7 @@ from core.agents.utils.github_helper import (
     get_issue,
     get_issue_comments,
     get_pr,
+    list_open_prs,
     list_open_prs_by_head,
 )
 
@@ -125,6 +130,24 @@ def resolve_request_id(issue_number: int) -> str:
     )
 
 
+def _parse_tracking_issue_number(pr_body: str | None) -> int | None:
+    """
+    Extracts the FORGE tracking issue number from a forge-demo-apps PR body's
+    "Related FORGE tracking issue: <owner>/<repo>#N" line (written identically
+    by design_agent.py and implementation_coordinator.py, and required on ad
+    hoc PRs per Open Item #15). Shared by resolve_tracking_issue() and
+    resolve_feature_pr()'s tracking-issue-body fallback so this line's parsing
+    rule lives in exactly one place, not two independently-maintained regexes.
+
+    Returns None if no match -- either the PR wasn't opened by a FORGE stage
+    agent, or (for an ad hoc PR) the required line is simply missing (Item #15).
+    """
+    source_repo = os.environ.get("FORGE_SOURCE_REPO", "forge-template")
+    pattern = re.compile(re.escape(source_repo) + r"#(\d+)")
+    match = pattern.search(pr_body or "")
+    return int(match.group(1)) if match else None
+
+
 def resolve_tracking_issue(pr_number: int) -> int:
     """
     Returns the forge-template tracking issue number for a forge-demo-apps PR,
@@ -135,16 +158,15 @@ def resolve_tracking_issue(pr_number: int) -> int:
     number/SHA/branch from forge-demo-apps -- the tracking issue lives in a
     different repo the dispatch payload never mentions.
     """
-    source_repo = os.environ.get("FORGE_SOURCE_REPO", "forge-template")
-    pattern = re.compile(re.escape(source_repo) + r"#(\d+)")
     pr = get_pr(pr_number)
-    match = pattern.search(pr.get("body") or "")
-    if not match:
+    issue_number = _parse_tracking_issue_number(pr.get("body"))
+    if issue_number is None:
+        source_repo = os.environ.get("FORGE_SOURCE_REPO", "forge-template")
         raise ValueError(
             f"No 'Related FORGE tracking issue: .../{source_repo}#N' reference found "
             f"in PR #{pr_number}'s body -- was it opened by a FORGE stage agent?"
         )
-    return int(match.group(1))
+    return issue_number
 
 
 def resolve_feature_pr(issue_number: int) -> tuple[int, str]:
@@ -152,28 +174,63 @@ def resolve_feature_pr(issue_number: int) -> tuple[int, str]:
     Returns (pr_number, head_sha) for the *currently open* feature PR tied
     to this tracking issue. Resolves request_id via the same marker-based
     resolve_request_id() every other stage trusts (stable for the life of
-    the issue), then looks up the live, currently-open PR on
-    feature/<request_id> directly via the GitHub API -- no longer anchored
-    to a potentially-stale Implementation Coordinator comment.
+    the issue).
+
+    Resolution order:
+      1. Look for an open PR on branch feature/<request_id> -- the original
+         Implementation Coordinator's own branch-naming convention -- via
+         list_open_prs_by_head(). Tried first, zero behavior change from
+         before this fallback existed: this is still the common case.
+      2. If Step 1 finds nothing, fall back to scanning every open PR in the
+         monorepo for one whose body references this tracking issue (the same
+         "Related FORGE tracking issue: owner/repo#N" line resolve_tracking_
+         issue() reads). Needed for ad hoc fix PRs (e.g. feature/fix-<desc>,
+         per CLAUDE.md's standing branch-naming convention) whose branch name
+         doesn't match feature/<request_id> literally -- confirmed live: PR
+         #22 (the SHIFT_ALREADY_CLAIMED wording fix) hit exactly this gap.
+
+    Raises ValueError on zero or more than one match at whichever step
+    resolves it -- never silently guesses which PR to deploy. Item #15's
+    separate gap (an ad hoc PR missing the tracking-issue body line entirely)
+    is not handled here: Step 2 correctly finds nothing in that case, and the
+    existing manual remediation (editing the PR body) still applies.
     """
     request_id = resolve_request_id(issue_number)
     branch_name = f"feature/{request_id}"
     prs = list_open_prs_by_head(branch_name)
 
-    if not prs:
-        raise ValueError(
-            f"No open PR found on branch '{branch_name}' for issue #{issue_number} -- "
-            "has Stage 3 run yet, or has the feature PR already been merged/closed "
-            "without a new one being opened?"
-        )
+    if len(prs) == 1:
+        pr = prs[0]
+        return pr["number"], pr["head"]["sha"]
     if len(prs) > 1:
         raise ValueError(
             f"Found {len(prs)} open PRs on branch '{branch_name}' for issue "
             f"#{issue_number} -- expected exactly one. Refusing to guess which "
             "one to deploy."
         )
-    pr = prs[0]
-    return pr["number"], pr["head"]["sha"]
+
+    # Step 1 found nothing -- fall back to the tracking-issue-body match.
+    candidates = [
+        pr for pr in list_open_prs()
+        if _parse_tracking_issue_number(pr.get("body")) == issue_number
+    ]
+
+    if len(candidates) == 1:
+        pr = candidates[0]
+        return pr["number"], pr["head"]["sha"]
+    if len(candidates) > 1:
+        raise ValueError(
+            f"Found {len(candidates)} open PRs referencing tracking issue "
+            f"#{issue_number} in their body (none on branch '{branch_name}') -- "
+            "expected exactly one. Refusing to guess which one to deploy."
+        )
+    raise ValueError(
+        f"No open PR found on branch '{branch_name}' for issue #{issue_number}, "
+        "and no open PR's body references this tracking issue either -- has "
+        "Stage 3 run yet, has the feature PR already been merged/closed without "
+        "a new one being opened, or (for an ad hoc fix PR) is the 'Related FORGE "
+        "tracking issue: owner/repo#N' line missing from the PR body (Open Item #15)?"
+    )
 
 
 def main() -> None:

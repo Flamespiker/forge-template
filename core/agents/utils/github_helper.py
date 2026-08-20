@@ -781,6 +781,35 @@ def list_open_prs_by_head(branch_name: str) -> list[dict]:
     return prs
 
 
+def list_open_prs(per_page: int = 100) -> list[dict]:
+    """
+    List every open PR in the target monorepo (forge-demo-apps), regardless
+    of head branch. Uses the GitHub App installation token -- same cross-repo
+    auth context as list_open_prs_by_head(). Needed by resolve_feature_pr()'s
+    tracking-issue-body fallback: an ad hoc fix PR's branch name doesn't
+    match feature/<request_id>, so it can only be found by scanning every
+    open PR's body for the "Related FORGE tracking issue: owner/repo#N" line.
+
+    Paginates via the response's Link header (same pattern as
+    get_dependabot_alerts()) rather than trusting a single page -- per_page=100
+    is cheap insurance, not a substitute for following a second page if open
+    PR count ever exceeds it.
+    """
+    token = get_installation_token()
+    headers = _auth_headers(token)
+    url = f"{_repo_url()}/pulls"
+    params: dict[str, object] | None = {"state": "open", "per_page": per_page}
+    prs: list[dict] = []
+    while url:
+        response = requests.get(url, headers=headers, params=params, timeout=15)
+        response.raise_for_status()
+        prs.extend(response.json())
+        url = response.links.get("next", {}).get("url")
+        params = None  # the next-page URL already carries the query params encoded
+    logger.info("Found %d open PR(s) in the target monorepo", len(prs))
+    return prs
+
+
 def create_check_run(
     head_sha: str,
     name: str,
