@@ -57,6 +57,33 @@ is running through the full pipeline. Phases 1-5 are complete:
   wired to both frontend and backend, a real staging Postgres provisioned, and the
   claim/release write-path verified end-to-end via direct HTTP + DB checks — see "Azure
   AD wiring + Postgres provisioning" below. Former Open Item #14 closed.
+  **2026-08-19/20 fix cycle (`SHIFT_ALREADY_CLAIMED` wording, PR #22 in
+  `forge-demo-apps`):** the 409's message text always said "claimed by someone else,"
+  even on a self-claim retry (a user re-claiming a shift they already hold) — the bug
+  identified during the write-path verification above. Fixed both sides: backend's
+  `ClaimResult` (`ShiftsRepository.cs`) now carries the actual conflicting
+  `AssignedUserId` (re-read fresh from the DB on the `StaleRowVersion` concurrency path,
+  since the in-memory entity there reflects the attempted write, not persisted state),
+  so `ShiftsController.cs` can branch the message on self vs. other; error code/HTTP
+  status unchanged. Also found and fixed a second, previously-undocumented bug while
+  verifying: `ShiftRow.tsx` ignored `err.body.message` entirely for this error code and
+  rendered a hardcoded string — meaning the backend fix alone would have had zero
+  user-visible effect. Now renders the backend's message, since the frontend's own
+  `shift` prop is stale at the moment this error fires (only reflects pre-request
+  state) and can't reliably distinguish self vs. other itself. 39 backend + 29 frontend
+  tests pass (2 new, one per side, for the self-claim case). Live-deployed to staging
+  via a **manual** `deploy_agent.py` invocation with explicit `--commit-sha`/
+  `--pr-number` — see the new Open Item below on why the normal label-driven path
+  couldn't do this automatically; confirmed via `az containerapp show` that both
+  running Container Apps' image tags match the fix commit (`d53bebd8610...`). DB
+  audit-entry table confirmed internally consistent (4 rows, clean Claimed/Released
+  pairs, no spurious entries) via a throwaway `docker run postgres:16-alpine` against
+  the existing `req-2026-03-database-url` Key Vault secret (read directly — the
+  staging deploy SP already has Key Vault Secrets Officer on `forge-build-kv`, so no
+  new credential was needed) — not a fresh live re-test of this specific fix, since the
+  live HTTP smoke test (real bearer tokens) was explicitly skipped this cycle. Temp
+  firewall rule and Postgres start were both cleaned up (rule removed, server
+  re-stopped) immediately after.
   Full narrative: `docs/CLAUDE-archive-2026-08-req2026-03.md` and the newest
   `docs/FORGE-context_v*.md` (maintained by the Claude.ai side of the two-tool
   workflow).
@@ -1271,6 +1298,23 @@ completion).
     (`AllowAdminVerificationIp`, and the stale `AllowContainerAppsEnvOutboundIp` which
     never actually worked) — verified via `firewall-rule list`, which now shows only
     `AllowAzureServices`. Postgres server confirmed `Stopped` again after this cleanup.
+17. **`workflow_glue.py`'s `resolve_feature_pr()` can't find ad hoc fix PRs for
+    Deploy — confirmed live on PR #22 (the `SHIFT_ALREADY_CLAIMED` wording fix).** It
+    looks for an open PR on branch `feature/<request_id>` literally — correct for the
+    original per-request implementation branch, but an ad hoc `feature/fix-*` PR
+    doesn't match it, so `06-deploy.yml`'s guard clause raises outright
+    (`ValueError: No open PR found on branch 'feature/REQ-2026-03'...`) even once both
+    `qa-approved`/`security-approved` are genuinely present. Distinct from Open Item
+    #15 (QA/Security's `resolve_tracking_issue()`, already fixed) — this one is
+    Deploy-specific and previously undocumented. Separately (not this item, just an
+    observed quirk worth noting): `06-deploy.yml` only triggers on a `labeled` webhook
+    event, so when both labels are already present from a prior cycle, QA/Security
+    passing again doesn't re-fire it at all — re-triggering needs an actual label
+    add/remove/re-add. Worked around this session via a manual `deploy_agent.py`
+    invocation with explicit `--commit-sha`/`--pr-number`, not a fix. Undecided:
+    generalize `resolve_feature_pr()` to find any open PR referencing the tracking
+    issue (mirroring `resolve_tracking_issue()`'s approach), or leave ad hoc fix PRs on
+    a permanent manual-deploy path.
 
 ---
 
