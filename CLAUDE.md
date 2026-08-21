@@ -1299,6 +1299,10 @@ completion).
     design-PR no-op-check fix removed the original reason an admin bypass was needed.
 11. **8 HIGH-severity `next@14.2.35` CVE findings have no 14.x backport** — accepted
     ongoing risk from the deliberate decision to stay on the 14.x line, not a bug.
+    **Count refined 2026-08-21** (see Item #19's triage pass): the full "no 14.x
+    backport" population is actually 21 unique CVEs (8 High + 11 Medium + 2 Low), not
+    just the 8 HIGH ones — the disposition itself (accepted risk) is unchanged, only the
+    count was incomplete.
 12. **Cost log (`docs/FORGE-pipeline-cost-log.md`) needs REQ-2026-03 figures backfilled**,
     including the Deploy Agent fix cycle.
 13. ~~**A `forge-template`-level Dependency-Check suppression file** for confirmed
@@ -1394,6 +1398,24 @@ completion).
     azurecontainerapps.io` (matches the known live domain) with zero errors. az CLI
     session confirmed unchanged afterward (same `forge-deploy-staging` SP as before — no
     switch, no cleanup needed).
+
+19. **Dependabot alert triage pass completed 2026-08-21** (per
+    `docs/FORGE-Dependabot-Triage-Spec.md`). Full report:
+    `docs/FORGE-Dependabot-Triage-Report-2026-08-21.md`. Data-gathering and
+    classification only — no packages upgraded, no alerts dismissed (report includes a
+    ready-to-run `gh api` dismissal list for the dev-only bucket, not yet executed,
+    awaiting Mike's go-ahead). 101 open alerts on `forge-demo-apps` (0 on
+    `forge-template`), a drift of 1 from the 102 recorded 2026-08-19. Headline finding:
+    REQ-2026-01/02 are pinned to `next@14.2.5` while REQ-2026-03 already runs
+    `next@14.2.35` in production — 24 alert rows (12 CVEs, including 1 Critical) can
+    close via a same-line patch bump with no major-version risk, previously
+    unidentified as an action item. Zero likely-false-positives found (Dependabot's
+    native GHSA semver-matching doesn't share the CPE fuzzy-match failure mode that
+    motivated dropping Dependency-Check). One open question flagged for Mike: whether
+    REQ-2026-01's frontend is serving any live traffic anywhere (no
+    `req-2026-01`-prefixed frontend Container App exists in `forge-build-rg` today, but
+    its deploy history predates `deploy_agent.py` and wasn't investigated further) —
+    affects how urgently its 33 alert rows should be treated.
 
 ---
 
