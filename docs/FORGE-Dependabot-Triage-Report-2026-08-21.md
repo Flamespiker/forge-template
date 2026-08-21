@@ -29,15 +29,14 @@
 | Real, actionable | 29 | 17 | REQ-2026-01, -02, -03 |
 | Likely false positive | 0 | 0 | — |
 | Dev-only / no exposure | 9 | 8 | REQ-2026-02, -03 |
-| Needs Mike's call | 33 | — | REQ-2026-01 (infra-status caveat, see §6) |
 
-(These 33 "needs Mike's call" rows are the *same* 33 rows already counted under Known/accepted (21) and Real, actionable (12) above — not a disjoint sixth bucket. They're flagged separately in §6 because REQ-2026-01's live-traffic status is unconfirmed, which changes how urgently they should be acted on, without changing their underlying technical disposition.)
+**Update 2026-08-21 (later same day):** REQ-2026-01's frontend deployment status — originally left as an open question in §6 below — is now resolved: `az containerapp list` confirms no `req-2026-01`-prefixed frontend Container App exists. Its 33 alert rows (still counted under Known/accepted and Real, actionable above; not a separate bucket) are dormant-code risk, not live-traffic risk. See §6 for the full reasoning; the original "needs Mike's call" framing no longer applies.
 
 **By repo × request:**
 
 | Request | Alert rows | Live infra today |
 |---|---|---|
-| REQ-2026-01 | 33 | Backend units (`req-2026-01-document-api`, `req-2026-01-email-worker`) confirmed live via `az containerapp list`. Frontend unit's current deployment status **not confirmed** — no `req-2026-01-frontend`-style Container App exists in `forge-build-rg` today, but whether it was ever deployed and later removed, or never deployed at all, was not investigated (out of scope for a dependency-triage pass). Flagged in §6. |
+| REQ-2026-01 | 33 | Backend units (`req-2026-01-document-api`, `req-2026-01-email-worker`) confirmed live via `az containerapp list`. **Frontend confirmed not deployed** — no `req-2026-01-frontend`-style Container App exists in `forge-build-rg`. These 33 alert rows are dormant-code risk (see §6), not currently-exposed risk. |
 | REQ-2026-02 | 41 | **Fully decommissioned 2026-08-13** (per CLAUDE.md Phase 5 closeout) — no Container Apps running. Zero live production exposure right now for any of these 41 alerts. |
 | REQ-2026-03 | 27 | Fully live (frontend + backend both confirmed running). Normal current exposure applies. |
 
@@ -133,23 +132,23 @@ No production exposure. Recommended: dismiss with `dismissed_reason: not_used` (
 
 ---
 
-## 6. Needs Mike's call section
+## 6. REQ-2026-01 frontend status — resolved 2026-08-21
 
-**REQ-2026-01's frontend deployment status is unconfirmed, and it changes how urgently its 14 next.js alert rows (both Real-actionable and Known-accepted) should be treated.**
+**Originally an open question in this report; resolved the same day.** `az containerapp list` against `forge-build-rg` was checked again and confirmed: only `req-2026-01-document-api` and `req-2026-01-email-worker` are live. No `req-2026-01`-prefixed frontend Container App exists — REQ-2026-01's frontend is not currently deployed anywhere in `forge-build-rg`.
 
-- `az containerapp list` against `forge-build-rg` shows `req-2026-01-document-api` and `req-2026-01-email-worker` live today — REQ-2026-01's backend is genuinely running.
-- No `req-2026-01`-prefixed frontend Container App exists in that list. CLAUDE.md documents REQ-2026-01 only as a Phase 3/4 pipeline-validation request (merged as `forge-demo-apps` PR #5) — it predates `deploy_agent.py`'s existence, so it's unclear whether its frontend was ever deployed via the FORGE pipeline at all, or deployed once and later torn down, or never deployed.
-- This wasn't investigated further — confirming deploy history for a three-week-old pilot request is outside a Dependabot-triage pass's scope. Flagging instead of guessing.
+This does not fully rule out a deployment outside `forge-build-rg` (no other resource group or subscription was checked), but combined with CLAUDE.md's own account of REQ-2026-01 as a Phase 3/4 pipeline-validation request (merged as `forge-demo-apps` PR #5, predating `deploy_agent.py`'s existence — i.e., it was never run through the FORGE pipeline's own Deploy stage in the first place), the frontend has no evidence of ever having been deployed, let alone currently serving traffic.
 
-**The question for Mike:** is REQ-2026-01's frontend currently serving any real traffic anywhere (including a location outside `forge-build-rg` this pass didn't check)? REQ-2026-01 contributes 33 of this report's 101 alert rows — 12 to §3's Real-actionable table (alerts 1–12) and 21 to §2's Known-accepted table, all under `services/REQ-2026-01/frontend/`. If the frontend isn't actually serving traffic anywhere, those 33 rows represent risk in dormant code, not a live attack surface — the same practical status as REQ-2026-02's fully-decommissioned alerts. If something is still serving it, the Real-actionable fix in §3 should be treated with the same urgency as REQ-2026-02's, not deprioritized.
+**Conclusion: REQ-2026-01's 33 alert rows (12 in §3's Real-actionable table, 21 in §2's Known-accepted table) are dormant-code risk, not live-attack-surface risk — the same practical status as REQ-2026-02's fully-decommissioned alerts.** This doesn't change their underlying technical disposition (§2/§3 stand as written) — it changes urgency only. Not urgent to act on ahead of REQ-2026-03's genuinely-live exposure, but still worth including in the `next` version-catch-up fix (§3) since the code exists in the repo and could be redeployed later; fixing it now costs nothing extra beyond what's already being done for REQ-2026-02.
 
-No other alerts were placed in this bucket — the rest of the dataset had a clear, unambiguous disposition.
+No other alerts in this report needed this kind of follow-up — the rest of the dataset had a clear, unambiguous disposition from the start.
 
 ---
 
 ## 7. Recommended dismissal list
 
-**Per the spec: only the dev-only bucket has a dismissal recommendation below (the false-positive bucket is empty; the known/accepted bucket stays open by design, matching how Item #11 has always been handled). Nothing here has been executed — every command below is for Mike to review and run, or explicitly authorize Claude Code to run.**
+**Per the spec: only the dev-only bucket has a dismissal recommendation below (the false-positive bucket is empty; the known/accepted bucket stays open by design, matching how Item #11 has always been handled).**
+
+**Executed 2026-08-21, with Mike's explicit go-ahead.** All 9 commands below were run and independently verified (each alert re-fetched individually and confirmed `state: dismissed` with the correct `dismissed_reason`, not just a zero exit code) — alert numbers 44, 49, 50, 51, 76, 77, 82, 94, 95. `forge-demo-apps`'s open-alert count dropped from 101 to 92 immediately after, confirming no other alert was touched. Commands are left below as the executed record, not a pending recommendation.
 
 All `dismissed_comment` values below are well under the 280-character cap (longest is 118 characters), confirmed by construction, not just asserted.
 
