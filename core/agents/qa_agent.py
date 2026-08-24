@@ -418,8 +418,58 @@ def _run_frontend_tests(frontend_dir: str) -> TestSuiteResult:
         return _parse_jest_json(json_path)
 
 
+def _jest_collection_failures(data: dict) -> list[str]:
+    """
+    Finds test files that failed to *collect* (a broken import, a syntax
+    error, a type error — anything that prevents Jest/Vitest from even
+    starting to run the file's tests), as opposed to a file that collected
+    fine and had one or more tests assert falsely.
+
+    Confirmed live against both runners (a real broken-import fixture, since
+    Jest/Vitest don't document this shape anywhere): a collection-failed file
+    appears in testResults[] with status == "failed" and an EMPTY
+    assertionResults[] (there were no individual tests to report on — the
+    file itself never loaded) plus a top-level "message" string containing
+    the actual error. A file with real per-test assertion failures instead
+    has a non-empty assertionResults[], each entry individually marked
+    failed — that shape is already handled by the loop above and is not
+    treated as a collection failure here.
+
+    This is the root cause behind the "0 passed / 0 failed / 0 total" blind
+    spot: numFailedTests only counts individual failed assertionResults
+    entries, so a file that fails to collect contributes nothing to that
+    count on either side, regardless of whether numTotalTests happens to be
+    exactly 0 (every file failed to collect) or nonzero (some other file in
+    the same run collected fine and had real, counted tests) — both cases
+    are covered by scanning every testResults[] entry directly.
+    """
+    messages: list[str] = []
+    for test_file in data.get("testResults", []):
+        if test_file.get("status") != "failed":
+            continue
+        if test_file.get("assertionResults"):
+            continue  # a real per-test failure, not a collection failure
+        name = test_file.get("name", "unknown file")
+        message = (test_file.get("message") or "(no message provided)").strip()
+        messages.append(f"{name}:\n{message}")
+    return messages
+
+
 def _parse_jest_json(json_path: Path) -> TestSuiteResult:
     data = json.loads(json_path.read_text(encoding="utf-8"))
+
+    collection_failures = _jest_collection_failures(data)
+    if collection_failures:
+        combined = "\n\n---\n\n".join(collection_failures)
+        return TestSuiteResult(
+            suite="frontend", ran=False, passed=0, failed=0, total=0,
+            failures=[],
+            run_failure_message=(
+                f"{len(collection_failures)} frontend test file(s) failed to collect "
+                "(broken import, syntax error, or type error — the file never started "
+                f"running its tests):\n\n{combined[:3000]}"
+            ),
+        )
 
     failures: list[TestFailure] = []
     for test_file in data.get("testResults", []):
