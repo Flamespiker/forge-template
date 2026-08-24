@@ -95,6 +95,7 @@ from pathlib import Path
 from core.agents.utils.claude_agent_wrapper import invoke_agent
 from core.agents.utils.github_helper import (
     get_file_contents,
+    get_issue,
     get_pr_comments,
     post_comment,
     post_pr_comment,
@@ -631,6 +632,40 @@ def run_qa_agent(
             "where the test report comment is posted and how retry attempts are "
             "counted. Refusing to proceed without it."
         )
+
+    # Retry-ceiling enforcement (must happen before any test execution or
+    # labeling, per the acceptance criteria this guards against): previously
+    # _MAX_RETRIES only picked which label to apply -- a passing run always
+    # got qa-approved regardless of attempt number, and nothing stopped a
+    # fourth, fifth, etc. automatic QA run once the ceiling was already
+    # reached. Read-only (get_issue), so it's safe to run under --dry-run too
+    # -- only the comment-posting below is skipped in that mode, matching the
+    # rest of this function's dry-run discipline.
+    issue = get_issue(issue_number)
+    existing_labels = {label["name"] for label in issue.get("labels", [])}
+    if "qc-retry-limit-reached" in existing_labels:
+        skip_message = (
+            "⏭️ **FORGE QA Agent skipped — retry ceiling already reached.**\n\n"
+            f"This tracking issue already has `qc-retry-limit-reached` applied from a "
+            f"prior QA run (retry budget: {_MAX_RETRIES} attempts). No test suites were "
+            "run for this dispatch, and no ADO Bugs were filed.\n\n"
+            "An Orchestration Manager needs to triage the underlying failure manually "
+            "per Document 6's failure-handling guidance. To allow another automatic QA "
+            "attempt once the issue is fixed, remove the `qc-retry-limit-reached` label "
+            "from this tracking issue — the next PR push (or a manually replayed "
+            "dispatch event) will then run QA normally, starting a fresh attempt count."
+        )
+        if dry_run:
+            print("=" * 20, "would be skipped -- retry ceiling already reached", "=" * 20)
+            print(skip_message)
+        else:
+            post_comment(issue_number, skip_message)
+        logger.info(
+            "QA Agent skipped for request %s — qc-retry-limit-reached already present "
+            "on issue #%s; refusing to consume another attempt.",
+            request_id, issue_number,
+        )
+        return {"skipped": True, "reason": "qc-retry-limit-reached"}
 
     service_root = Path(repo_path) / "services" / request_id
     backend_dir, backend_dir_warning = _resolve_backend_test_dir(service_root)
