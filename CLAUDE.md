@@ -1433,6 +1433,28 @@ completion).
     same report were **not** included in this PR — only the `next` catch-up, since that
     was the specific ask.
 
+20. **Two pre-existing `next build` failures, found 2026-08-21/22 during PR #24's
+    before/after test verification — not fixed, tracked here for future remediation.**
+    Both confirmed identical whether run against the original `next@14.2.5` pin or the
+    bumped `next@14.2.35` (PR #24), so neither is caused by that version bump — genuinely
+    pre-existing breakage that had simply never been caught before, since no pipeline
+    stage has ever run a real `next build`/`dotnet build` (Open Item #3).
+    - **REQ-2026-01:** TypeScript compile error in `lib/app-insights.ts:70` — the
+      `ReactPlugin` passed to `extensions: [_reactPlugin]` isn't assignable to
+      `ITelemetryPlugin`. Root cause: two different, incompatible copies of
+      `@microsoft/applicationinsights-core-js` get resolved in `node_modules` — one
+      top-level, one nested under `@microsoft/applicationinsights-analytics-js`'s own
+      dependency tree — whose `ITelemetryPlugin`/`Tags` type shapes don't structurally
+      match each other, so TypeScript rejects the assignment even though both packages
+      are semver-compatible at the JS level. A classic duplicate-nested-package problem,
+      not a real logic bug.
+    - **REQ-2026-02:** a React prerender error (`TypeError: Cannot read properties of
+      null (reading 'useContext')`) during `next build`'s static-page generation step,
+      failing on `/404`, `/500`, `/_not-found`, and `/`.
+    - Both used directly as real Fix-3 test material for
+      `docs/FORGE-Pipeline-Hardening-Spec.md`'s new QA build-validation step, rather than
+      constructed fixtures.
+
 ---
 
 ## Further reading
