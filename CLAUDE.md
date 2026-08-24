@@ -1416,6 +1416,22 @@ completion).
     `req-2026-01`-prefixed frontend Container App exists in `forge-build-rg` today, but
     its deploy history predates `deploy_agent.py` and wasn't investigated further) —
     affects how urgently its 33 alert rows should be treated.
+    **Update 2026-08-22:** the open question above is resolved — `az containerapp list`
+    re-confirmed no `req-2026-01`-prefixed frontend Container App exists; its 33 alert
+    rows are dormant-code risk, not live-traffic risk (report updated in place, same
+    file). **The triage report's headline `next` version-catch-up fix is now a real PR:**
+    `forge-demo-apps#24` bumps `next` 14.2.5 → 14.2.35 in both REQ-2026-01 and
+    REQ-2026-02, closing 24 alert rows (12 CVEs, 1 Critical). Both apps' Jest suites and
+    `next build` were run twice each (before/after the bump) to isolate any real
+    regression: Jest results are byte-identical before and after on both apps (REQ-01:
+    38 pass / 6 pre-existing unrelated failures; REQ-02: 38/38 pass); `next build` also
+    fails identically before and after on both apps — a pre-existing TypeScript/prerender
+    issue, unrelated to this bump, not fixed by this PR (ties into Open Item #3 — no
+    pipeline stage has ever validated a real production build for either app). Net: zero
+    regression from the version bump itself, confirmed by direct comparison rather than
+    assumed. The Dependabot-flagged `postcss`/`Microsoft.Identity.Web` fixes from the
+    same report were **not** included in this PR — only the `next` catch-up, since that
+    was the specific ask.
 
 ---
 
