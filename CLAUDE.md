@@ -1258,21 +1258,97 @@ completion).
    `req-2026-03-on-call-rost-5bb949.yellowmeadow-894377a9.canadacentral.azurecontainerapps.io`.
    All 4 previously-passing unit names confirmed byte-identical under the new scheme (no
    regression).
-3. **No pipeline stage validates that the app actually builds before Stage 6 (Deploy).**
-   QA only runs `vitest`/`jest`/`dotnet test`; the first real `next build`/`docker build`
-   happens inside `deploy_agent.py`. Already let two real issues go undetected until
-   Deploy or a manual investigation (a `lucide-react`/`aria-hidden` type mismatch on
-   REQ-2026-01; a `vitest.config.ts` nested-`vite`-types conflict on REQ-2026-03).
-4. **`qa_agent.py`'s Jest/Vitest JSON parsing has a file-collection blind spot** — a
-   suite where every test file fails to *collect* (not just fails) reports `0 passed / 0
-   failed / 0 total`, currently treated as a clean pass. Already let one real broken
-   REQ-2026-03 frontend suite slip through as `qa-approved` before it was caught by
-   chance.
-5. **QA's `_MAX_RETRIES = 3` only picks which label to apply — it never blocks or gates a
-   re-run.** A passing run always gets `qa-approved` regardless of attempt number;
-   `04-qa.yml` has no attempt-count guard clause. The retry counter also doesn't
-   distinguish real app-test failures from FORGE-tooling/infra noise, so a redundant
-   manual rerun burns a real attempt.
+3. ~~**No pipeline stage validates that the app actually builds before Stage 6
+   (Deploy).**~~ — **FIXED AND VERIFIED 2026-08-24** (per
+   `docs/FORGE-Pipeline-Hardening-Spec.md`'s Fix 3). New `_validate_frontend_build()` in
+   `qa_agent.py` runs `npm run build` (`next build`) alongside the existing frontend test
+   suite — not instead of it — and reports a failure the same way Fix 1 (below) treats a
+   collection failure: High severity, blocks `qa-approved`, subject to Fix 2's retry
+   ceiling, no new outcome category beyond pass/fail/`not_applicable`. A build failure
+   supersedes whatever the test suite already reported, since nothing about the suite can
+   be trusted as deployable if the build itself is broken.
+   **No equivalent backend step was needed** — confirmed live by deliberately injecting a
+   compile error into REQ-2026-03's API project (not its test project) and running only
+   `dotnet test`: it failed with the real compiler error before producing a TRX report,
+   which `_run_backend_tests()`'s existing "no TRX produced" path already reports as a
+   genuine QA failure. `dotnet test`'s implicit build already covers the referenced API
+   project transitively via the test project's own `ProjectReference` — a separate
+   `dotnet build` step would be redundant.
+   Deliberately scoped to the language-level build only (not `docker build` — that needs a
+   working Dockerfile, which for a request with none yet committed depends on Deploy
+   Agent's own template-generation logic, out of order for Stage 4).
+   **Real finding surfaced during verification:** the two "pre-existing `next build`
+   failures" originally recorded below this item (Open Item #20) were tested on a Windows
+   machine. Re-verifying inside a `node:20-bullseye` Linux container (matching
+   `04-qa.yml`'s actual `ubuntu-latest` runner) showed REQ-2026-02 and REQ-2026-03 both
+   build cleanly on Linux — only REQ-2026-01's TypeScript type-conflict error is real and
+   OS-independent. Item #20 and PR #24 were both corrected. This also confirms Fix 3 is
+   safe to land as designed, since it runs in the same `ubuntu-latest` environment that
+   container reproduces.
+   Verified against real code: the extracted build-validation logic, run inside that same
+   Linux container, correctly reports `ran=False` with the real compiler error surfaced
+   for REQ-2026-01, and `ran=True` (no false positive) for both REQ-2026-02 and
+   REQ-2026-03. A scoped local integration harness against `run_qa_agent()` itself
+   confirmed 4 cases: tests-pass+build-passes → `qa-approved`; tests-pass+build-**fails**
+   (the actual shape of both real incidents) → build failure supersedes, blocks
+   `qa-approved`; tests-fail+build-passes → still fails, from the test failure; no build
+   script declared → build step never invoked, zero behavior change. Timing: QA's real
+   per-suite ceiling is `_TEST_TIMEOUT_SECONDS=1800s` (confirmed by reading the constant,
+   not assumed — Security's 600s figure does not apply here); a Windows-Docker-bind-mount
+   timing measurement came in at 417s, almost certainly inflated by cross-filesystem I/O
+   overhead rather than representative of native Linux CI — still comfortably within
+   1800s even under that pessimistic reading, but real confirmation should come from the
+   first live GitHub Actions run.
+4. ~~**`qa_agent.py`'s Jest/Vitest JSON parsing has a file-collection blind spot**~~ —
+   **FIXED AND VERIFIED 2026-08-24** (per `docs/FORGE-Pipeline-Hardening-Spec.md`'s
+   Fix 1). New `_jest_collection_failures()` scans every `testResults[]` entry for
+   `status == "failed"` with an **empty** `assertionResults[]` — the real, confirmed shape
+   (via a live broken-import fixture, both Jest and Vitest) of a file that failed to
+   *collect* at all, as opposed to one that collected fine and had real per-test
+   assertion failures (non-empty `assertionResults[]`). Critically, this does **not** key
+   off the top-level `numFailedTestSuites` counter — confirmed live that a genuine
+   per-test assertion failure *also* sets `numFailedTestSuites: 1`, so that field alone
+   can't distinguish the two cases. A detected collection failure routes into the
+   existing `ran=False`/`run_failure_message` path (the same one already used for "no
+   JSON report produced at all"), which already gets High severity, blocks
+   `qa-approved`, and counts against the retry ceiling with zero other code changes.
+   Verified against all four acceptance criteria using real captured Jest/Vitest
+   `--reporter=json` output (not assumed from memory): a broken-import fixture on both
+   runners now reports a genuine failure; a genuine mixed pass/fail suite is unaffected;
+   a fully clean suite is unaffected; the `not_applicable` path never calls this parser
+   at all (structurally unreachable, no regression possible).
+5. ~~**QA's `_MAX_RETRIES = 3` only picks which label to apply — it never blocks or gates
+   a re-run.**~~ — **FIXED AND VERIFIED 2026-08-24** (per
+   `docs/FORGE-Pipeline-Hardening-Spec.md`'s Fix 2). `run_qa_agent()` now checks — before
+   running any test suite or filing any bug — whether `qc-retry-limit-reached` is already
+   applied to the tracking issue; if so, the run is skipped entirely and a comment
+   explains why, consuming no attempt and re-labeling nothing. Read-only check
+   (`get_issue`), so it also runs correctly under `--dry-run` (prints instead of posting).
+   **Design decision** (per Document 4's human-gate-at-every-stage principle, chosen over
+   an alternative that would gate directly on `attempt_number > _MAX_RETRIES` pre-execution
+   — rejected because it would break manual recovery, since comment-count-based
+   `attempt_number` doesn't reset when a label is removed, and would require the skip path
+   to also apply labels itself): the ceiling blocks further *automatic* QA runs, but a
+   human can still recover by removing `qc-retry-limit-reached` — the next PR push or a
+   manually replayed dispatch event then runs QA normally with a fresh attempt count. Not
+   a permanent dead end. `_MAX_RETRIES`'s value (3) and `_count_prior_qa_attempts()`'s
+   counting mechanism are both unchanged — this only adds enforcement on top of the
+   existing, correct counting logic.
+   Verified via a scoped local test harness (mocking `get_issue`/test execution/
+   `post_comment`/`add_label`/`create_bug`) rather than a live 4-cycle PR run, which would
+   mean filing real ADO bugs and burning real PR cycles just to test enforcement logic:
+   ceiling already present → skipped before any test execution, comment posted, no label
+   re-applied, no bugs filed (holds even when this run's tests would have passed — the
+   guard checks label state, not test outcome); normal 1-attempt-pass and
+   3rd-attempt-then-pass cases → zero behavior change; the attempt that first exceeds
+   `_MAX_RETRIES` on a genuine failure still runs and sets `qc-retry-limit-reached` for
+   the first time, as today — only a *subsequent* dispatch after that point gets skipped;
+   dry-run respects the ceiling and never reaches test execution.
+   **Not yet done:** a full, real Stage 4 → Stage 6 cycle against a currently-working
+   request end-to-end, to confirm nothing regresses on the known-good path after all
+   three fixes landed together (the spec's own "after all three are done" step) — each
+   fix was verified individually/via integration harness, not yet via one real live PR
+   cycle exercising all three at once.
 6. **`wait_for_all_threads_idle()` can't distinguish "genuinely finished" from "every
    thread hit a fatal session-level error"** (e.g. billing exhaustion mid-run, confirmed
    live on REQ-2026-03). `run_implementation_stage()` also archives unconditionally once
