@@ -1267,13 +1267,19 @@ completion).
    ceiling, no new outcome category beyond pass/fail/`not_applicable`. A build failure
    supersedes whatever the test suite already reported, since nothing about the suite can
    be trusted as deployable if the build itself is broken.
-   **No equivalent backend step was needed** — confirmed live by deliberately injecting a
-   compile error into REQ-2026-03's API project (not its test project) and running only
-   `dotnet test`: it failed with the real compiler error before producing a TRX report,
-   which `_run_backend_tests()`'s existing "no TRX produced" path already reports as a
-   genuine QA failure. `dotnet test`'s implicit build already covers the referenced API
-   project transitively via the test project's own `ProjectReference` — a separate
-   `dotnet build` step would be redundant.
+   **No equivalent backend step was needed** — confirmed live via two separate real
+   injected errors into REQ-2026-03's API project (not its test project), each followed
+   by running only `dotnet test` (never `dotnet build` directly) from the test project:
+   (1) a syntax error (garbage tokens) → `CS1733`/`CS1002`; (2) a genuine semantic type
+   error (`int x = "a string";`) → `CS0029: Cannot implicitly convert type 'string' to
+   'int'`, confirmed via the compiler's own diagnostic output, not assumed from
+   documented `ProjectReference` behavior. Both times `dotnet test` failed (exit 1)
+   before producing a TRX report, which `_run_backend_tests()`'s existing "no TRX
+   produced" path already reports as a genuine QA failure. `dotnet test`'s implicit
+   build already covers the referenced API project transitively via the test project's
+   own `ProjectReference` — a separate `dotnet build` step would be redundant. Both
+   injected errors were reverted immediately after (`git checkout --`/clone discarded),
+   confirmed via a clean `git status` / directory removal.
    Deliberately scoped to the language-level build only (not `docker build` — that needs a
    working Dockerfile, which for a request with none yet committed depends on Deploy
    Agent's own template-generation logic, out of order for Stage 4).
