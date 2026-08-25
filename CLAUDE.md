@@ -1350,11 +1350,40 @@ completion).
    `_MAX_RETRIES` on a genuine failure still runs and sets `qc-retry-limit-reached` for
    the first time, as today — only a *subsequent* dispatch after that point gets skipped;
    dry-run respects the ceiling and never reaches test execution.
-   **Not yet done:** a full, real Stage 4 → Stage 6 cycle against a currently-working
-   request end-to-end, to confirm nothing regresses on the known-good path after all
-   three fixes landed together (the spec's own "after all three are done" step) — each
-   fix was verified individually/via integration harness, not yet via one real live PR
-   cycle exercising all three at once.
+   **Full live Stage 4 → Stage 6 cycle completed 2026-08-25 — nothing regressed.** Ran
+   the spec's own closing step for real: removed `qa-approved`/`security-approved` from
+   issue #6 (kept `design-approved`), opened a real no-op PR (`forge-demo-apps#26`) on
+   `feature/REQ-2026-03` — the standard branch-naming convention, not the ad hoc-PR
+   fallback already covered by Item #17's verification — with the tracking-issue body
+   line, and let `notify-forge.yml` dispatch it for real.
+   **First attempt surfaced a real, unrelated infrastructure problem, not a fix
+   regression:** both QA and Security failed at the identical last step —
+   `anthropic.AuthenticationError: 401 - API key is invalid` — after all of their
+   deterministic work had already completed successfully. Confirmed from the raw log
+   that all three Pipeline Hardening fixes' actual mechanics ran correctly against
+   REQ-2026-03's real code before that unrelated failure: `dotnet test`, `npx vitest run`,
+   and (Fix 3's new step) `npm run build` all executed in the right working directories
+   with no crash in any of qa_agent.py's own new/changed logic. Confirmed the key itself
+   (not a GitHub-secrets-specific issue) was invalid by testing the identical local
+   `.env` value against a real Anthropic API call — same 401. Mike supplied a new key
+   (handed off via a local file, never pasted in chat, deleted immediately after use) and
+   updated both the local `.env` and the `forge-template` GitHub Actions secret himself.
+   **Re-dispatched the same PR after the key fix — genuinely passed for real:** QA
+   reported 39 backend + 29 frontend tests passing (Attempt 1 of 3), confirmed via the
+   raw log that `npm run build` actually ran and took **~33s** in real `ubuntu-latest` CI
+   (the authoritative timing figure — supersedes the earlier 417s Windows-Docker-bind-mount
+   estimate, which was correctly flagged at the time as likely inflated by cross-filesystem
+   I/O overhead, not real CI performance). Security reported a clean scan. Both
+   `qa-approved` and `security-approved` were genuinely reapplied by these fresh runs, not
+   carried over from before.
+   **Deploy fired automatically the moment both labels landed** (`06-deploy.yml`'s
+   `issues: labeled` trigger — inherent to the existing automated pipeline design, faster
+   than any external check-in could intercept between label-application and
+   workflow-trigger) and completed successfully for both units. **Verified independently
+   via `az containerapp show`** (not just trusting the Deploy Agent's PR comment) that
+   both live Container Apps' image tags exactly match PR #26's real head commit
+   (`ba994a8531fbd0b5dd8380bd885241230ed7be0e`) — a genuine, live redeploy, not a
+   simulated or dry-run one. Test PR closed and branch deleted immediately after.
 6. **`wait_for_all_threads_idle()` can't distinguish "genuinely finished" from "every
    thread hit a fatal session-level error"** (e.g. billing exhaustion mid-run, confirmed
    live on REQ-2026-03). `run_implementation_stage()` also archives unconditionally once
