@@ -1,9 +1,16 @@
 """
 FORGE QA Agent — Stage 4 (QA).
 
-Runs the actual test suite (xUnit for the .NET backend, Jest for the Next.js
-frontend) against a checked-out copy of the feature branch, parses the results,
-and:
+Runs the actual test suite (xUnit for the .NET backend, Jest/Vitest for the
+Next.js frontend) against a checked-out copy of the feature branch, parses
+the results, and:
+  - Also validates a real frontend production build (`npm run build`, i.e.
+    `next build`) alongside the frontend test suite (Pipeline Hardening
+    Fix 3) -- QA previously only ran unit tests, so a suite that passed
+    could still be undeployable; the backend needs no equivalent step, since
+    `dotnet test` already builds the referenced API project transitively
+    via its ProjectReference (confirmed live) and already reports a compile
+    failure as a genuine QA failure.
   - Files an ADO Bug for every failing test (title, description, repro steps,
     and severity are all built deterministically from parsed test output —
     Document 3's ADO field mapping marks every Bug field "FORGE (automatic)",
@@ -311,6 +318,25 @@ def _parse_trx(trx_path: Path) -> TestSuiteResult:
     )
 
 
+def _frontend_npm_script_exists(frontend_dir: str, script_name: str) -> bool:
+    """
+    Shared by _frontend_test_script_exists() (Phase 5 pre-flight Fix 3) and
+    _frontend_build_script_exists() (Pipeline Hardening Fix 3) -- both need
+    the identical "does package.json declare this script" check, just for a
+    different script name, so the package.json-reading logic lives in one
+    place rather than two copies.
+    """
+    package_json_path = Path(frontend_dir) / "package.json"
+    if not package_json_path.exists():
+        return False
+    try:
+        package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    script = package_json.get("scripts", {}).get(script_name)
+    return bool(script and script.strip())
+
+
 def _frontend_test_script_exists(frontend_dir: str) -> bool:
     """
     Phase 5 pre-flight Fix 3: a service where the frontend suite was never in
@@ -325,15 +351,70 @@ def _frontend_test_script_exists(frontend_dir: str) -> bool:
     field -- that's a real future enhancement (would also need a Design Agent
     change) but out of scope for this fix.
     """
-    package_json_path = Path(frontend_dir) / "package.json"
-    if not package_json_path.exists():
-        return False
+    return _frontend_npm_script_exists(frontend_dir, "test")
+
+
+def _frontend_build_script_exists(frontend_dir: str) -> bool:
+    """
+    Pipeline Hardening Fix 3: mirrors _frontend_test_script_exists()'s
+    not_applicable logic, but for the "build" script -- a service with no
+    frontend at all (backend-only) has no package.json here, so build
+    validation is correctly skipped as not_applicable rather than attempted
+    against a nonexistent directory. Deliberately independent of whether a
+    "test" script exists -- a frontend could plausibly have zero Jest/Vitest
+    tests but still need its production build validated.
+    """
+    return _frontend_npm_script_exists(frontend_dir, "build")
+
+
+def _validate_frontend_build(frontend_dir: str) -> TestSuiteResult:
+    """
+    Pipeline Hardening Fix 3: runs `npm run build` (Next.js's `next build`
+    via the team's package.json "build" script) and reports success/failure
+    the same way _run_frontend_tests() reports a collection failure -- High
+    severity, ran=False, run_failure_message set -- rather than inventing a
+    fourth outcome category beyond pass/fail/not_applicable.
+
+    Deliberately does NOT run `docker build` -- that's a heavier, slower
+    check that needs a working Dockerfile (which for a request with none yet
+    committed depends on Deploy Agent's own template-generation logic, out of
+    order for Stage 4) and pulls Deploy-Agent-specific concerns back into QA.
+    Scoped to the language-level build only, since that's what actually
+    would have caught the real incidents this fix exists for (a
+    lucide-react/aria-hidden type mismatch on REQ-2026-01, a vitest.config.ts
+    nested-vite-types conflict on REQ-2026-03) without needing Docker at all.
+
+    Confirmed live (2026-08-24) that `next build`'s pass/fail result can
+    differ between a bare local run and a real container: two apps that
+    failed to build on a Windows machine (REQ-2026-02, REQ-2026-03) build
+    cleanly inside a node:20-bullseye Linux container, matching this
+    workflow's actual ubuntu-latest runner and how Deploy Agent's own
+    `docker build` behaves -- only a genuine, OS-independent TypeScript
+    error (REQ-2026-01) reproduced on both. This step runs in CI, not on a
+    developer's machine, so it will see the Linux-container result.
+    """
     try:
-        package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    test_script = package_json.get("scripts", {}).get("test")
-    return bool(test_script and test_script.strip())
+        result = _run_shell(["npm", "run", "build"], cwd=frontend_dir)
+    except subprocess.TimeoutExpired:
+        return TestSuiteResult(
+            suite="frontend", ran=False, passed=0, failed=0, total=0,
+            failures=[],
+            run_failure_message=f"`npm run build` timed out after {_TEST_TIMEOUT_SECONDS}s.",
+        )
+
+    if result.returncode != 0:
+        tail = (result.stdout or "")[-3000:] + (result.stderr or "")[-1000:]
+        return TestSuiteResult(
+            suite="frontend", ran=False, passed=0, failed=0, total=0,
+            failures=[],
+            run_failure_message=(
+                f"`npm run build` failed (exit code {result.returncode}) -- the "
+                "production build itself is broken, independent of whatever the "
+                f"test suite reported. Tail of output:\n\n{tail}"
+            ),
+        )
+
+    return TestSuiteResult(suite="frontend", ran=True, passed=0, failed=0, total=0, failures=[])
 
 
 def _detect_frontend_test_runner(frontend_dir: str) -> str:
@@ -689,6 +770,22 @@ def run_qa_agent(
                 suite="frontend", ran=False, passed=0, failed=0, total=0,
                 failures=[], not_applicable=True,
             )
+
+        # Pipeline Hardening Fix 3: run alongside the existing test suite, not
+        # instead of it -- QA previously never ran a real production build at
+        # all, so a suite that passed its unit tests could still be
+        # completely undeployable (two real incidents: a lucide-react/
+        # aria-hidden type mismatch on REQ-2026-01, a vitest.config.ts
+        # nested-vite-types conflict on REQ-2026-03), and the first place
+        # that would actually be discovered was Stage 6 (Deploy). A build
+        # failure supersedes whatever frontend_result already held (pass,
+        # fail, or not_applicable) -- if the build itself doesn't work,
+        # nothing else about the frontend suite can be trusted as
+        # deployable, regardless of what the unit tests reported.
+        if _frontend_build_script_exists(frontend_dir):
+            build_result = _validate_frontend_build(frontend_dir)
+            if not build_result.ran:
+                frontend_result = build_result
 
         all_failures = list(backend_result.failures) + list(frontend_result.failures)
         # not_applicable suites are a real third outcome (Phase 5 pre-flight
