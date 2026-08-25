@@ -1549,8 +1549,9 @@ completion).
     same report were **not** included in this PR — only the `next` catch-up, since that
     was the specific ask.
 
-20. **One real, one false-alarm `next build` failure — corrected 2026-08-24 after
-    Linux-container re-verification.** Originally recorded 2026-08-21/22 (during PR #24's
+20. **One real (still unfixed), one false-alarm `next build` failure — diagnosis
+    corrected 2026-08-24 after Linux-container re-verification; REQ-2026-01's actual bug
+    remains open, see below.** Originally recorded 2026-08-21/22 (during PR #24's
     before/after test verification) as two pre-existing failures, both run locally on a
     Windows machine. Re-running both inside a `node:20-bullseye` Linux container (matching
     `04-qa.yml`'s actual `ubuntu-latest` CI environment, and how Deploy Agent's real
@@ -1561,15 +1562,27 @@ completion).
     its known-good live production deployment. Only REQ-2026-01's failure is genuine —
     confirmed identical on both Windows and Linux, as expected for a TypeScript
     type-checking error (OS-independent).
-    - **REQ-2026-01 (real, not fixed, tracked for future remediation):** TypeScript
-      compile error in `lib/app-insights.ts:70` — the `ReactPlugin` passed to
-      `extensions: [_reactPlugin]` isn't assignable to `ITelemetryPlugin`. Root cause: two
-      different, incompatible copies of `@microsoft/applicationinsights-core-js` get
-      resolved in `node_modules` — one top-level, one nested under
-      `@microsoft/applicationinsights-analytics-js`'s own dependency tree — whose
-      `ITelemetryPlugin`/`Tags` type shapes don't structurally match each other, so
-      TypeScript rejects the assignment even though both packages are semver-compatible at
-      the JS level. A classic duplicate-nested-package problem, not a real logic bug.
+    - **REQ-2026-01 — STILL BROKEN, genuinely unfixed as of 2026-08-25 (re-confirmed by
+      pulling `lib/app-insights.ts` fresh from `main` — line 70 is byte-identical to when
+      this was first found; nothing has touched this file since).** TypeScript compile
+      error at line 70 — the `ReactPlugin` passed to `extensions: [_reactPlugin]` isn't
+      assignable to `ITelemetryPlugin`. Root cause: two different, incompatible copies of
+      `@microsoft/applicationinsights-core-js` get resolved in `node_modules` — one
+      top-level, one nested under `@microsoft/applicationinsights-analytics-js`'s own
+      dependency tree — whose `ITelemetryPlugin`/`Tags` type shapes don't structurally
+      match each other, so TypeScript rejects the assignment even though both packages
+      are semver-compatible at the JS level. A classic duplicate-nested-package problem,
+      not a real logic bug.
+      **Important distinction, since this item's own title says "corrected":** what was
+      corrected here was the *diagnosis* (this failure is real; REQ-2026-02's identical
+      symptom was a false alarm) — not the underlying app code, which nobody has touched.
+      **What changed as a side effect of Fix 3 (Open Item #3, same session):** this bug is
+      no longer invisible to the pipeline — QA now correctly detects it and blocks
+      `qa-approved`, where before Fix 3 it would have silently passed. The bug itself is
+      unchanged and still needs a real fix (dedupe `@microsoft/applicationinsights-core-js`
+      in the dependency tree, or a type-cast workaround) — this is a genuine, still-open
+      action item, not something to file away as resolved just because Item #20's own
+      diagnosis-correction task is done.
     - **REQ-2026-02 (false alarm, no action needed):** the `TypeError: Cannot read
       properties of null (reading 'useContext')` prerender error on `/404`, `/500`,
       `/_not-found` only reproduces when running `next build` bare on this Windows
