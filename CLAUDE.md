@@ -1510,13 +1510,17 @@ completion).
     session confirmed unchanged afterward (same `forge-deploy-staging` SP as before — no
     switch, no cleanup needed).
 
-19. **Dependabot alert triage pass completed 2026-08-21** (per
-    `docs/FORGE-Dependabot-Triage-Spec.md`). Full report:
-    `docs/FORGE-Dependabot-Triage-Report-2026-08-21.md`. Data-gathering and
-    classification only — no packages upgraded, no alerts dismissed (report includes a
-    ready-to-run `gh api` dismissal list for the dev-only bucket, not yet executed,
-    awaiting Mike's go-ahead). 101 open alerts on `forge-demo-apps` (0 on
-    `forge-template`), a drift of 1 from the 102 recorded 2026-08-19. Headline finding:
+19. ~~**Dependabot alert triage pass completed 2026-08-21**~~ (per
+    `docs/FORGE-Dependabot-Triage-Spec.md`) — **FULLY CLOSED OUT.** Full report:
+    `docs/FORGE-Dependabot-Triage-Report-2026-08-21.md`. Originally data-gathering and
+    classification only. **The dev-only dismissal list (9 alerts: 44, 49, 50, 51, 76, 77,
+    82, 94, 95) was executed 2026-08-21 with Mike's explicit go-ahead** — each dismissal
+    independently re-verified afterward via a fresh per-alert `gh api` fetch confirming
+    `state: dismissed` (not just trusted from exit codes); open-alert count on
+    `forge-demo-apps` dropped 101 → 92 exactly as expected, confirming nothing outside
+    the intended 9 was touched. 101 open alerts on `forge-demo-apps` (0 on
+    `forge-template`) at the time of the pull, a drift of 1 from the 102 recorded
+    2026-08-19. Headline finding:
     REQ-2026-01/02 are pinned to `next@14.2.5` while REQ-2026-03 already runs
     `next@14.2.35` in production — 24 alert rows (12 CVEs, including 1 Critical) can
     close via a same-line patch bump with no major-version risk, previously
@@ -1530,9 +1534,10 @@ completion).
     **Update 2026-08-22:** the open question above is resolved — `az containerapp list`
     re-confirmed no `req-2026-01`-prefixed frontend Container App exists; its 33 alert
     rows are dormant-code risk, not live-traffic risk (report updated in place, same
-    file). **The triage report's headline `next` version-catch-up fix is now a real PR:**
-    `forge-demo-apps#24` bumps `next` 14.2.5 → 14.2.35 in both REQ-2026-01 and
-    REQ-2026-02, closing 24 alert rows (12 CVEs, 1 Critical). Both apps' Jest suites and
+    file). **The triage report's headline `next` version-catch-up fix is now a real,
+    merged PR:** `forge-demo-apps#24` (merged 2026-08-24) bumps `next` 14.2.5 → 14.2.35 in
+    both REQ-2026-01 and REQ-2026-02, closing 24 alert rows (12 CVEs, 1 Critical). Both
+    apps' Jest suites and
     `next build` were run twice each (before/after the bump) to isolate any real
     regression: Jest results are byte-identical before and after on both apps (REQ-01:
     38 pass / 6 pre-existing unrelated failures; REQ-02: 38/38 pass); `next build` also
