@@ -137,7 +137,12 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 _STAGE_NAME = "deploy"
-_SHELL_TIMEOUT_SECONDS = 1800  # 30 min ceiling per docker/az invocation
+_SHELL_TIMEOUT_SECONDS = 3600  # 60 min ceiling per docker/az invocation -- 1800s (30
+# min) was too tight for a real frontend docker build: it timed out a genuine REQ-2026-01
+# frontend deploy on 2026-08-26, then the identical build succeeded cleanly at 3600s with
+# zero app changes (Open Item #21) -- confirms this was a ceiling problem, not a slow/
+# broken build. That retry IS the live proof this value works; no separate live-deploy
+# re-verification was done for this change.
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _TEMPLATES_DIR = _REPO_ROOT / "core" / "agents" / "templates" / "dockerfiles"
