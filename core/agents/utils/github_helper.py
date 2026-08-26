@@ -351,6 +351,75 @@ def get_file_contents(path: str, branch: str = "main") -> str:
     return content
 
 
+def get_repo_tree(path_prefix: str, branch: str = "main") -> list[dict]:
+    """
+    List every blob under path_prefix in the target monorepo (forge-demo-apps),
+    via the Git Trees API (recursive=1), filtered client-side to entries whose
+    path starts with path_prefix.
+
+    Uses the GitHub App installation token — same cross-repo auth context as
+    get_file_contents(). Needed by the Codebase Ingestion Agent (Stage 0a),
+    which has to walk an entire services/<existing-service>/ subtree to decide
+    what to read — get_file_contents() only reads a single known path and
+    throws against a directory (the Contents API returns a JSON array with no
+    "content" key for a directory, not a single file object).
+
+    Confirmed live (2026-08-26) against forge-demo-apps: GET .../git/trees/main
+    ?recursive=1 resolves the bare branch name directly with no separate
+    branch->SHA lookup needed — no need for the two-call fallback this
+    docstring originally worried might be required.
+
+    Args:
+        path_prefix: Repo-relative path prefix to filter to, e.g.
+                     "services/REQ-2026-03/". Matched via a plain str.startswith()
+                     on each entry's path — pass a trailing "/" to avoid an
+                     accidental partial-segment match (e.g. "services/REQ-2026-1"
+                     matching "services/REQ-2026-10/...").
+        branch:      Branch or ref to read from (default "main").
+
+    Returns:
+        List of {"path": str, "size": int} dicts for blobs only (type == "blob"
+        — trees/subdirectories excluded, since callers just need file paths and
+        sizes to decide what to read). Empty list if nothing matches path_prefix
+        (including if the prefix doesn't exist at all — callers must treat an
+        empty result as "no matching folder," not silently as "empty folder";
+        see ingestion_agent.py's Layer 2 backstop).
+
+    Raises:
+        requests.HTTPError: If the branch/ref doesn't exist or the API call
+                             otherwise fails.
+    """
+    token = get_installation_token()
+    url = f"{_repo_url()}/git/trees/{branch}"
+    response = requests.get(
+        url,
+        headers=_auth_headers(token),
+        params={"recursive": 1},
+        timeout=30,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if data.get("truncated"):
+        logger.warning(
+            "get_repo_tree(%r, branch=%r): GitHub reported a TRUNCATED tree "
+            "(too many entries for one response) -- the returned list is "
+            "incomplete. Not expected for this repo's current size; if this "
+            "fires, the Trees API's recursive listing needs paginating per-"
+            "subdirectory instead of one flat call.",
+            path_prefix, branch,
+        )
+    blobs = [
+        {"path": entry["path"], "size": entry["size"]}
+        for entry in data.get("tree", [])
+        if entry["type"] == "blob" and entry["path"].startswith(path_prefix)
+    ]
+    logger.info(
+        "get_repo_tree(%r, branch=%r): %d blob(s) under prefix",
+        path_prefix, branch, len(blobs),
+    )
+    return blobs
+
+
 def post_pr_comment(pr_number: int, body: str) -> dict:
     """
     Post a comment on a pull request in the target monorepo (forge-demo-apps).
