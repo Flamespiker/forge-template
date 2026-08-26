@@ -173,6 +173,21 @@ def _extract_archive_to_file_dict(archive_bytes: bytes, expected_prefix: str) ->
     guard for every future run based on one unproven hypothesis about why it
     happened. Strict rejection stays the behavior. If this recurs, that's real
     evidence -- fix it then, with data, not a guess now. See CLAUDE.md.
+
+    Item #8: a second, narrower rejection rule follows the same strict-
+    rejection-no-auto-remap philosophy as the expected_prefix guard above --
+    any member with a literal ".github" path segment (not a substring match:
+    a legitimately named path like ".../mygithubutil/foo.cs" must NOT be
+    caught) is skipped with a warning. Two confirmed live incidents
+    (REQ-2026-01 commit 3397617, REQ-2026-02 commit 47b3fef) had a subagent
+    write a nested .github/workflows/*.yml file that's legal per every rule
+    in force but useless as CI (GitHub only recognizes .github/workflows/ at
+    the real repo root). This is a backstop for Design Agent's tasks.md
+    scope-boundary prompt fix (Item #8 Layer 1) -- catches it even if that
+    prompt guidance is imperfect. Never auto-promoted to the real repo-root
+    .github/workflows/ location -- that's a meaningfully higher-stakes action
+    than this fix's scope and should only ever happen as a deliberate human
+    decision.
     """
     files: dict[str, str] = {}
     with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as tar:
@@ -185,6 +200,14 @@ def _extract_archive_to_file_dict(archive_bytes: bytes, expected_prefix: str) ->
                     "Archive member '%s' is outside expected prefix '%s' -- skipping "
                     "(coordinator may have tarred the wrong working directory).",
                     path, expected_prefix,
+                )
+                continue
+            if ".github" in path.split("/"):
+                logger.warning(
+                    "Archive member '%s' is a nested .github/ path -- skipping "
+                    "(CI/workflow files are owned by forge-template, not "
+                    "generated per-request).",
+                    path,
                 )
                 continue
             extracted = tar.extractfile(member)
