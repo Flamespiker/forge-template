@@ -173,7 +173,7 @@ This is a suggestion, not a decision — confirm with Mike before writing the en
 
 1. `github_helper.get_repo_tree()` — build and live-test against a real service folder first, independent of everything else, since every subsequent piece depends on it working.
 2. `docs/Intake Template.xlsx` — fix the "Existing Service Name" example text (§3.3 Layer 1). Cheap, standalone, do it early so it's not forgotten once the code work gets absorbing.
-3. `ingestion_agent.py` — build against the tree function, including the §3.3 Layer 2 empty-tree backstop (comment-and-skip, no guessing). Dry-run test against a real service folder.
+3. `ingestion_agent.py` — build against the tree function, including the §3.3 Layer 2 empty-tree backstop (comment-then-raise, non-zero exit, no guessing — not a skip/exit-0 path). Dry-run test against a real service folder.
 4. `00-intake.yml` wiring — smallest, most mechanical piece once the agent works standalone.
 5. `requirements_agent.py` fetch + prompt update.
 6. `design_agent.py` fetch + prompt update.
