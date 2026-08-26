@@ -189,6 +189,30 @@ class SessionStillRunningError(RuntimeError):
         )
 
 
+class SessionBudgetExhaustedError(RuntimeError):
+    """
+    Raised when a thread's stop_reason is "budget_reached" — the thread is idle,
+    but only because it ran out of its token/turn budget mid-work, not because it
+    finished. This is a genuine failure, NOT a "still running, check back later"
+    case: a budget-exhausted thread is never coming back on its own, so it must
+    NOT be raised/handled as SessionStillRunningError (which means the opposite —
+    "leave it alone, it'll finish"). Deliberately a plain RuntimeError subclass,
+    not a SessionStillRunningError subclass, so run_implementation_stage()'s
+    generic `except Exception` cleanup (best-effort archive) handles it, the same
+    as any other genuine failure — see the module docstring note 8.
+    """
+
+    def __init__(self, session_id: str, detail: str):
+        self.session_id = session_id
+        self.detail = detail
+        super().__init__(
+            f"Session {session_id} has a thread that stopped with "
+            f"stop_reason=budget_reached — it is idle because it ran out of "
+            f"budget mid-work, not because it finished. Not recoverable by "
+            f"waiting longer. Detail: {detail}"
+        )
+
+
 def _headers() -> dict[str, str]:
     """Build the required headers for every Managed Agents API call."""
     return {
@@ -364,6 +388,12 @@ def poll_until_idle(
                           agents use agent_toolset_20260401 without always_ask policies,
                           so this should never occur in normal operation. Raises rather
                           than hanging indefinitely.
+    - "budget_reached"  → the coordinator's own session ran out of its token/turn
+                          budget mid-work. Idle here does NOT mean done — raises
+                          SessionBudgetExhaustedError rather than reporting success.
+                          This only covers the coordinator's own session-level idle
+                          event; a per-thread (subagent) budget exhaustion is a
+                          separate case handled by wait_for_all_threads_idle().
 
     Args:
         session_id: The session ID to poll.
@@ -374,9 +404,10 @@ def poll_until_idle(
         The final session status dict from the API.
 
     Raises:
-        TimeoutError:   If the session has not become idle within timeout_seconds.
-        RuntimeError:   If session.error events are found, stop_reason is requires_action,
-                        or the session reaches "terminated" status.
+        TimeoutError:                 If the session has not become idle within timeout_seconds.
+        RuntimeError:                 If session.error events are found, stop_reason is
+                                      requires_action, or the session reaches "terminated" status.
+        SessionBudgetExhaustedError:  If stop_reason is budget_reached.
     """
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -411,6 +442,15 @@ def poll_until_idle(
                         f"(stop_reason=requires_action). This is unexpected in FORGE's "
                         f"autonomous mode — check whether agent_toolset_20260401 has an "
                         f"always_ask permission policy set. Blocking event IDs: {blocking_ids}"
+                    )
+                if stop_reason.get("type") == "budget_reached":
+                    # The coordinator's own session-level budget exhaustion — a
+                    # distinct, simpler case from a per-thread subagent budget
+                    # exhaustion (see wait_for_all_threads_idle(), which covers
+                    # that case via the event stream since /threads has no
+                    # stop_reason field of its own).
+                    raise SessionBudgetExhaustedError(
+                        session_id, "coordinator session's own status_idle event"
                     )
 
             logger.info("Session %s reached idle (end_turn)", session_id)
@@ -593,6 +633,29 @@ def get_thread_statuses(session_id: str) -> list[dict]:
     ]
 
 
+def _raise_if_any_thread_budget_exhausted(session_id: str) -> None:
+    """
+    One-shot check (NOT part of the polling loop — see call site) for a
+    stop_reason=budget_reached "session.thread_status_idle" event on any
+    thread. The /threads status endpoint has no stop_reason field of its own;
+    this is the only place that distinction is exposed, per the module
+    docstring note 8/get_subagent_audit_trail()'s existing event-fetch.
+    """
+    audit_trail = get_subagent_audit_trail(session_id)
+    for thread in audit_trail["threads"]:
+        idle_events = [
+            e for e in thread["events"] if e.get("type") == "session.thread_status_idle"
+        ]
+        if not idle_events:
+            continue
+        stop_reason = idle_events[-1].get("stop_reason", {})
+        if stop_reason.get("type") == "budget_reached":
+            raise SessionBudgetExhaustedError(
+                session_id,
+                f"thread {thread['thread_id']} (agent={thread['agent_name']})",
+            )
+
+
 def wait_for_all_threads_idle(
     session_id: str,
     timeout_seconds: float = _COMPLETION_POLL_TIMEOUT,
@@ -613,10 +676,27 @@ def wait_for_all_threads_idle(
     ceiling is reached with threads still busy. Callers must NOT proceed to
     archive the session in that case.
 
+    Once every thread reports idle (the normal /threads status field), makes
+    ONE additional get_subagent_audit_trail() call to check each thread's event
+    stream for a stop_reason=budget_reached — the /threads endpoint's bare
+    "status" field cannot distinguish a thread that finished from one that went
+    idle only because it ran out of budget mid-work; that distinction only
+    exists in the per-thread event stream. This is deliberately done ONCE, only
+    at the point of declaring success — not on every poll iteration, which is
+    exactly the expensive-per-thread-event-fetch cost this function's polling
+    loop is designed to avoid (see get_thread_statuses()'s docstring). Raises
+    SessionBudgetExhaustedError if found, instead of returning success.
+
     If the threads endpoint doesn't expose a usable status field at all, this
     checks once, logs a warning, and returns immediately — there is nothing to
     gate on. Not expected to trigger on the current API (see the
     _THREAD_IDLE_STATUSES comment above), retained as a defensive fallback.
+
+    Raises:
+        SessionStillRunningError:    Threads still busy at the wait ceiling — NOT
+                                     a failure, see that exception's docstring.
+        SessionBudgetExhaustedError: A thread's stop_reason was budget_reached —
+                                     it is idle but did not genuinely finish.
     """
     deadline = time.monotonic() + timeout_seconds
     checked_status_field = False
@@ -654,6 +734,7 @@ def wait_for_all_threads_idle(
             logger.info(
                 "All thread(s) report idle for session %s: %s", session_id, statuses,
             )
+            _raise_if_any_thread_budget_exhausted(session_id)
             return
 
         if statuses != last_logged_statuses:
