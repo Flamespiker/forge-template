@@ -1408,12 +1408,12 @@ completion).
     `false`**, contradicting the originally-confirmed `true` from Step 4.8. Nothing any
     known session action changed it. Mike's call whether to flip it back now that the
     design-PR no-op-check fix removed the original reason an admin bypass was needed.
-11. **8 HIGH-severity `next@14.2.35` CVE findings have no 14.x backport** — accepted
-    ongoing risk from the deliberate decision to stay on the 14.x line, not a bug.
-    **Count refined 2026-08-21** (see Item #19's triage pass): the full "no 14.x
-    backport" population is actually 21 unique CVEs (8 High + 11 Medium + 2 Low), not
-    just the 8 HIGH ones — the disposition itself (accepted risk) is unchanged, only the
-    count was incomplete.
+11. **21 `next@14.2.35` CVE findings have no 14.x backport** (8 High + 11 Medium + 2 Low)
+    — accepted ongoing risk from the deliberate decision to stay on the 14.x line, not a
+    bug. **Count refined 2026-08-21** (see Item #19's triage pass): the original count
+    only tallied the 8 HIGH-severity findings; the full "no 14.x backport" population is
+    21 unique CVEs — the disposition itself (accepted risk) is unchanged, only the count
+    was incomplete.
 12. **Cost log (`docs/FORGE-pipeline-cost-log.md`) needs REQ-2026-03 figures backfilled**,
     including the Deploy Agent fix cycle.
 13. ~~**A `forge-template`-level Dependency-Check suppression file** for confirmed
