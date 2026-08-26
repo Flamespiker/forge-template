@@ -1246,6 +1246,19 @@ completion).
    `package.json`, all agent code). Every wiring so far (REQ-2026-03's
    `NEXTAUTH_SECRET`/`NEXTAUTH_URL`) has been a manual, one-off `--wire-keyvault-secret`
    invocation, not something Deploy Agent decides to do on its own.
+   **Concrete real-world instance, found 2026-08-26 (app-level, not fixed, not a
+   forge-mechanism bug — out of scope for that session's "forge mechanism, not apps"
+   filter):** `req-2026-01-email-worker` is crash-looping in staging — revision
+   `req-2026-01-email-worker--0000001` is `healthState: Unhealthy`/`runningState: Failed`,
+   its one replica stuck `NotRunning`/`Waiting`. Live container logs show an unhandled
+   `System.FormatException` on every startup attempt — `"The connection string could not
+   be parsed; either it was malformed or contains no well-known tokens"` — thrown
+   constructing `ServiceBusClient` at `Program.cs:20`. Pre-dates 2026-08-26's session
+   (the crash is in `EmailWorker`'s own code/config, unrelated to that session's
+   app-insights-fix image tag); the Service Bus connection string was apparently never
+   given a valid value — exactly the kind of secret Deploy Agent has no mechanism to
+   discover it needs, per this item. Left as-is deliberately — not investigated, not
+   fixed, flagged here for whenever this item gets picked up for real.
 2. ~~**REQ-2026-03's backend unit name doesn't fit Azure's Container App name length
    limit**~~ — **RESOLVED 2026-08-18.** `deploy_agent.py`'s `_validate_unit_name()`
    (raise-only) replaced with `_finalize_unit_name()` (deterministic truncation + 6-char
