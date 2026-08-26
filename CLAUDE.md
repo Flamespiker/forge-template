@@ -1583,6 +1583,33 @@ completion).
       in the dependency tree, or a type-cast workaround) — this is a genuine, still-open
       action item, not something to file away as resolved just because Item #20's own
       diagnosis-correction task is done.
+      - **Update 2026-08-25 — fixed via `forge-demo-apps#27` (open, not yet merged —
+        awaiting Mike's review).** Root cause confirmed precisely via `npm ls`:
+        `applicationinsights-react-js@3.4.3` pins `applicationinsights-common@^2.8.14`,
+        which hoists `core-js@2.8.18` to the top level, while `applicationinsights-web`'s
+        own tree needs `3.4.3`, resolved as a separate nested copy under
+        `applicationinsights-analytics-js` — a genuine 2.x/3.x type-shape mismatch
+        (`Tags`, `ITelemetryPlugin.setNextPlugin`), not a cosmetic duplicate. Confirmed
+        `applicationinsights-react-js`'s runtime bundle never `require()`s `core-js` at
+        all — it receives its `core` instance via duck-typed injection from the real
+        `ApplicationInsights` object at runtime — so forcing its resolved version is a
+        type-only change with no runtime risk. Fixed with a `package.json` `overrides`
+        entry pinning `applicationinsights-react-js`'s own `applicationinsights-common`/
+        `core-js` to `3.4.3`; the scoped type-cast fallback was not needed. `npm ls` now
+        shows a single deduped `core-js@3.4.3` resolution tree-wide (previously: `2.8.18`
+        top-level plus a separate nested `3.4.3`). Verified two ways: `next build` passes
+        cleanly inside a `node:20-bullseye` container (matching `04-qa.yml`'s
+        `ubuntu-latest` runner); and live via PR #27's real QA run — the raw CI log shows
+        `npm run build` completing with no failure reported, meaning Fix 3's
+        build-validation step (which would otherwise supersede the whole report) stayed
+        silent. **PR #27 has not reached `qa-approved`** — it landed `qa-loop-back` on 6
+        pre-existing, unrelated frontend Jest failures (`UploadPage`/`HistoryPage`
+        accessibility/DOM-query issues, byte-identical to the already-known baseline; ADO
+        Bugs #163-168 filed automatically), so Deploy never triggered. Those 6 failures
+        are a separate, already-known issue, deliberately left untouched here — out of
+        scope for this fix, tracked in ADO only per Mike's call, no further CLAUDE.md
+        entry for them. `security-approved` was reached cleanly (only the already-accepted
+        no-14.x-backport CVE population from Item #11).
     - **REQ-2026-02 (false alarm, no action needed):** the `TypeError: Cannot read
       properties of null (reading 'useContext')` prerender error on `/404`, `/500`,
       `/_not-found` only reproduces when running `next build` bare on this Windows
