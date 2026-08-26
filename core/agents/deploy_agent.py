@@ -553,6 +553,19 @@ def _build_containerapp_command(
             command += ["--set-env-vars", *env_var_args]
         return "update", command
 
+    # Item #22: staging_cfg["min_replicas"] (0) is only safe for a unit that can
+    # actually scale back up from zero. A unit with external ingress wakes on
+    # the next HTTP request (Container Apps' default HTTP-concurrency scaler) --
+    # confirmed live for req-2026-01-document-api. A unit with NEITHER ingress
+    # NOR a scale rule has nothing that can ever trigger it back up once scaled
+    # to zero -- confirmed live for req-2026-01-email-worker, which sat at
+    # minReplicas: 0 with no ingress and no scale.rules, meaning "scale to
+    # zero" there is a broken/stuck config, not a cost optimization. Deploy
+    # Agent doesn't generate any scale rule today (no KEDA or other rule is
+    # wired anywhere in this module), so unit.unit_type in _TARGET_PORTS
+    # (has ingress) is currently the complete "safe to scale to zero" test --
+    # if a future change adds real scale-rule generation, this needs revisiting.
+    min_replicas = staging_cfg["min_replicas"] if unit.unit_type in _TARGET_PORTS else 1
     command = [
         "az", "containerapp", "create",
         "--name", unit.name,
@@ -564,7 +577,7 @@ def _build_containerapp_command(
         "--registry-password", acr_password,
         "--cpu", str(staging_cfg["cpu"]),
         "--memory", str(staging_cfg["memory"]),
-        "--min-replicas", str(staging_cfg["min_replicas"]),
+        "--min-replicas", str(min_replicas),
         "--max-replicas", str(staging_cfg["max_replicas"]),
     ]
     if unit.unit_type in _TARGET_PORTS:
