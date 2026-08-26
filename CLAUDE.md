@@ -1384,20 +1384,106 @@ completion).
    both live Container Apps' image tags exactly match PR #26's real head commit
    (`ba994a8531fbd0b5dd8380bd885241230ed7be0e`) — a genuine, live redeploy, not a
    simulated or dry-run one. Test PR closed and branch deleted immediately after.
-6. **`wait_for_all_threads_idle()` can't distinguish "genuinely finished" from "every
+6. ~~**`wait_for_all_threads_idle()` can't distinguish "genuinely finished" from "every
    thread hit a fatal session-level error"** (e.g. billing exhaustion mid-run, confirmed
    live on REQ-2026-03). `run_implementation_stage()` also archives unconditionally once
-   idle, before confirming real output was produced.
+   idle, before confirming real output was produced.~~ — **RESOLVED 2026-08-26**, per
+   `docs/FORGE-Item6-Item8-Fix-Spec.md`. Two separately-fixable, separately-committed bugs:
+   - **Bug 6a (budget exhaustion invisible to idle detection):** the `/threads` status
+     endpoint uses `"idle"` for both a genuinely finished thread and one that only went
+     idle because it ran out of budget mid-work — that distinction only exists in the
+     per-thread event stream (`stop_reason: budget_reached`), which the polling loop
+     deliberately never fetched (too expensive per-interval). Added
+     `SessionBudgetExhaustedError` — a plain `RuntimeError` subclass, deliberately **not**
+     a `SessionStillRunningError` subclass, since a budget-exhausted thread is never
+     coming back on its own (unlike "still running"). `poll_until_idle()` now raises it
+     directly off the coordinator's own `status_idle` event.
+     `wait_for_all_threads_idle()` makes exactly one `get_subagent_audit_trail()` call —
+     only at the point of declaring success, not on every poll iteration — to check every
+     thread's event stream before returning.
+   - **Bug 6b (archived before validating real output existed):** the audit-fetch/archive
+     block in `run_implementation_stage()` was actually already correctly *ordered*
+     (fetch before archive) — the real gap was that nothing validated what was fetched.
+     The caller's own "did we get a real archive" check ran only *after*
+     `run_implementation_stage()` had already unconditionally archived, so by the time a
+     missing-output failure was discovered, the session's evidence trail was already gone
+     (the corroborating live incident: a $9.12 Stage 3 session with no
+     `implementation.tar.gz` produced, archived anyway). `run_implementation_stage()` now
+     takes an optional `expected_output_filename` param (default `None` = unchanged
+     behavior for any other caller); when given, it's checked via
+     `list_session_output_files()` after the existing `try/except` but before
+     `archive_session()` — **design fork resolved**: no new exception type was needed,
+     since a plain `RuntimeError` raised from that point (outside the `try` block, by
+     construction) propagates without ever touching the `try`'s best-effort-archive
+     cleanup path, mirroring `recover_implementation_session()`'s existing
+     check-before-archive pattern. Also returns `output_files` in the result dict (an
+     efficiency addition beyond the original spec) so the caller doesn't need a second,
+     redundant API call to locate the archive's file ID.
+   - **Verification:** a scoped local mock harness (matching the pattern already used for
+     Item #5) — 10 cases total across both bugs, mocking the threads/events endpoints and
+     `run_implementation_stage()`'s own dependencies, no real API calls — confirmed: (6a)
+     per-thread `budget_reached` raises rather than reporting success; a clean completion
+     is unaffected; a still-busy session never pays the extra events-fetch cost; the
+     coordinator-level case and the existing `requires_action` branch are both unaffected;
+     (6b) real output present → succeeds and archives exactly once, returning
+     `output_files`; output missing → raises and does **not** archive; the default
+     (no filename given) path is byte-for-byte unchanged; `SessionStillRunningError` is
+     unaffected; a genuine mid-run failure still gets best-effort archived as before
+     (proves the new check bypasses cleanup only for its own case, not generally).
+     **Deliberately deferred, not performed:** the spec's own acceptance criteria also
+     calls for a live, real Stage 3 dry-run end-to-end. Skipped this cycle on cost/time
+     grounds (historically 35-55+ min, $5-15+ per the pipeline cost log, plus
+     session/environment cleanup) — Mike's explicit call, given both changes are small,
+     isolated, and already covered by 10 mocked cases including explicit regression
+     checks on every untouched path. Live end-to-end verification of this fix is deferred
+     to the first real Stage 3-6 cycle of the next enhancement phase, not skipped
+     permanently — this is a deliberate deferral, not an oversight, and should not be
+     read as a claim that live verification already happened.
+   - Commits: `e300ddc` (Bug 6a), `24ceb85` (Bug 6b).
 7. **Archive-prefix mismatch, confirmed once on REQ-2026-02, root cause unconfirmed** —
    the Implementation Coordinator's packaging command may be cwd-relative rather than
    pinned to the sandbox root. `_extract_archive_to_file_dict()`'s prefix guard is kept
    strict (rejects, doesn't auto-remap) per Mike's explicit call; worth investigating
    properly only if it recurs.
-8. **CI-workflow scope creep** — the Implementation Coordinator/subagents have twice
+8. ~~**CI-workflow scope creep** — the Implementation Coordinator/subagents have twice
    (REQ-2026-01, REQ-2026-02) generated unrequested, non-functional
    `.github/workflows/*.yml` files nested under `services/<id>/` (never discoverable by
    GitHub Actions there), cleaned up manually both times. Root cause (why the model keeps
-   generating these unprompted) never diagnosed.
+   generating these unprompted) never diagnosed.~~ — **RESOLVED 2026-08-26**, per
+   `docs/FORGE-Item6-Item8-Fix-Spec.md`. Root cause confirmed: `design_agent.py`'s
+   `tasks.md` prompt section put no restriction on what kind of deliverable a task item
+   could describe, so nothing told the model that CI/CD infrastructure — fixed, owned by
+   `forge-template`, never regenerated per-request — was out of scope for a
+   Backend/Frontend/Test Writer task item. Two historical incidents confirmed real via
+   `git log` in `forge-demo-apps`: REQ-2026-01 (`3397617`, cleaned up in `0f5f1c5`) and
+   REQ-2026-02 (`47b3fef`, cleaned up in `ba3b3a7`). Fixed as a **prevention + backstop
+   pair** — either layer alone leaves a gap:
+   - **Layer 1 (prevention, prompt-only):** `_SYSTEM_PROMPT`'s `tasks.md` section now
+     states explicitly that task items must describe only files under
+     `services/<request-id>/`; CI/CD and other repo-root infrastructure must never be
+     proposed. Scoped to `tasks.md`'s task items specifically — `design.md`'s own
+     architecture narrative can still mention GitHub Actions as a fixed core-layer
+     choice, unaffected.
+   - **Layer 2 (backstop, extraction-time guard):** `_extract_archive_to_file_dict()`
+     gained a second rejection rule alongside its existing `expected_prefix` guard —
+     same strict-rejection-no-auto-remap philosophy: any archive member with a literal
+     `.github` path segment is skipped with a warning. Matches on an exact path segment
+     (`path.split("/")`), not a substring, so a legitimately named path like
+     `.../mygithubutil/foo.cs` is never false-flagged. Never auto-promotes a nested
+     `.github/` file to the real repo-root location — that stays a deliberate human
+     decision.
+   - **Verification:** Layer 2 confirmed via an adversarial local harness building real
+     in-memory `tar.gz` fixtures (no mocking — the function is pure bytes-in/dict-out):
+     a nested `.github/workflows/fake.yml` member is skipped while sibling legitimate
+     files still extract; the required negative case (`github` as a path/filename
+     *substring*, e.g. `mygithubutil/`) is correctly **not** caught; a normal archive
+     with zero `.github` content is unaffected; the existing `expected_prefix` guard is
+     unaffected. Layer 1 confirmed via a **live** single Messages API call (not just
+     mocked) against deliberately adversarial synthetic requirements text explicitly
+     asking for "a CI/CD pipeline configuration" — the real patched prompt produced a
+     `tasks.md` with zero CI/CD-flavored task items, correctly redirecting the ask into
+     backend/frontend test infrastructure instead ($0.09, single call).
+   - Commits: `78a2f3f` (Layer 1), `5ef29de` (Layer 2).
 9. **Admin-merge pattern for ad hoc `fix/*` branches — 4 occurrences (PRs #7, #8, #11,
    #16).** Each hit the permanently-unsatisfiable `security-check` (only `feature/*`/
    `design/*` branches get dispatched a real or no-op check) plus no review, resolved via
