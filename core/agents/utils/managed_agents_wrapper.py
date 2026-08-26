@@ -841,6 +841,7 @@ def run_implementation_stage(
     coordinator_model: str | None = None,
     subagent_model: str | None = None,
     timeout_seconds: int = _DEFAULT_TIMEOUT,
+    expected_output_filename: str | None = None,
 ) -> dict[str, Any]:
     """
     Convenience wrapper: create a session, send the initial message, wait for completion,
@@ -857,6 +858,15 @@ def run_implementation_stage(
         coordinator_model: Optional coordinator model override.
         subagent_model: Optional subagent model override.
         timeout_seconds: Maximum wait time for the session to complete.
+        expected_output_filename: If given, the session must have written a file
+            of exactly this name to /mnt/session/outputs/ before this function
+            will archive it — mirrors recover_implementation_session()'s existing
+            pre-archive output check (see Item #6 Bug 6b: previously this
+            function archived unconditionally, and the caller's own "did we get
+            real output" check ran only AFTER archiving had already destroyed the
+            session's evidence trail). Default None skips the check entirely,
+            preserving today's behavior for any other caller that doesn't
+            produce a single named output archive.
 
     Returns:
         Dict with keys:
@@ -866,6 +876,12 @@ def run_implementation_stage(
                                  needs to report or recover this session later
             "audit_trail"     — raw per-subagent events from the API
             "final_status"    — the session status dict at completion
+            "output_files"    — list_session_output_files() result, fetched once
+                                 here (needed for the expected_output_filename
+                                 check when given) and handed back so a caller
+                                 that needs to locate a specific file (e.g. to
+                                 download it) doesn't have to pay for the same
+                                 API call a second time.
 
     Raises:
         SessionStillRunningError: The coordinator's own turn ended normally but
@@ -875,6 +891,15 @@ def run_implementation_stage(
             coordinator_id/environment_id/subagent_ids attached (the exception
             as raised by wait_for_all_threads_idle() only knows session_id).
             Callers must treat this distinctly from a real failure.
+        RuntimeError: expected_output_filename was given but the session, though
+            genuinely idle, produced no file of that name. Raised BEFORE
+            archiving — the session is left alive so the evidence trail (the
+            actual sandbox state) isn't destroyed. This is a plain RuntimeError,
+            not a new exception subclass, and is raised from outside the
+            try/except above — it never touches the best-effort-archive cleanup
+            path that a genuine mid-run failure goes through, by construction
+            (it can only be reached once wait_for_all_threads_idle() has already
+            returned successfully).
     """
     ids = create_agent_session(
         coordinator_system_prompt=coordinator_system_prompt,
@@ -933,6 +958,27 @@ def run_implementation_stage(
     # matching the original working order).
     audit_trail = get_subagent_audit_trail(session_id)
     final_status = _get(f"sessions/{session_id}")
+    output_files = list_session_output_files(session_id)
+
+    # Item #6 Bug 6b: validate real output BEFORE archiving, not after -- an
+    # archived session's evidence trail is gone. Deliberately outside the
+    # try/except above (can only be reached once wait_for_all_threads_idle()
+    # has already returned successfully), so this plain RuntimeError bypasses
+    # that block's best-effort-archive cleanup entirely rather than needing a
+    # new exception type/except clause to opt out of it -- see recover_
+    # implementation_session()'s identical check for the equivalent recovery-
+    # path pattern.
+    if expected_output_filename is not None:
+        found = any(f.get("filename") == expected_output_filename for f in output_files)
+        if not found:
+            raise RuntimeError(
+                f"Session {session_id} is idle but produced no "
+                f"'{expected_output_filename}' in /mnt/session/outputs/. Files "
+                f"present: {[f.get('filename') for f in output_files]}. This "
+                "session genuinely failed -- leaving it alive (not archived) so "
+                "it remains inspectable."
+            )
+
     archive_session(coordinator_id, environment_id, session_id, subagent_ids)
 
     log_entry_done = {
@@ -950,4 +996,5 @@ def run_implementation_stage(
         "subagent_ids": subagent_ids,
         "audit_trail": audit_trail,
         "final_status": final_status,
+        "output_files": output_files,
     }

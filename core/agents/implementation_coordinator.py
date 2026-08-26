@@ -473,19 +473,17 @@ def run_implementation_coordinator(
             coordinator_system_prompt=_COORDINATOR_SYSTEM_PROMPT,
             subagent_configs=subagent_configs,
             initial_message=initial_message,
+            expected_output_filename=_ARCHIVE_FILENAME,
         )
         session_id = result["session_id"]
 
-        output_files = list_session_output_files(session_id)
+        # run_implementation_stage() already guarantees (via
+        # expected_output_filename) that this file exists and the session was
+        # NOT archived otherwise -- see Item #6 Bug 6b. output_files is reused
+        # from its return value rather than re-fetched here.
         archive_meta = next(
-            (f for f in output_files if f.get("filename") == _ARCHIVE_FILENAME), None
+            f for f in result["output_files"] if f.get("filename") == _ARCHIVE_FILENAME
         )
-        if archive_meta is None:
-            raise RuntimeError(
-                f"Coordinator session {session_id} completed but did not produce "
-                f"'{_ARCHIVE_FILENAME}' in /mnt/session/outputs/. Files present: "
-                f"{[f.get('filename') for f in output_files]}"
-            )
         archive_bytes = download_file_content(archive_meta["id"])
         files_to_commit = _extract_archive_to_file_dict(archive_bytes, expected_prefix=service_root)
         _sanity_check_extracted_files(files_to_commit, service_root, tasks_md)
