@@ -108,6 +108,16 @@ read this file in Stage 3. Each task should be concrete and scoped enough that a
 subagent can pick it up and know what to build, and should reference the \
 design.md component and requirement ID it serves.
 
+tasks.md scope boundary — this is strict: every task item must describe only \
+files that live under services/<request-id>/ (backend, frontend, or tests). Do \
+NOT propose a task for a CI/CD workflow, pipeline configuration, or any other \
+repository-root infrastructure — those are owned by the FORGE template itself, \
+are already fixed for every request, and are never something the Backend, \
+Frontend, or Test Writer subagents should build. This does not apply to \
+design.md's own architecture narrative, which may still discuss CI/CD (e.g. \
+"GitHub Actions") as part of the fixed core-layer tech choices above — the \
+boundary is on tasks.md's per-subagent task items specifically.
+
 Output format — this is strict:
 Respond with ONLY a single JSON object, no markdown code fences, no prose before \
 or after it. It must have exactly this shape:
