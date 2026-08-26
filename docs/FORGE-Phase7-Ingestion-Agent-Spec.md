@@ -99,7 +99,13 @@ python -m core.agents.ingestion_agent \
 python -m core.agents.ingestion_agent --existing-service REQ-2026-03 --dry-run
 ```
 
-- `--existing-service` — the value from the intake spreadsheet's "If Enhancement — Existing Service Name" field, used to build the `services/<existing_service>/` prefix. Confirm live whether this field's real stored value is already the bare request ID (`REQ-2026-03`) or free text a BA might type differently (e.g. "On-Call Roster Tracker") — if it's free text, this agent needs a mapping step or the field itself needs tightening; don't assume it's always a clean folder name without checking a real filled-in spreadsheet.
+- `--existing-service` — the value from the intake spreadsheet's "If Enhancement — Existing Service Name" field, used to build the `services/<existing_service>/` prefix.
+
+  **Resolved during live verification (2026-08-26):** this field's real template example text (`docs/Intake Template.xlsx`) reads *"[Example: client-portal (the folder name under services/ in the monorepo)]"* — a descriptive-slug example that doesn't match how `services/` folders are actually named in the live monorepo (`services/REQ-2026-01/`, `services/REQ-2026-03/`, request-ID-based, not slugs). This is a real, confirmed mismatch, not a hypothetical one — fix it two-layered, same pattern as Item #8's `.github/` guard:
+  1. **Source fix:** correct the template's example text to instruct the BA to enter the exact real `services/<request-id>/` folder name (e.g. `REQ-2026-03`), not a descriptive slug. Small, standalone `docs/Intake Template.xlsx` edit in `forge-template` — do this as its own commit, separate from the agent code.
+  2. **Defensive backstop:** if `get_repo_tree(f"services/{existing_service}/")` returns empty (no blobs under that prefix), do **not** silently fall back to guessing `request_id` or any other value — that would be exactly the kind of silent auto-correction this codebase has already deliberately rejected once (Item #8's `.github/` guard explicitly chose "strict rejection over silent auto-remap"). Instead: log a clear warning, post a best-effort comment on the tracking issue naming the mismatch (the value that was given and the fact that no matching `services/` folder was found), and exit without committing a summary — this degrades exactly the same way a missing/failed ingestion already degrades for Requirements/Design (§4.2/§4.3's graceful-absence handling), just with a clearer signal to the human about *why* it's missing. A human resolves the real mismatch; the agent never guesses.
+
+  The "Request Type" field itself is also confirmed live as plain free text (not a checkbox, despite Document 02's description) — the spec's case-insensitive matching in §4.1 is the right call, not overkill.
 - `--dry-run` — same contract as every other agent: print `existing-architecture-summary.md` to stdout instead of committing/posting.
 - Wrap `invoke_agent()` in try/except at the call site per ADR-0011 (ingestion_agent.py currently doesn't exist, so there's no existing pattern to preserve here — just follow the established one). On failure, best-effort post a failure comment to the tracking issue (real run only), then re-raise.
 
@@ -164,11 +170,12 @@ This is a suggestion, not a decision — confirm with Mike before writing the en
 ## 7. Sequencing
 
 1. `github_helper.get_repo_tree()` — build and live-test against a real service folder first, independent of everything else, since every subsequent piece depends on it working.
-2. `ingestion_agent.py` — build against that tree function, dry-run test.
-3. `00-intake.yml` wiring — smallest, most mechanical piece once the agent works standalone.
-4. `requirements_agent.py` fetch + prompt update.
-5. `design_agent.py` fetch + prompt update.
-6. Full-chain live test (§5, last bullet).
-7. `CLAUDE.md` close-out.
+2. `docs/Intake Template.xlsx` — fix the "Existing Service Name" example text (§3.3 Layer 1). Cheap, standalone, do it early so it's not forgotten once the code work gets absorbing.
+3. `ingestion_agent.py` — build against the tree function, including the §3.3 Layer 2 empty-tree backstop (comment-and-skip, no guessing). Dry-run test against a real service folder.
+4. `00-intake.yml` wiring — smallest, most mechanical piece once the agent works standalone.
+5. `requirements_agent.py` fetch + prompt update.
+6. `design_agent.py` fetch + prompt update.
+7. Full-chain live test (§5, last bullet) — include one deliberate mismatch case (a nonexistent `--existing-service` value) to confirm the Layer 2 backstop fires cleanly, not just the happy path.
+8. `CLAUDE.md` close-out.
 
 Do not start on Build Plan 7.2 (choosing/writing the enhancement intake spreadsheet) in this session — that's explicitly the next chat, per the one-doc-per-chat convention, and depends on Mike confirming §6's direction first.
