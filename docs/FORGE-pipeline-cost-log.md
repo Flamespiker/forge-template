@@ -39,6 +39,7 @@
 | 2026-07-29 | REQ-2026-01 | Real | 2,281 | 3,876 | $0.064983 | 62.5 s | `requirements.md` + `ado-work-items.json` committed to `main` (predates the Phase 4 step 4.8 `pipeline-state` branch retrofit). Figure sourced from `CLAUDE.md`'s requirements_agent.py build notes — was previously marked "cost not captured," corrected 2026-08-13. |
 | 2026-08-10 | DRYRUN-2026-01 | Real | 2,154 | 3,158 | $0.053832 | 51.04 s | Succeeded on retry after a real GitHub Actions platform incident (15:22–15:53 UTC). Confirmed `requirements.md`/`ado-work-items.json` correctly landed on `pipeline-state`, validating the chat 38 branch-routing fix against a fresh request for the first time. |
 | — | REQ-2026-02 | — | — | — | **Not captured** | — | `FORGE-Phase5-Closeout.md` cites $0.053832 for this run, but that figure is byte-identical to DRYRUN-2026-01's row above (same tokens, same duration) — almost certainly a copy/attribution error in the closeout doc, not a real REQ-2026-02 data point. Logged as a gap rather than transcribing a number that doesn't check out. Replace this row if the real figure surfaces. |
+| 2026-08-14 | REQ-2026-03 | **Real** | 3,354 | 6,353 | $0.105357 | 104.0 s | Single attempt, `end_turn`, no retries. Source: `agent_invocation` log line, `01-requirements.yml` run `31816043997`. |
 
 ### Design (Spec & Design) — `design_agent.py`
 
@@ -54,6 +55,8 @@
 | 2026-07-30 | REQ-2026-01 | Dry run | 11,868,067 | 358,148 | 125,693 | 253 | **$7.65** | 2,309 s (~38.5 min) | Pre-shared-docs-patch. 96 files, 156,728-byte archive. |
 | 2026-07-30 | REQ-2026-01 | **Real** | 17,512,129 | 604,497 | 235,190 | 239 | **$12.31** | 3,310.6 s (~55.2 min) | Post-shared-docs-patch (Backend/Frontend read `design.md`/`openapi.yaml`/`tasks.md` directly instead of via coordinator relay). PR #5 opened, 101 files → 98 after stripping 3 unrequested files (CI workflow, compliance checklist, verify script). **+61% cost / +43% duration vs. dry run — attributed to the extra real file reads the patch introduced, not a regression.** |
 | 2026-08-11 | REQ-2026-02 | **Real** | 6,684,549 | 420,976 | 138,996 | 155 | **~$6.63** (`usage.list_cost.amount` from `GET /sessions/{id}`, units as returned by the API — not cross-checked against the Console) | 2,218.4 s active (~37.0 min, from `usage.active_seconds`); 2,199 s (~36m39s) wall-clock from session creation to `implementation.tar.gz` appearing | Pulled directly from `GET /sessions/{id}`'s own `usage` object post-hoc — confirms that endpoint DOES carry cost/token data (open question flagged in §3 below), closing that gap for future rows without a Console visit. **First real two-service (.NET backend + Next.js frontend) build since the 03-implementation.yml GitHub Actions job's own fixed archive-wait budget was ~246s (Phase 5 pre-flight Fix 1: 120s thread pre-check + ~126s archive retry-backoff) — the job failed outright at that ceiling while the session kept working legitimately in the background, confirmed via a live read-only thread-status poll (`test_writer_agent` still `running` well past the job's own failure). Recovered manually after the fact; see CLAUDE.md for the incident and the resulting fix to `archive_session()`.** Notably, this ~37-minute duration is consistent with — not an outlier against — the REQ-2026-01 dry-run (38.5 min) and real (55.2 min) durations already recorded above; the 246s budget was never going to be enough for a real Stage 3 run and that should have been visible from this table alone before Fix 1 shipped. |
+| 2026-08-14 | REQ-2026-03 | Real (failed) | 15,445,573 | 376,760 | 140,774 | 241 | **$9.12** | 2,464.9 s active (~41.1 min) | Session completed but never produced `implementation.tar.gz` (`RuntimeError: ... Files present: []`) — the `03-implementation.yml` run (`31833478314`) still failed and fully archived this session despite zero usable output, a real billed wasted attempt. This is the live incident behind Open Item #6 (idle-vs-fatal-error blindness) and its separate "archives unconditionally, before checking output" gap — see CLAUDE.md/Item #6 diagnosis. Figures pulled live from `GET /v1/sessions/sesn_0135RbeieLaZVoamUVymowtT`. |
+| 2026-08-15 | REQ-2026-03 | Real (recovered) | 10,297,075 | 435,212 | 135,497 | 197 | **$7.95** | 2,263.2 s active (~37.7 min) | Recovered via `--recover-session` after the failed session above sat idle ~11h wall-clock before manual recovery (`duration_seconds` 39,575 reflects that wait, not compute — `active_seconds` is the real figure). Produced `implementation.tar.gz`, committed to `feature/REQ-2026-03`, PR #20 opened. Figures from `GET /v1/sessions/sesn_01BJBnYKAc6ontnMnUxDFmy8`. |
 
 ### QA — `qa_agent.py`
 
@@ -62,6 +65,7 @@
 | 2026-08-04 | REQ-2026-01 | **Real** | 3,361 | 947 | $0.024288 | 15.58 s | First fully real end-to-end QA run, against genuinely clean post-infra-fix checkout. 8 real ADO Bugs filed (#96–103), PR #5 comment posted, `qa-loop-back` applied (attempt 1). |
 | 2026-08-10 | DRYRUN-2026-01 | Real | — | — | **Not captured** | — | Backend-only service; `qa-approved` on attempt 1, frontend correctly reported `not_applicable`. No cost figure was recorded in any session note for this run. |
 | — | REQ-2026-02 | Real (3 attempts) | — | — | **$0.013425 — partial, unattributed** | — | 3 real automated attempts (2 failed on genuine backend/frontend bugs, one retry consumed by an unrelated CI-file-cleanup `synchronize` trigger firing QA unnecessarily; 3rd attempt passed clean, 54/54 backend + 44/44 frontend). `FORGE-Phase5-Closeout.md`'s $0.013425 figure is not attributed to a specific attempt and may not represent the full 3-attempt total — flagged as incomplete rather than treated as final. Not included in §3 cumulative totals until resolved. |
+| 2026-08-15 → 2026-08-25 | REQ-2026-03 | Real (14 invocations across PRs #20/#21/#22/#23/#26) | — | — | **$0.095145** (sum of all 14, each pulled from its own `agent_invocation` log line) | — | Spans the full fix-cycle history: initial post-recovery QA on PR #20 (7 costed runs, 2026-08-15→17, converging on `qa-approved`); the Azure AD/NextAuth fix cycle on PR #21 (4 costed runs + 1 zero-cost failure — the Item #15 ad hoc-PR tracking-issue-line gap); the `SHIFT_ALREADY_CLAIMED` wording fix on PR #22 (1 run); the throwaway `resolve_feature_pr()` verification PR #23 (1 run); the Pipeline-Hardening verification cycle on PR #26 (1 zero-cost run — the real `401 API key is invalid` infra incident — then 1 costed run after the key fix, genuinely passed). The 2 zero-cost dispatches are genuinely $0 (failed before the Claude call ran), not omissions. |
 
 ### Security — `security_agent.py`
 
@@ -71,10 +75,13 @@
 | 2026-08-05 | REQ-2026-01 | Dry run | — | — | $0.005637 | 5.76 s | Post-Gitleaks-allowlist-fix dry run. |
 | 2026-08-05 | REQ-2026-01 | **Real** | 599 | 269 | $0.005832 | 5.37 s | All three scanners clean (0 findings). `security-check` check run created on PR #5 head commit `0f5f1c57`, conclusion `success`. `security-approved` applied. |
 | — | REQ-2026-02 | Real | — | — | **Not captured** | — | Found and fixed one genuine High-severity Semgrep finding (`backend/Dockerfile` missing `USER` directive). No dollar figure was recorded anywhere in session notes for this run — genuine gap, not a zero. |
+| 2026-08-15 → 2026-08-25 | REQ-2026-03 | Real (13 invocations across PRs #20/#21/#22/#23/#26) | — | — | **$0.123297** (sum of all 13) | — | Same PR/date span as the QA row above. 3 real dispatches produced $0: PR #20's one run hit a GitHub-infra `503` downloading `actions/setup-java` before ever reaching PR resolution or the agent; PR #21 and PR #26 hit the same two incidents noted in the QA row (tracking-issue-line gap; API-key incident). All costed runs found scanners clean or only already-accepted findings (see Item #11/#19's no-14.x-backport CVE population) — no Critical finding blocked this request on any of these runs. |
 
 ### Deploy — `deploy_agent.py`
 
 No table — **this stage never calls Claude or the Messages API** (see §1). Unit detection, Dockerfile generation, and PR comments are fully deterministic. Anthropic API cost is $0 for every run, by design. If Azure/infrastructure cost tracking is ever wanted for this stage, it belongs in a separate ledger — out of scope for this Anthropic-API-focused log.
+
+**REQ-2026-03 real-run history (2026-08-15 → 2026-08-25), $0 API cost throughout as always:** 6 automated `06-deploy.yml` triggers on issue #6 — 2 were gate-skips (only one of the two required labels present at that moment, not real attempts), 3 were real attempts that failed before reaching a live Azure operation (the pre-Item-#17 `resolve_feature_pr()` gap twice, then the Item #18 `az login`-ordering bug once — all since fixed), and 1 was a real, successful deploy (2026-08-25, both `req-2026-03-on-call-rost-5bb949` and `req-2026-03-frontend` updated to PR #26's head commit `ba994a85...`). Per CLAUDE.md's prose, at least two further manual local `deploy_agent.py` invocations also happened outside `06-deploy.yml` (the 2026-08-18 unit-naming-fix verification; the PR #22 `SHIFT_ALREADY_CLAIMED` fix's manual deploy) — these left no GitHub Actions log to pull from and aren't independently re-verified here beyond what CLAUDE.md already states.
 
 ---
 
@@ -83,13 +90,13 @@ No table — **this stage never calls Claude or the Messages API** (see §1). Un
 | Stage | Runs Recorded | Total Cost (USD) |
 |---|---|---|
 | Intake | 1 | $0.010215 |
-| Requirements | 2 (+1 gap: REQ-2026-02 not captured, see note above) | $0.118815 |
+| Requirements | 3 (+1 gap: REQ-2026-02 not captured, see note above) | $0.224172 |
 | Design | 2 | $0.399757 |
-| Implementation | 3 | $26.59 |
-| QA | 1 (+2 gaps: DRYRUN-2026-01 not captured, REQ-2026-02 partial/unattributed — excluded from this total) | $0.024288 |
-| Security | 3 (+1 gap: REQ-2026-02 not captured) | $0.018009 |
+| Implementation | 5 (incl. REQ-2026-03's 1 failed + 1 recovered session) | $43.66 |
+| QA | 15 (+2 gaps: DRYRUN-2026-01 not captured, REQ-2026-02 partial/unattributed — both still excluded from this total; REQ-2026-03's 2 zero-cost failed dispatches ARE included, at their genuine $0) | $0.119433 |
+| Security | 16 (+1 gap: REQ-2026-02 not captured) | $0.141306 |
 | Deploy | N/A — $0 by design, not a gap | $0 |
-| **Total (costed runs only)** | | **$27.16** |
+| **Total (costed runs only)** | | **$44.55** |
 
 This excludes Managed Agents' separate $0.08/session-hour billing component, which is already folded into the $12.31/$7.65 figures above per the Console's `list_cost` — worth confirming that assumption the first time `GET /v1/sessions/{id}`'s own cost field (if one exists) is checked against the Console total, since right now both Stage 3 rows are taken as a single all-in number rather than split token-cost vs. session-hour-cost.
 
