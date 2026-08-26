@@ -1769,18 +1769,81 @@ completion).
       and unrelated to the version bump) has been corrected with a follow-up PR comment —
       the version bump itself is unaffected either way, but the build-failure claim for
       REQ-2026-02 specifically was wrong and needed retracting, not just the bump's safety.
-21. **Deploy Agent's `_SHELL_TIMEOUT_SECONDS` (1800s) is too tight for real frontend
-    builds** — confirmed by Item #20's retry succeeding cleanly at 3600s with zero app
-    changes (the frontend build itself wasn't slow/broken; the ceiling was just too low).
-    Recommend bumping the default at some point; not urgent — not fixed now.
-22. **Deploy Agent doesn't wire any scale rule (KEDA or otherwise) for non-ingress worker
-    units.** `req-2026-01-email-worker` has `minReplicas: 0` but no ingress and no
-    `scale.rules` — nothing that can trigger it back up once scaled down, meaning
-    "scale-to-zero" isn't actually safe for this unit type as currently generated (unlike
-    an ingress-backed "web" unit, which wakes on the next HTTP request). Not fixing now;
-    `req-2026-01-email-worker` is being left running as-is, deliberately deferred.
+21. ~~**Deploy Agent's `_SHELL_TIMEOUT_SECONDS` (1800s) is too tight for real frontend
+    builds**~~ — **RESOLVED 2026-08-26.** Confirmed via `grep`/read that this is the exact
+    constant governing `_docker_build()`'s (and every other `_run_shell()` caller's)
+    default timeout — the same one that timed out the real REQ-2026-01 frontend deploy
+    during Item #20's fix cycle. Bumped `1800 → 3600`, one-line value change, no other
+    logic touched. No separate live-deploy re-verification performed for this change —
+    Item #20's earlier retry at 3600s (zero app changes, succeeded cleanly) already **is**
+    the live proof this value works. Commit: `ac13529`.
+22. ~~**Deploy Agent doesn't wire any scale rule (KEDA or otherwise) for non-ingress worker
+    units.**~~ — **RESOLVED 2026-08-26.** `_build_containerapp_command()`'s `create` branch
+    applied the global `staging_cfg["min_replicas"]` (0) to every unit uniformly,
+    regardless of whether anything could ever trigger it back up from zero. Confirmed
+    Deploy Agent generates no scale rule anywhere today (no KEDA or otherwise), so
+    `unit.unit_type in _TARGET_PORTS` (has external ingress) is currently the complete
+    "safe to scale to zero" test — an ingress-backed unit wakes on the next HTTP request
+    (Container Apps' default HTTP-concurrency scaler, confirmed live for
+    `req-2026-01-document-api`); a `"worker"` unit has neither ingress nor a scale rule
+    (confirmed live for `req-2026-01-email-worker`), so `minReplicas: 0` there was a
+    broken/stuck config, not a cost optimization. Non-ingress units now default to
+    `minReplicas: 1`; web/frontend units are unchanged. Verified via a scoped local check
+    calling `_build_containerapp_command()` directly with mock units (no real `az`
+    calls): worker → `minReplicas=1`; web/frontend → `minReplicas=0` unchanged; the
+    `update` path (never sets `--min-replicas`) is unaffected. **Only affects units Deploy
+    Agent generates from here forward** — `req-2026-01-email-worker`'s live config was
+    deliberately left untouched, per explicit instruction (existing app, out of scope for
+    this fix). Note: the spec's third acceptance case ("a unit with a scale rule →
+    `minReplicas: 0` unchanged") isn't testable against the current codebase — `DeployUnit`
+    has no scale-rule field at all, since Deploy Agent doesn't generate scale rules today;
+    flagged rather than resolved by adding an unused field. Commit: `9d57398`.
+23. ~~**No on-demand way to verify a service's language build or Docker build outside the
+    full pipeline**~~ — **RESOLVED 2026-08-26.** New `forge-demo-apps` workflow
+    `.github/workflows/verify-build.yml`: manual (`workflow_dispatch`-only, not part of
+    the automated pipeline), takes `ref`/`service-path`/`mode`
+    (`language-build`/`docker-build`) inputs, runs on `ubuntu-latest` (matching
+    `04-qa.yml`'s real CI environment), detects backend vs. frontend by the same
+    `package.json`-vs-`*.csproj` signal Deploy Agent's own `_detect_units()` uses, and
+    writes pass/fail + wall-clock timing to the job summary. Replaces ad hoc local Docker
+    Desktop verification (slow/flaky on Windows — see Item #20/#21's session). Zero
+    interaction with any existing automated workflow, by construction (manual dispatch
+    only). Landed via `forge-demo-apps#28` (admin-merged — ad hoc branch naming means
+    `security-check` can't fire either way, same precedent as Item #9's ad hoc fix PRs;
+    additive-only file, low risk).
+    **Live verification surfaced and fixed a real bug, not just confirmed the happy
+    path:** `docker-build` mode originally assumed the Docker build context always equals
+    `service-path` — correct for frontend (self-contained) but wrong for backend .NET
+    units, confirmed live against `services/REQ-2026-01/backend/DocumentApi` (its
+    Dockerfile's `COPY Directory.Build.props`/`COPY DocumentApi/DocumentApi.csproj` only
+    resolve against the shared `backend/` parent directory — confirmed against
+    `deploy_agent.py`'s own `_detect_backend_units()`, which always sets `build_context` to
+    that parent for exactly this reason). Fixed to use `dirname(service-path)` as context
+    for a detected backend unit, `service-path` itself for frontend; landed via
+    `forge-demo-apps#29` (same admin-merge rationale). Also explicitly spot-checked
+    (per Mike's call) whether `language-build` mode's `dotnet build` path had the
+    analogous issue — it does not: unlike a Docker `COPY`-restricted context, a native
+    `dotnet build` runs against the full checked-out repo, and MSBuild's own
+    `Directory.Build.props` upward-directory search finds the parent's file
+    automatically; confirmed empirically via a live dispatch against the same backend
+    path (28s, clean pass), not assumed from documentation alone.
+    **Final live-verified state, both modes, both unit types:** `language-build` against
+    `services/REQ-2026-01/frontend` (56s, clean `next build`) and against
+    `services/REQ-2026-01/backend/DocumentApi` (28s, clean `dotnet build`);
+    `docker-build` against `services/REQ-2026-01/frontend` (correctly fails clean — no
+    Dockerfile committed at that path, confirmed via `git ls-tree`, not a tool bug) and
+    against `services/REQ-2026-01/backend/DocumentApi` (51s, clean, post-context-fix).
 
 ---
+
+**Note on today's (2026-08-26) live-verification posture, applying to Items #6, #8, #21,
+#22, and #23 as a whole:** every fix above was verified via a scoped local mock/adversarial
+harness (or, for #23, real live `workflow_dispatch` runs — a cheap, additive, non-pipeline
+tool, unlike the others). The one live end-to-end **pipeline** run explicitly called for by
+a spec (Item #6's real Stage 3 dry-run) was deliberately deferred on cost/time grounds — see
+Item #6's own entry above for the full rationale. This is a deliberate, recorded deferral
+for that one specific piece, not a claim that every fix in this session's batch went
+unverified live — #21 and #23 in particular did get real, live confirmation.
 
 ## Further reading
 
