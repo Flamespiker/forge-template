@@ -252,6 +252,7 @@ def create_agent_session(
     subagent_configs: list[dict],
     coordinator_model: str | None = None,
     subagent_model: str | None = None,
+    resources: list[dict] | None = None,
 ) -> dict[str, Any]:
     """
     Create a Managed Agents coordinator session with the given subagents.
@@ -274,6 +275,13 @@ def create_agent_session(
             env var, or claude-opus-4-6.
         subagent_model: Model ID for all subagents. Defaults to FORGE_SUBAGENT_MODEL
             env var, or claude-sonnet-4-6.
+        resources: Optional list of session resource dicts (e.g.
+            {"type": "file", "file_id": ..., "mount_path": ...}), resolved
+            before the coordinator's first turn (Item #23). Files mount
+            READ-ONLY — see EXISTING_SERVICE_MOUNT_DIR in
+            core/agents/subagents/__init__.py for how FORGE handles that.
+            Omit or pass None/[] for a session with no pre-seeded files (the
+            existing behavior for every non-Enhancement run).
 
     Returns:
         Dict with keys: "coordinator_id", "coordinator_version", "subagent_ids",
@@ -323,12 +331,17 @@ def create_agent_session(
     logger.info("Created environment: %s", environment_id)
 
     # 4. Create the session, pinning the coordinator to its exact version.
-    session = _post("sessions", {
+    session_body: dict[str, Any] = {
         "agent": {"type": "agent", "id": coordinator_id, "version": coordinator_version},
         "environment_id": environment_id,
-    })
+    }
+    if resources:
+        session_body["resources"] = resources
+    session = _post("sessions", session_body)
     session_id: str = session["id"]
-    logger.info("Created session: %s", session_id)
+    logger.info(
+        "Created session: %s (%d pre-seeded resource(s))", session_id, len(resources or [])
+    )
 
     return {
         "coordinator_id": coordinator_id,
@@ -583,6 +596,38 @@ def download_file_content(file_id: str) -> bytes:
     response.raise_for_status()
     logger.info("Downloaded file %s (%d bytes)", file_id, len(response.content))
     return response.content
+
+
+def upload_input_file(content: str, filename: str) -> str:
+    """
+    Upload a text file via the Files API, for use as a session `resources[]`
+    entry (Item #23 -- the mirror-image, input-side counterpart to
+    download_file_content()'s output-side download).
+
+    Uses the same combined Files-API + Managed-Agents beta headers as
+    _files_headers() -- the uploaded file needs to be referenceable as a
+    session resource, not just a bare Files API object.
+
+    Args:
+        content: UTF-8 text content to upload.
+        filename: Filename to attach to the Files API object (metadata only --
+            does not need to be unique; the caller controls the real sandbox
+            path via the session resource's own "mount_path").
+
+    Returns:
+        The uploaded file's "id", for use as a resources[] entry's "file_id".
+    """
+    url = f"{_ANTHROPIC_BASE}/files"
+    response = requests.post(
+        url,
+        headers=_files_headers(),
+        files={"file": (filename, content.encode("utf-8"), "text/plain")},
+        timeout=60,
+    )
+    response.raise_for_status()
+    file_id: str = response.json()["id"]
+    logger.debug("Uploaded input file '%s' as %s (%d bytes)", filename, file_id, len(content))
+    return file_id
 
 
 def get_session_resource_ids(session_id: str) -> dict[str, Any]:
@@ -842,6 +887,7 @@ def run_implementation_stage(
     subagent_model: str | None = None,
     timeout_seconds: int = _DEFAULT_TIMEOUT,
     expected_output_filename: str | None = None,
+    resources: list[dict] | None = None,
 ) -> dict[str, Any]:
     """
     Convenience wrapper: create a session, send the initial message, wait for completion,
@@ -858,6 +904,9 @@ def run_implementation_stage(
         coordinator_model: Optional coordinator model override.
         subagent_model: Optional subagent model override.
         timeout_seconds: Maximum wait time for the session to complete.
+        resources: Optional session resources (Item #23) — see
+            create_agent_session()'s own "resources" arg. Passed straight
+            through; this function does no seeding logic of its own.
         expected_output_filename: If given, the session must have written a file
             of exactly this name to /mnt/session/outputs/ before this function
             will archive it — mirrors recover_implementation_session()'s existing
@@ -906,6 +955,7 @@ def run_implementation_stage(
         subagent_configs=subagent_configs,
         coordinator_model=coordinator_model,
         subagent_model=subagent_model,
+        resources=resources,
     )
 
     coordinator_id = ids["coordinator_id"]

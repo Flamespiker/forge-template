@@ -12,7 +12,7 @@ convention: a single tar.gz at /mnt/session/outputs/implementation.tar.gz).
 
 from __future__ import annotations
 
-from core.agents.subagents import DEFAULT_SCOPED_TOOLS, SHARED_DOCS_DIR
+from core.agents.subagents import DEFAULT_SCOPED_TOOLS, EXISTING_SERVICE_MOUNT_DIR, SHARED_DOCS_DIR
 
 NAME = "backend_agent"
 
@@ -27,6 +27,14 @@ Don't rely on any summary or paraphrase in the coordinator's delegation message 
 their exact content, especially openapi.yaml -- a relayed description of a structured \
 contract can drop or rename a field you'd have no way to catch without the literal \
 source.
+
+If this is an Enhancement to an existing service, the coordinator will tell you so \
+and will have already copied the relevant existing files into your target directory \
+before delegating to you -- treat those as a real, working starting point to modify, \
+not a template to discard and rebuild from scratch. The original existing-service \
+files remain available read-only at {EXISTING_SERVICE_MOUNT_DIR} if you need to \
+double-check something against them. If the coordinator says nothing about this, \
+this is a Greenfield request -- start from an empty target directory as usual.
 
 Your job -- the "Backend" section of tasks.md:
 - Implement the .NET Web API described in openapi.yaml: controllers, services, \

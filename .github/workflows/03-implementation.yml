@@ -99,13 +99,53 @@ jobs:
         run: |
           python -m core.agents.workflow_glue resolve-request-id --issue-number "$ISSUE_NUMBER"
 
+      - name: Determine Enhancement status and existing service (Item #23)
+        id: enhancement_decide
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.workflow_glue download-issue-attachment \
+            --issue-number "$ISSUE_NUMBER" \
+            --output intake.xlsx \
+            --extension .xlsx
+          python - <<'PY'
+          import os
+          from core.agents.utils import file_io
+
+          parsed = file_io.read_xlsx("intake.xlsx")
+          request_type_section = parsed["overview"].get("request_type") or {}
+          request_type_value = (request_type_section.get("Request Type") or "").strip()
+          is_enhancement = request_type_value.lower() == "enhancement"
+
+          existing_service = ""
+          if is_enhancement:
+              for key, value in request_type_section.items():
+                  if "existing service name" in key.lower():
+                      existing_service = (value or "").strip()
+                      break
+              if not existing_service:
+                  print(
+                      "Request Type is 'Enhancement' but 'Existing Service Name' is "
+                      "blank -- treating as Greenfield for Stage 3 (Ingestion Agent's "
+                      "own Stage 0a check should already have flagged this at Intake)."
+                  )
+
+          if not existing_service:
+              print(f"Request Type = '{request_type_value or '(blank)'}' -- Greenfield or unrecognized, no --existing-service flag.")
+          else:
+              print(f"Enhancement request -- existing service: '{existing_service}'")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"existing_service={existing_service}\n")
+          PY
+
       - name: Run Implementation Coordinator
         id: run_agent
         if: steps.guard.outputs.proceed == 'true'
         run: |
           python -m core.agents.implementation_coordinator \
             --issue-number "$ISSUE_NUMBER" \
-            --request-id "${{ steps.request.outputs.request_id }}"
+            --request-id "${{ steps.request.outputs.request_id }}" \
+            --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}"
 
       - name: Clear design-approved label
         if: steps.guard.outputs.proceed == 'true'
@@ -125,8 +165,9 @@ jobs:
           post_comment(
               int(os.environ["ISSUE_NUMBER"]),
               "⚠️ **FORGE Implementation workflow failed before the Implementation Coordinator "
-              "could run** (most likely: could not resolve the request ID). Check the GitHub "
-              "Actions run log for this workflow for the exact error. An Orchestration Manager "
-              "needs to investigate before re-applying `design-approved`.",
+              "could run** (most likely: could not resolve the request ID, or could not "
+              "re-download/parse the intake spreadsheet to determine Enhancement status). "
+              "Check the GitHub Actions run log for this workflow for the exact error. An "
+              "Orchestration Manager needs to investigate before re-applying `design-approved`.",
           )
           PY

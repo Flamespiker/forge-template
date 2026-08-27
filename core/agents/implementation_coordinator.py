@@ -49,9 +49,17 @@ import os
 import sys
 import tarfile
 
-from core.agents.subagents import SHARED_DOCS_DIR, backend_agent, frontend_agent, test_writer_agent
+from core.agents.subagents import (
+    EXISTING_SERVICE_MOUNT_DIR,
+    SHARED_DOCS_DIR,
+    backend_agent,
+    frontend_agent,
+    test_writer_agent,
+)
+from core.agents.utils.existing_service_files import select_existing_service_files
 from core.agents.utils.github_helper import (
     get_file_contents,
+    get_repo_tree,
     post_comment,
     create_branch,
     commit_files,
@@ -61,6 +69,7 @@ from core.agents.utils.managed_agents_wrapper import (
     run_implementation_stage,
     list_session_output_files,
     download_file_content,
+    upload_input_file,
     get_session_resource_ids,
     get_thread_statuses,
     archive_session,
@@ -92,6 +101,18 @@ Tell Backend and Frontend to read these files directly rather than relying on yo
 own summary of them in the delegation message -- this is deliberate: a paraphrased \
 relay of a structured contract like openapi.yaml risks a dropped or renamed field \
 neither subagent could catch without the literal source to check against.
+1. Check whether {EXISTING_SERVICE_MOUNT_DIR} exists and has files on your sandbox \
+filesystem. If it does, this is an Enhancement to an existing service -- those \
+files are the real, current implementation, mounted READ-ONLY for reference (you \
+cannot edit them in place). Before delegating anything, copy the relevant existing \
+files from {EXISTING_SERVICE_MOUNT_DIR} into your actual target directory (the one \
+you were given below) so Backend/Frontend/Test Writer have a real, writable \
+starting point to edit rather than an empty directory or a read-only mount they \
+can't write through. Tell Backend and Frontend this has been done, and that \
+{EXISTING_SERVICE_MOUNT_DIR} remains available afterward as a read-only reference \
+if they need to double-check something against the original. If \
+{EXISTING_SERVICE_MOUNT_DIR} does not exist or is empty, this is a Greenfield \
+request -- start from the empty target directory as usual, there is nothing to copy.
 2. Delegate the Backend, Frontend, and Test Writer sections of tasks.md to the \
 matching subagent. Let Backend and Frontend work in parallel; Test Writer should \
 start once there's real code for it to test against.
@@ -130,10 +151,25 @@ human reviews the resulting PR regardless."""
 
 
 def _build_initial_message(
-    design_md: str, openapi_yaml_text: str, tasks_md: str, service_root: str
+    design_md: str,
+    openapi_yaml_text: str,
+    tasks_md: str,
+    service_root: str,
+    existing_service: str | None = None,
 ) -> str:
+    enhancement_note = (
+        (
+            f"This is an Enhancement to the existing service `services/{existing_service}`. "
+            f"Its current files have been mounted read-only at {EXISTING_SERVICE_MOUNT_DIR} "
+            "-- per your step 1, copy what's relevant into your target directory before "
+            "delegating.\n\n"
+        )
+        if existing_service
+        else ""
+    )
     return (
         f"Your target directory for this request is: {service_root}\n\n"
+        f"{enhancement_note}"
         "## design.md\n\n"
         f"{design_md}\n\n"
         "## openapi.yaml\n\n"
@@ -144,6 +180,55 @@ def _build_initial_message(
         "Begin. Delegate to Backend and Frontend now; bring in Test Writer once "
         "there's real code for it to test."
     )
+
+
+def _resolve_enhancement_target(existing_service: str) -> tuple[str, list[dict]]:
+    """
+    Item #23 (§2.1/§2.2): resolves the real service_root for an Enhancement
+    request and builds the session `resources[]` list that seeds the existing
+    service's files read-only at EXISTING_SERVICE_MOUNT_DIR.
+
+    Reuses the Layer 2 "strict rejection over silent auto-remap" precedent
+    from Ingestion Agent / Open Item #8: an empty tree under
+    services/<existing_service>/ is a real, human-actionable mismatch (a
+    wrong/mistyped "Existing Service Name" on the intake spreadsheet), not a
+    benign no-op -- raises rather than silently falling back to the request
+    ID. The caller's existing ADR-0011 try/except wraps this call and posts a
+    failure comment before re-raising -- the same generic contract every
+    other agent follows, so no separate mismatch-specific comment (unlike
+    Ingestion Agent's own dedicated one) is needed here.
+
+    Returns:
+        Tuple of (service_root, resources) -- service_root is the real
+        existing services/<existing_service> path (no trailing slash, same
+        shape as the Greenfield f"services/{request_id}"); resources is the
+        session resources[] list ready to pass to run_implementation_stage().
+    """
+    service_prefix = f"services/{existing_service}/"
+    blobs = get_repo_tree(service_prefix)
+    if not blobs:
+        raise ValueError(
+            f"No files found under '{service_prefix}' in the target monorepo -- "
+            f"the 'If Enhancement -- Existing Service Name' value "
+            f"('{existing_service}') does not match any real services/ folder. "
+            "Refusing to guess or silently fall back to the request ID."
+        )
+
+    files_to_seed = select_existing_service_files(blobs)
+    resources: list[dict] = []
+    for repo_path, content in files_to_seed.items():
+        rel_path = repo_path[len(service_prefix):]
+        file_id = upload_input_file(content, filename=os.path.basename(repo_path))
+        resources.append({
+            "type": "file",
+            "file_id": file_id,
+            "mount_path": f"{EXISTING_SERVICE_MOUNT_DIR}/{rel_path}",
+        })
+    logger.info(
+        "Enhancement target resolved: services/%s -- seeded %d file(s) read-only at %s",
+        existing_service, len(resources), EXISTING_SERVICE_MOUNT_DIR,
+    )
+    return f"services/{existing_service}", resources
 
 
 def _extract_archive_to_file_dict(archive_bytes: bytes, expected_prefix: str) -> dict[str, str]:
@@ -379,6 +464,7 @@ def recover_implementation_session(
     issue_number: int,
     request_id: str,
     dry_run: bool = False,
+    existing_service: str | None = None,
 ) -> dict:
     """
     Recover a session left alive by a SessionStillRunningError (or one that
@@ -400,6 +486,18 @@ def recover_implementation_session(
     the same commit/PR/comment sequence the happy path uses, and finally
     archives the session (left alive specifically so this recovery could
     reach it).
+
+    Args:
+        existing_service: Item #23 -- pass the SAME "Existing Service Name"
+            value the original (still-running) session was started with, if
+            it was an Enhancement request. Only used to resolve the correct
+            service_root string for archive-prefix matching and the PR's
+            "Related service" line -- recovery never re-seeds sandbox
+            resources (the session already has them; re-fetching/re-uploading
+            here would be pointless and could raise on a tree that's since
+            changed). Getting this wrong on an Enhancement recovery fails
+            loudly (an expected_prefix mismatch in
+            _extract_archive_to_file_dict()), not silently.
 
     Returns:
         Dict with "outcome": "still_running" (+ "thread_statuses") or
@@ -423,7 +521,7 @@ def recover_implementation_session(
 
     logger.info("Session %s: all threads idle (%s). Proceeding with recovery.", session_id, statuses)
 
-    service_root = f"services/{request_id}"
+    service_root = f"services/{existing_service}" if existing_service else f"services/{request_id}"
     tasks_md = get_file_contents(f"docs/{request_id}/tasks.md", branch="main")
 
     output_files = list_session_output_files(session_id)
@@ -463,10 +561,20 @@ def run_implementation_coordinator(
     issue_number: int,
     request_id: str | None = None,
     dry_run: bool = False,
+    existing_service: str | None = None,
 ) -> dict:
     """
     Core entry point. Returns a summary dict (session_id, files, and pr_number
     on a real run).
+
+    Args:
+        existing_service: Item #23 §2.1 -- the "If Enhancement -- Existing
+            Service Name" value from the intake spreadsheet, when this is an
+            Enhancement request. When set, service_root resolves to the real
+            existing services/<existing_service>/ folder (not
+            services/<request_id>/) and the sandbox is pre-seeded read-only
+            with that service's current files (§2.2). None/empty for a
+            Greenfield request -- current behavior, unchanged.
     """
     if not dry_run and not request_id:
         raise ValueError(
@@ -476,13 +584,20 @@ def run_implementation_coordinator(
             "without it."
         )
     resolved_request_id = request_id or "unknown"
-    service_root = f"services/{resolved_request_id}"
+
+    resources: list[dict] = []
+    if existing_service:
+        service_root, resources = _resolve_enhancement_target(existing_service)
+    else:
+        service_root = f"services/{resolved_request_id}"
 
     design_md = get_file_contents(f"docs/{resolved_request_id}/design.md", branch="main")
     openapi_yaml_text = get_file_contents(f"docs/{resolved_request_id}/openapi.yaml", branch="main")
     tasks_md = get_file_contents(f"docs/{resolved_request_id}/tasks.md", branch="main")
 
-    initial_message = _build_initial_message(design_md, openapi_yaml_text, tasks_md, service_root)
+    initial_message = _build_initial_message(
+        design_md, openapi_yaml_text, tasks_md, service_root, existing_service=existing_service
+    )
     subagent_configs = [
         backend_agent.get_config(service_root),
         frontend_agent.get_config(service_root),
@@ -497,6 +612,7 @@ def run_implementation_coordinator(
             subagent_configs=subagent_configs,
             initial_message=initial_message,
             expected_output_filename=_ARCHIVE_FILENAME,
+            resources=resources,
         )
         session_id = result["session_id"]
 
@@ -603,6 +719,19 @@ def main() -> None:
     parser.add_argument("--request-id", default=None, help="FORGE request ID (required for a real run)")
     parser.add_argument("--dry-run", action="store_true", help="Run the real session but skip committing/posting")
     parser.add_argument(
+        "--existing-service",
+        default=None,
+        help=(
+            "Item #23: the 'If Enhancement -- Existing Service Name' value from "
+            "the intake spreadsheet. When set, service_root resolves to the real "
+            "existing services/<existing-service>/ folder and the sandbox is "
+            "pre-seeded read-only with that service's current files. Omit for a "
+            "Greenfield request (current behavior, unchanged). With "
+            "--recover-session, pass the SAME value the original session was "
+            "started with, if any."
+        ),
+    )
+    parser.add_argument(
         "--recover-session",
         default=None,
         metavar="SESSION_ID",
@@ -623,6 +752,7 @@ def main() -> None:
                 issue_number=args.issue_number,
                 request_id=args.request_id,
                 dry_run=args.dry_run,
+                existing_service=args.existing_service,
             )
         except Exception:
             logger.exception("Recovery failed for session %s", args.recover_session)
@@ -637,6 +767,7 @@ def main() -> None:
             issue_number=args.issue_number,
             request_id=args.request_id,
             dry_run=args.dry_run,
+            existing_service=args.existing_service,
         )
     except SessionStillRunningError:
         # Distinguishable from a real failure (sys.exit(1) below) -- exit code
