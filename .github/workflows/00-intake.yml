@@ -12,6 +12,16 @@
 # non-zero with nothing posted to the issue; the final step below covers
 # exactly that gap and is skipped entirely when the agent step actually ran
 # (success or failure) to avoid ever posting a duplicate.
+#
+# Stage 0a (Codebase Ingestion, Phase 7 step 7.1) is wired in here too, as a
+# conditional step right after "Run Intake Agent" -- NOT as a separate
+# workflow. Ingestion doesn't depend on the BA's clarification answers, so
+# running it in the same job lets it execute in parallel with the BA's
+# clarification round rather than adding a sequential hop after it. See
+# docs/FORGE-Phase7-Ingestion-Agent-Spec.md SS2 Fork A. It only fires for
+# Enhancement-flagged requests (never Greenfield, Document 07) and is
+# genuinely independent of the Intake Agent's own success/failure -- either
+# can succeed or fail without masking the other's outcome.
 
 name: FORGE Stage 0 — Intake and Clarification
 
@@ -78,6 +88,73 @@ jobs:
           python -m core.agents.intake_agent \
             --spreadsheet intake.xlsx \
             --issue-number "$ISSUE_NUMBER"
+
+      - name: Determine Enhancement status and existing service (Stage 0a)
+        id: ingestion_decide
+        if: always() && steps.guard.outputs.proceed == 'true'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils import file_io
+
+          parsed = file_io.read_xlsx("intake.xlsx")
+          request_type_section = parsed["overview"].get("request_type") or {}
+          request_type_value = (request_type_section.get("Request Type") or "").strip()
+          is_enhancement = request_type_value.lower() == "enhancement"
+
+          existing_service = ""
+          request_id = ""
+          if is_enhancement:
+              for key, value in request_type_section.items():
+                  if "existing service name" in key.lower():
+                      existing_service = (value or "").strip()
+                      break
+              if not existing_service:
+                  print(
+                      "Request Type is 'Enhancement' but 'Existing Service Name' is "
+                      "blank -- skipping Ingestion. A human needs to fix the intake "
+                      "spreadsheet."
+                  )
+                  is_enhancement = False
+              else:
+                  from core.agents.workflow_glue import resolve_request_id
+                  request_id = resolve_request_id(int(os.environ["ISSUE_NUMBER"]))
+
+          if not is_enhancement:
+              print(f"Request Type = '{request_type_value or '(blank)'}' -- Greenfield or unrecognized, skipping Ingestion.")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"is_enhancement={'true' if is_enhancement else 'false'}\n")
+              f.write(f"existing_service={existing_service}\n")
+              f.write(f"request_id={request_id}\n")
+          PY
+
+      - name: Run Ingestion Agent (Stage 0a)
+        id: run_ingestion
+        if: always() && steps.guard.outputs.proceed == 'true' && steps.ingestion_decide.outputs.is_enhancement == 'true'
+        run: |
+          python -m core.agents.ingestion_agent \
+            --request-id "${{ steps.ingestion_decide.outputs.request_id }}" \
+            --existing-service "${{ steps.ingestion_decide.outputs.existing_service }}" \
+            --issue-number "$ISSUE_NUMBER"
+
+      - name: Post failure comment for an Ingestion pre-agent step failure
+        if: always() && steps.guard.outputs.proceed == 'true' && steps.ingestion_decide.outcome == 'failure'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.utils.github_helper import post_comment
+          post_comment(
+              int(os.environ["ISSUE_NUMBER"]),
+              "<!-- forge:agent-comment stage=ingestion request_id=unknown -->\n"
+              "⚠️ **FORGE Codebase Ingestion (Stage 0a) failed before the Ingestion Agent could run** "
+              "(most likely: could not parse the intake spreadsheet's Request Type/Existing Service "
+              "Name fields, or could not resolve the request ID). This is scoped to Ingestion only -- "
+              "the Intake Agent's own clarifying questions above are unaffected. Check the GitHub "
+              "Actions run log for this workflow for the exact error. Requirements/Design will still "
+              "run without an existing-architecture summary. An Orchestration Manager should investigate.",
+          )
+          PY
 
       - name: Clear intake-ready label
         if: steps.guard.outputs.proceed == 'true'
