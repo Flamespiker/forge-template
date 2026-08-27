@@ -1729,13 +1729,20 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
    for an unrelated reason (convention not used). See the standing convention note above
    for the full write-up. No admin-merge should be needed going forward as long as the
    `feature/fix-*` convention is actually followed.
-10. **`enforce_admins` on `forge-demo-apps`' `main` branch protection is currently
-    `false`**, contradicting the originally-confirmed `true` from Step 4.8. Nothing any
-    known session action changed it. **Safe to flip now, pending Mike's explicit
-    go-ahead** — Items #9 and #15 (the two gaps that originally motivated leaving it off)
-    are both closed as of 2026-08-27; per `docs/FORGE-Item9-Item15-AdHocFixDispatch-Spec.md`,
-    the flip itself is a separate `gh api`/Portal action, not a code commit, and should
-    not happen silently — still awaiting Mike's confirmation to actually perform it.
+10. ~~**`enforce_admins` on `forge-demo-apps`' `main` branch protection was `false`,
+    contradicting the originally-confirmed `true` from Step 4.8.**~~ — **RESOLVED
+    2026-08-27, on Mike's explicit go-ahead.** Flipped `false` → `true` via
+    `POST repos/Flamespiker/forge-demo-apps/branches/main/protection/enforce_admins`
+    (the dedicated endpoint, not a full protection PATCH, so nothing else could be
+    touched by construction). Confirmed via a `GET` on
+    `.../branches/main/protection` immediately before and after: `enforce_admins.enabled`
+    was the only field that changed — `required_status_checks` (`contexts:
+    ["security-check"]`, `strict: false`, `app_id: 4388813`),
+    `required_pull_request_reviews` (`required_approving_review_count: 1`,
+    `dismiss_stale_reviews: false`, `require_code_owner_reviews: false`), and every other
+    flag (`required_signatures`, `allow_force_pushes`, `allow_deletions`,
+    `block_creations`, `required_conversation_resolution`, `lock_branch`,
+    `allow_fork_syncing`, all `false`) were byte-identical before and after.
 11. **21 `next@14.2.35` CVE findings have no 14.x backport** (8 High + 11 Medium + 2 Low)
     — accepted ongoing risk from the deliberate decision to stay on the 14.x line, not a
     bug. **Count refined 2026-08-21** (see Item #19's triage pass): the original count
