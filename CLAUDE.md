@@ -26,6 +26,16 @@ security → deploy) with human approval gates at each stage.
 
 ## Current Build Phase
 
+**Phase 7 (Enhancement Workflow) is underway — Build Plan step 7.1 (Codebase
+Ingestion Agent, Stage 0a) is complete and live-verified (2026-08-27).** New
+`core/agents/ingestion_agent.py`, a new `github_helper.get_repo_tree()`, Stage 0a
+wiring in `00-intake.yml`, and optional existing-architecture-summary.md fetches in
+`requirements_agent.py`/`design_agent.py` — see "ingestion_agent.py — Stage 0a
+(Codebase Ingestion)" below for the full writeup. Build Plan step 7.2 (choosing/
+writing the actual enhancement request's intake spreadsheet) has not started —
+per `docs/FORGE-Phase7-Ingestion-Agent-Spec.md`, that's explicitly a separate,
+later session's work.
+
 **FORGE has completed Phase 6 (Repeatability)** — App 2 (`REQ-2026-03`, On-Call Roster
 Tracker) ran through the full pipeline; its FORGE tracking issue (`forge-template#6`)
 was closed 2026-08-20. Phases 1-6 are complete:
@@ -149,6 +159,7 @@ core/agents/utils/
         smoke_managed_agents.py
 core/agents/
     intake_agent.py
+    ingestion_agent.py
     requirements_agent.py
     design_agent.py
     implementation_coordinator.py
@@ -364,6 +375,83 @@ structured failure comment to the tracking issue (best-effort) before re-raising
 GitHub Actions job fails loudly with a visible GitHub comment rather than silently. All six
 stage agent scripts must follow this pattern.
 
+### ingestion_agent.py — Stage 0a (Codebase Ingestion, Phase 7 step 7.1)
+
+Entry point:
+```
+python -m core.agents.ingestion_agent --request-id REQ-2026-03 --existing-service REQ-2026-03 --issue-number 42
+python -m core.agents.ingestion_agent --existing-service REQ-2026-03 --dry-run
+```
+
+Only ever runs for Enhancement-flagged requests (Document 07: Stage 0a's trigger is
+Locked to Enhancement, never Greenfield). Despite the "0a before 0b" naming, it
+actually runs *after* the intake spreadsheet has been parsed once — the Enhancement
+flag and existing service name only become known at that point. Wired as a
+conditional step inside `00-intake.yml` itself (see "Pipeline Wiring & Triggers"
+below), not a separate workflow — runs in parallel with the BA's clarification
+round rather than adding a sequential hop. Not human-gated (Document 01 §3.0a) —
+posts no comment on success, only on failure/mismatch.
+
+- `github_helper.get_repo_tree(path_prefix, branch="main")` (new) — lists every
+  blob under a path prefix via the Git Trees API (`recursive=1`). Confirmed live:
+  a bare branch name resolves directly, no separate branch→SHA lookup needed.
+- **File selection (two-pass, budget-conscious):** tree pass filters out noise
+  (`node_modules`/`bin`/`obj`/`.next`/`dist`/`coverage`/`.git` dir segments;
+  `package-lock.json`/`yarn.lock`/`tsconfig.tsbuildinfo`/image/font extensions —
+  `tsconfig.tsbuildinfo` confirmed live as real, unanticipated noise, ~100KB).
+  Content pass always fetches manifest/config files in full (`*.csproj`,
+  `package.json`, `tsconfig.json`, `openapi.yaml`, `Program.cs`/`Startup.cs`,
+  `appsettings*.json`), then fills a ~60k-character budget with the largest
+  remaining source files by size, descending.
+- **Layer 2 backstop (existing-service mismatch):** if `get_repo_tree()` finds zero
+  blobs under `services/<existing_service>/`, raises `EnhancementServiceNotFoundError`
+  (non-zero exit, red step) and posts a best-effort comment naming the mismatch —
+  never silently falls back to guessing `request_id` or any other value. Same
+  "strict rejection over silent auto-remap" precedent as Open Item #8's `.github/`
+  guard. Distinct from a clean Greenfield no-op (which never invokes this agent at
+  all). The mismatch comment respects `--dry-run` (printed, not posted) exactly like
+  every other agent's dry-run contract.
+- **Output:** `commit_files()` to `docs/<request_id>/existing-architecture-summary.md`
+  on `pipeline-state` (same branch/rationale as `requirements.md`).
+- **Important:** any comment this agent posts (mismatch or generic ADR-0011 failure)
+  must carry the `forge:agent-comment` marker — an unmarked comment would be
+  misread as a BA answer by `requirements_agent.py`'s clarification-answer parsing.
+
+**Fix during template work:** `docs/Intake Template.xlsx`'s "If Enhancement —
+Existing Service Name" field example was `client-portal (the folder name under
+services/...)` — a descriptive-slug example that didn't match the real
+`services/REQ-2026-0X/` request-ID-based naming convention. Corrected to a real
+`REQ-2026-03`-style example so a BA following the example produces a value the
+Ingestion Agent can actually resolve.
+
+**Live-verified 2026-08-27** via three real throwaway tracking issues
+(`forge-template#7`/`#8`/`#9`, all closed after verification):
+- **Case A (Greenfield no-op):** real REQ-2026-03 intake spreadsheet (re-downloaded
+  from the real tracking issue `forge-template#6`) → `00-intake.yml`'s new
+  "Determine Enhancement status" step correctly logged `Request Type = 'Greenfield'
+  -- Greenfield or unrecognized, skipping Ingestion.` and the "Run Ingestion Agent"
+  step correctly no-opped.
+- **Case B (Enhancement happy path):** scratch request `REQ-TEST-01`, existing
+  service `REQ-2026-03` → Intake Agent posted its own clarifying questions AND
+  Ingestion Agent independently committed a real, accurate 14792-char
+  `existing-architecture-summary.md` to `pipeline-state` — both succeeded without
+  interfering with each other. Scratch artifact deleted after verification.
+- **Case C (Layer 2 mismatch):** scratch request `REQ-TEST-02`, existing service
+  `REQ-NONEXISTENT-999` → "Run Ingestion Agent" step correctly exited non-zero
+  (real job status: `failure`), and a real, correctly-marked mismatch comment was
+  posted (confirmed via the GitHub API, not dry-run) naming the bad value. The
+  generic pre-agent-failure-comment step correctly stayed silent (ingestion_agent.py
+  self-reported). Comment left in place on the closed issue as evidence.
+- All three runs confirmed on the pushed `main` branch (not a stale local-only
+  version) after an earlier same-day run first surfaced that the local commits
+  hadn't yet been pushed to `origin` — the first Case A attempt ran against the
+  pre-Phase-7 workflow and had to be redone after `git push`.
+
+`requirements_agent.py`/`design_agent.py` both gained an optional
+`existing-architecture-summary.md` fetch (see their own subsections below) — zero
+regression confirmed live (real dry-runs) when the file is absent, which is every
+request prior to this phase.
+
 ### file_io.py — formatting helpers (added Step 3.3)
 
 Two new public functions render parsed spreadsheet data as Markdown for LLM prompts:
@@ -405,6 +493,11 @@ Entry point: `python -m core.agents.requirements_agent --spreadsheet <path> --is
   Raise if output is regularly truncated (`stop_reason == "max_tokens"`).
 - `_parse_model_json()` defensively strips ` ```json ``` ` fences if the model adds them despite
   instructions; raises `json.JSONDecodeError` otherwise, caught by the outer `try/except`.
+- **Phase 7 step 7.1:** for an Enhancement-flagged spreadsheet, also attempts to fetch
+  `docs/<request_id>/existing-architecture-summary.md` from `pipeline-state` (committed by
+  `ingestion_agent.py`, Stage 0a) and folds it into the prompt. A 404 is tolerated (logged,
+  proceeds without it); any other fetch error propagates into the existing failure-comment
+  path. See "ingestion_agent.py — Stage 0a" above.
 
 **Output artifacts (committed to `forge-demo-apps` on the `pipeline-state`
 branch, not `main`** — moved off `main` in the Phase 4 step 4.8 retrofit once
@@ -553,6 +646,10 @@ Entry point: `python -m core.agents.design_agent --issue-number <n> --request-id
 - First stage to use the full `create_branch() → commit_files() → open_pr()` chain.
 - `yaml.safe_load()` validates the model's `openapi_yaml` before committing — rejects
   malformed YAML and posts a failure comment instead of committing broken output.
+- **Phase 7 step 7.1:** also attempts the same `existing-architecture-summary.md` fetch as
+  `requirements_agent.py` — but unconditionally (this agent never reads the original
+  spreadsheet, so it has no direct Greenfield-vs-Enhancement signal; a 404 degrades
+  identically either way). See "ingestion_agent.py — Stage 0a" above.
 
 **Output artifacts (committed to `forge-demo-apps` on `design/<request-id>` branch):**
 - `docs/<request-id>/design.md` — C4 architecture narrative, component breakdown, tech choices
@@ -1130,6 +1227,11 @@ covers the gap before that point, skipped whenever the agent step actually ran).
 | `04-qa.yml` | `repository_dispatch` (`feature-pr-opened`, from forge-demo-apps) | none (qa_agent.py labels itself) |
 | `05-security.yml` | `repository_dispatch` (`feature-pr-opened`) | none (security_agent.py labels itself) |
 | `06-deploy.yml` | BOTH `qa-approved` AND `security-approved` present | none (Document 6 has no deploy-stage label) |
+
+**Stage 0a (Codebase Ingestion, Phase 7 step 7.1)** is not a separate workflow/trigger —
+it's a conditional step inside `00-intake.yml` itself, right after "Run Intake Agent",
+firing only when the spreadsheet's Request Type is Enhancement. See "ingestion_agent.py
+— Stage 0a" above for the full wiring/verification writeup.
 
 **Cross-repo trigger:** `forge-demo-apps` has its own `.github/workflows/notify-forge.yml`
 (pushed there directly — the FORGE App has no `workflows` permission and can't write

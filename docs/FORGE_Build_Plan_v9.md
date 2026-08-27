@@ -160,7 +160,7 @@
   - Pushes to ACR
   - Deploys to `forge-staging` Container Apps environment
   - Posts deployment URL as PR comment
-- [ ] 3.11 **Codebase Ingestion Agent** (`core/agents/ingestion_agent.py`) *(enhancement workflow only — can defer to Phase 7)*
+- [x] 3.11 **Codebase Ingestion Agent** (`core/agents/ingestion_agent.py`) *(enhancement workflow only — can defer to Phase 7)* — completed 2026-08-27, Phase 7 step 7.1, live-verified
   - Reads the existing monorepo structure
   - Produces an architecture summary fed into the Requirements Agent
 
@@ -226,7 +226,7 @@
 
 > Goal: Prove the enhancement path works. Run a targeted enhancement to App 1 or App 2 through the pipeline, including Codebase Ingestion.
 
-- [ ] 7.1 Complete Codebase Ingestion Agent (3.11 above, if deferred)
+- [x] 7.1 Complete Codebase Ingestion Agent (3.11 above, if deferred) — completed and live-verified 2026-08-27 (`core/agents/ingestion_agent.py`, Stage 0a wiring in `00-intake.yml`, optional fetch in `requirements_agent.py`/`design_agent.py`); see CLAUDE.md "ingestion_agent.py — Stage 0a"
 - [ ] 7.2 Choose a small, well-scoped enhancement to App 1 or App 2
 - [ ] 7.3 Write the BA intake spreadsheet for the enhancement (Request Type = Enhancement)
 - [ ] 7.4 Stage 0a — confirm ingestion agent reads the target service folder and produces an architecture summary
