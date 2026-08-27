@@ -117,30 +117,59 @@ attachment having been edited or removed between Intake and Implementation).
 Writer subagents see the real current code at that path before they start working, not
 an empty directory.
 
-**This design is intentionally left unfinished pending §1.4's investigation.** Two
-shapes are possible depending on what the Managed Agents API actually supports:
+**§1.4 confirmed the mechanism** (`shared/managed-agents-environments.md` — Resources /
+File Uploads): `sessions.create()` takes a `resources[]` array resolved **before** the
+agent's first turn — the mirror of the already-used output-side
+`list_session_output_files`/`download_file_content` path. Each resource is uploaded via
+the Files API first (`client.beta.files.upload(file=...)` → `file_id`), then attached
+at session creation with a required absolute `mount_path` (parent directories created
+automatically; max **999 file resources per session**). A coarser
+`{"type": "github_repository", ...}` resource that clones a whole repo at session start
+also exists, but individual `file` resources built from `get_repo_tree()` +
+content-fetch are the closer fit here, matching the two-pass budget-conscious selection
+below.
 
-- **If a seed-files-at-session-creation mechanism exists:** fetch the existing service's
-  full file tree + contents via `github_helper.get_repo_tree()` (reusing/adapting
-  Ingestion Agent's own tree-walk and noise-filtering logic — `node_modules`/`bin`/
-  `obj`/`.next`/`dist`/`coverage`/`.git` exclusions already proven there) from Python,
-  before `create_agent_session()`, and seed them into the sandbox at `service_root`
-  via that mechanism.
-- **If no such mechanism exists:** this needs a genuine design decision — e.g. giving
-  the coordinator itself a scoped, read-only fetch capability for exactly this one
-  path (a real toolset change, more invasive) versus some other shape not yet
-  considered. **Do not invent a workaround silently — report back to Mike with what §1
-  found and what the real options are before writing this piece.**
+**Load-bearing catch, confirmed live and not assumed:** file resources mount
+**read-only** — the agent must write modified versions to new paths, it cannot edit a
+mounted file in place. So existing-service files cannot be mounted directly at
+`service_root`; a mount there would be immutable and the subagents would have nothing
+writable to edit.
 
-Either way, the **existing-file budget should follow the same two-pass,
-budget-conscious pattern Ingestion Agent already established** (manifests/config files
-always in full, remaining source files filling a bounded budget by size) rather than a
-naive full-tree dump, since Enhancement services are real production code and could be
-large.
+**Resolved design (mirrors a pattern already in this codebase — not a new shape):**
+this is exactly the same read-only-reference-vs-writable-target problem
+`SHARED_DOCS_DIR` (`/mnt/session/shared-docs`) already solves for design.md/openapi.yaml/
+tasks.md. Apply the same fix:
+- Mount the existing service's files read-only at a separate reference path, e.g.
+  `/mnt/session/existing-service/` — **not** at `service_root`.
+- `service_root` itself starts empty and writable, exactly as it does today for a
+  Greenfield run.
+- Extend the coordinator's existing step 0 (which already writes
+  design.md/openapi.yaml/tasks.md to `SHARED_DOCS_DIR` before delegating) with an
+  instruction, on an Enhancement run only: copy the relevant existing files from
+  `/mnt/session/existing-service/` into the real `service_root` before making edits, so
+  the subagents end up editing a real, writable copy rather than trying to write
+  through a read-only mount.
+- `backend_agent.py`/`frontend_agent.py`/`test_writer_agent.py` system prompts need the
+  equivalent instruction Backend/Frontend already got for `SHARED_DOCS_DIR`: treat
+  `/mnt/session/existing-service/` (when present) as the source of truth for what
+  currently exists, copy-then-edit into `service_root`, don't invent a parallel
+  implementation from scratch.
+
+This is a **resolved recommendation, not yet a decision** — surface it to Mike
+explicitly (see §3) since it changes what §2.2 actually builds versus what the original
+spec draft assumed (seed-at-target was the implicit assumption before this
+investigation).
+
+Existing-file selection still follows the same two-pass, budget-conscious pattern
+Ingestion Agent already established (manifests/config files always in full, remaining
+source files filling a bounded budget by size) rather than a naive full-tree dump,
+since Enhancement services are real production code and could be large. Also confirm
+the 999-resource ceiling isn't a real constraint for the two live App 1/App 2 services'
+current file counts before assuming budget-truncation is the only limiting factor.
 
 **Packaging on the way out is unaffected** — the coordinator already tars the entire
 `service_root` tree into `implementation.tar.gz` regardless of whether that tree started
-empty or pre-populated, and `commit_files()` re-writing identical content for
+empty or pre-populated via copy, and `commit_files()` re-writing identical content for
 untouched files is a no-op diff. Confirm this holds rather than assuming it.
 
 ### 2.3 PR-body / tracking-issue "Related service" cross-reference line
@@ -182,12 +211,18 @@ Agent's existing Layer 2 raise-on-mismatch backstop.
 1. **§2.1's spreadsheet-re-download approach vs. embedding `existing_service` in
    `design.md`** — recommended default is the spreadsheet re-download; revisit only if
    §1's investigation finds a concrete reliability problem with it.
-2. **§2.2's sandbox-population mechanism** — genuinely undecided pending §1.4's live
-   investigation. Report back with findings and concrete options rather than picking
-   one and proceeding.
+2. **§2.2's sandbox-population mechanism** — investigated, mechanism confirmed
+   (`resources[]` at `sessions.create()`), and a recommended design proposed (mount
+   existing-service files read-only at `/mnt/session/existing-service/`, copy into the
+   writable `service_root` during the coordinator's step 0, same pattern already used
+   for `SHARED_DOCS_DIR`). This still needs Mike's explicit go-ahead before being built
+   — it's a real architectural shape (a new mount path, a new copy-then-edit
+   instruction across four system prompts) that the original spec draft didn't
+   anticipate, not a mechanical detail.
 
-Do not resolve either of these by inference — bring them back explicitly if the
-investigation doesn't make the answer obvious.
+Do not resolve fork #1 by inference — bring it back explicitly if the investigation
+doesn't make the answer obvious. Fork #2 has a recommended answer above; proceed with
+it only once Mike confirms.
 
 ---
 
