@@ -8,7 +8,7 @@
 
 **v8 update (2026-08-13):** Step 4.10 (full dry-run, `DRYRUN-2026-01`) checked off — ran for real, chat 39, Phase 4 fully closed. Phase 5 (App 1 — `REQ-2026-02`, Inactive User & License Auditor) substantially complete: 5.1–5.8 and 5.11 checked off against real evidence in the context doc and `FORGE-Phase5-Closeout.md`. **5.9 checked with a caveat — staging only, production deliberately not attempted** (not appropriate for a Phase 5 validation run per Mike's call; App 1's Azure/D365 resources have since been decommissioned entirely, so a production deploy of this specific app is now moot). **5.10 left unchecked** — some real actuals were captured mid-run (Stage 1 cost, a Stage 3 Managed Agents timing/cost data point) but never fully transcribed into `docs/FORGE-pipeline-cost-log.md`; that pass is still outstanding and should happen before Phase 6, per the close-out doc's go/no-go read. See `FORGE-Phase5-Closeout.md` for full detail on what shipped, what was descoped (R-001), every confirmed-not-fixed structural gap, and the real manual-intervention count.
 
-**v9 update (2026-08-13, doc cleanup pass):** Corrected the label-ownership wording in steps 5.7/5.8 — `qa-approved`/`security-approved` are applied automatically by the QA/Security Agents on a clean pass, not manually by a reviewer; matches the same correction made to Document 6 (Orchestration Manager Guide) this same pass. No step status changes.
+**v9 update (2026-08-27):** Phase 6 (Repeatability) confirmed complete — App 2 (`REQ-2026-03`, On-Call Roster Tracker) closed clean (`forge-template#6`, closed 2026-08-20). Phase 7 (Enhancement Workflow) opened: **step 3.11 and 7.1 (Codebase Ingestion Agent + Stage 0a wiring) checked off — built, live-verified across three real throwaway test issues (`forge-template` #7/#8/#9: Greenfield no-op, Enhancement happy path, Layer 2 mismatch backstop), per `docs/FORGE-Phase7-Ingestion-Agent-Spec.md` and context doc v67.** New this step: `core/agents/ingestion_agent.py`, `github_helper.get_repo_tree()`, a conditional Stage 0a step inside `00-intake.yml` (no new workflow file/label), and optional `existing-architecture-summary.md` fetches in `requirements_agent.py`/`design_agent.py` with graceful-absence handling. **Step 7.2 remains unchecked — next action.** A candidate enhancement target was proposed but not yet confirmed by Mike: a read-only coverage-history view surfacing REQ-2026-03's already-recorded claim/release event log (per R-010 and the Overview tab's out-of-scope note), additive only, no write-path changes. Needs explicit confirmation before the 7.2/7.3 spec (fresh chat, per one-doc-per-chat convention) is drafted.
 
 ---
 
@@ -160,9 +160,12 @@
   - Pushes to ACR
   - Deploys to `forge-staging` Container Apps environment
   - Posts deployment URL as PR comment
-- [x] 3.11 **Codebase Ingestion Agent** (`core/agents/ingestion_agent.py`) *(enhancement workflow only — can defer to Phase 7)* — completed 2026-08-27, Phase 7 step 7.1, live-verified
-  - Reads the existing monorepo structure
-  - Produces an architecture summary fed into the Requirements Agent
+- [x] 3.11 **Codebase Ingestion Agent** (`core/agents/ingestion_agent.py`) *(enhancement workflow — completed in Phase 7, not deferred further)*
+  - Reads the existing monorepo structure via a new `github_helper.get_repo_tree()` (Git Trees API, `recursive=1`, filtered client-side by path prefix)
+  - Two-pass file selection: full filtered tree always included; manifest/config files always read in full; remaining token budget spent on largest/most-central source files by descending size
+  - Produces `existing-architecture-summary.md`, committed to `docs/<request-id>/` on `pipeline-state`, fed into the Requirements Agent (and Design Agent) as an optional fetch
+  - Layer 2 backstop: if the given "Existing Service Name" doesn't resolve to a real `services/` folder, fails loudly (non-zero exit, posts-then-raises per the ADR-0011 failure contract) rather than guessing — confirmed live via a real mismatch test issue (`forge-template#9`)
+  - *(2026-08-27 — done, live-verified across three real throwaway test issues; see `docs/FORGE-Phase7-Ingestion-Agent-Spec.md` and context doc v67 for full detail)*
 
 ---
 
@@ -202,8 +205,8 @@
 - [x] 5.4 Stage 1 — review Requirements Agent draft, approve ADO items, apply `requirements-approved`
 - [x] 5.5 Stage 2 — review Design Agent output (design.md, openapi.yaml, tasks.md), approve design PR, apply `design-approved`
 - [x] 5.6 Stage 3 *(updated — ADR-0010)* — review implementation PR (backend + frontend + tests), confirm the coordinator ran Backend/Frontend/Test Writer as subagents in parallel via the Claude Console session audit trail, approve PR *(required a real recovery cycle — Stage 3's completion-detection bug, see `FORGE-Stage3-Completion-Detection-Spec.md` — not a clean first pass)*
-- [x] 5.7 Stage 4 — review QA report, confirm bugs filed (or clean run); `qa-approved` applied automatically by the agent on the clean pass *(3rd of 3 automated attempts against real bugs, not a clean first pass)*
-- [x] 5.8 Stage 5 — review Security Agent findings, confirm no Critical blockers; `security-approved` applied automatically by the agent
+- [x] 5.7 Stage 4 — review QA report, confirm bugs filed (or clean run), apply `qa-approved` *(passed on the 3rd of 3 automated attempts against real bugs, not a clean first pass)*
+- [x] 5.8 Stage 5 — review Security Agent findings, confirm no Critical blockers, apply `security-approved`
 - [x] 5.9 Stage 6 — confirm staging deployment, click production approval gate, confirm production deployment *(staging only — confirmed live and working in a real browser; production deliberately not attempted, not appropriate for a validation run. Moot now: this app's infrastructure has since been decommissioned.)*
 - [ ] 5.10 Record actuals *(updated — ADR-0010)*: GitHub Actions minutes consumed, Anthropic API token cost, and Managed Agents session-hours for the Stage 3 run — update Document 3 cost summary *(partial — some real figures captured in the context doc, never fully transcribed into `docs/FORGE-pipeline-cost-log.md`. Outstanding — do before Phase 6.)*
 - [x] 5.11 Document all fixes made during App 1 run — anything patched mid-run becomes a follow-up task *(see `FORGE-Phase5-Closeout.md` §4–5 for the full list of confirmed structural gaps and manual interventions, and §7–8 for what's carried forward into Phase 6)*
@@ -214,11 +217,13 @@
 
 > Goal: Run the pipeline again on a second small app with no fixes mid-run. If it completes cleanly, the pipeline is proven repeatable.
 
-- [ ] 6.1 Write a second BA intake spreadsheet for App 2 (different domain from App 1)
-- [ ] 6.2 Run all pipeline stages gate-by-gate (same sequence as Phase 5)
-- [ ] 6.3 Confirm no mid-run patches required
-- [ ] 6.4 Record actuals — compare to App 1 metrics, including Managed Agents session-hour cost trend
-- [ ] 6.5 Note any Orchestration Manager Guide gaps discovered during App 2 — update Document 6 (including any Managed Agents failure-handling gaps)
+**Status: complete.** App 2 = "On-Call Roster Tracker" (`REQ-2026-03`), a write-heavy, Postgres-backed app with real Azure AD SSO. FORGE tracking issue `forge-template#6` closed 2026-08-20. Code retained in `forge-demo-apps`; staging Container Apps/Postgres left running (no decommission requested, unlike Phase 5's App 1) — Postgres server must be manually stopped after each testing session per standing procedure.
+
+- [x] 6.1 Write a second BA intake spreadsheet for App 2 (different domain from App 1)
+- [x] 6.2 Run all pipeline stages gate-by-gate (same sequence as Phase 5)
+- [x] 6.3 Confirm no mid-run patches required
+- [x] 6.4 Record actuals — compare to App 1 metrics, including Managed Agents session-hour cost trend
+- [x] 6.5 Note any Orchestration Manager Guide gaps discovered during App 2 — update Document 6 (including any Managed Agents failure-handling gaps)
 
 ---
 
@@ -226,8 +231,8 @@
 
 > Goal: Prove the enhancement path works. Run a targeted enhancement to App 1 or App 2 through the pipeline, including Codebase Ingestion.
 
-- [x] 7.1 Complete Codebase Ingestion Agent (3.11 above, if deferred) — completed and live-verified 2026-08-27 (`core/agents/ingestion_agent.py`, Stage 0a wiring in `00-intake.yml`, optional fetch in `requirements_agent.py`/`design_agent.py`); see CLAUDE.md "ingestion_agent.py — Stage 0a"
-- [ ] 7.2 Choose a small, well-scoped enhancement to App 1 or App 2
+- [x] 7.1 Complete Codebase Ingestion Agent (3.11 above, if deferred) *(2026-08-27 — done, live-verified; see 3.11 above and `docs/FORGE-Phase7-Ingestion-Agent-Spec.md`)*
+- [ ] 7.2 Choose a small, well-scoped enhancement to App 1 or App 2 *(candidate proposed, not yet confirmed by Mike — a read-only coverage-history view for REQ-2026-03, surfacing the already-recorded claim/release event log per R-010; additive only, no write-path changes. See context doc v67, "On the horizon.")*
 - [ ] 7.3 Write the BA intake spreadsheet for the enhancement (Request Type = Enhancement)
 - [ ] 7.4 Stage 0a — confirm ingestion agent reads the target service folder and produces an architecture summary
 - [ ] 7.5 Run all pipeline stages (same sequence, plus ingestion summary fed into Requirements Agent)
