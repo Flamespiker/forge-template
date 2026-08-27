@@ -600,7 +600,37 @@ def run_implementation_coordinator(
 
     resources: list[dict] = []
     if existing_service:
-        service_root, resources = _resolve_enhancement_target(existing_service)
+        try:
+            service_root, resources = _resolve_enhancement_target(existing_service)
+        except Exception as exc:
+            # Same ADR-0011 comment-then-raise contract every other agent
+            # follows -- this call sits BEFORE the try/except below that
+            # covers run_implementation_stage(), so a Layer 2 raise here
+            # (existing service not found) needs its own explicit handling
+            # or it would propagate to main()'s bare except with no comment
+            # ever posted, unlike Ingestion Agent's own Layer 2 backstop.
+            logger.exception(
+                "Failed to resolve Enhancement target for request %s "
+                "(existing_service=%s)",
+                resolved_request_id, existing_service,
+            )
+            if not dry_run:
+                failure_body = (
+                    "⚠️ **FORGE Implementation Coordinator failed to resolve the "
+                    "Enhancement target.**\n\n"
+                    f"Error: `{exc}`\n\n"
+                    "No Managed Agents session was created -- nothing to recover or "
+                    "clean up. This is most likely a wrong/mistyped 'Existing Service "
+                    "Name' on the intake spreadsheet. An Orchestration Manager needs "
+                    "to investigate before re-applying `design-approved`."
+                )
+                try:
+                    post_comment(issue_number, failure_body)
+                except Exception:
+                    logger.exception(
+                        "Also failed to post failure comment to issue #%s", issue_number
+                    )
+            raise
     else:
         service_root = f"services/{resolved_request_id}"
 
