@@ -377,12 +377,19 @@ def _commit_and_open_pr(
     issue_number: int,
     files_to_commit: dict[str, str],
     recovered: bool = False,
+    existing_service: str | None = None,
 ) -> dict:
     """
     Shared tail end for both the normal happy path and a manual session
     recovery: commit files_to_commit to feature/<request_id>, open the draft
     PR, and post the tracking-issue comment. Deliberately factored out so
     recover_implementation_session() doesn't duplicate this logic.
+
+    Args:
+        existing_service: Item #23 §2.3 -- when set (an Enhancement run), adds
+            a "Related service: services/<existing_service>/" traceability
+            line to both the PR body and the tracking-issue comment. Omitted
+            entirely (no empty/placeholder line) on a Greenfield run.
 
     Returns:
         Dict with "pr_number" and "pr_url".
@@ -410,6 +417,9 @@ def _commit_and_open_pr(
         "normally on its own; no implementation work was lost or duplicated._"
         if recovered else ""
     )
+    related_service_line = (
+        f"Related service: services/{existing_service}/\n\n" if existing_service else ""
+    )
 
     pr = open_pr(
         title=f"FORGE Implementation: {request_id}",
@@ -418,6 +428,7 @@ def _commit_and_open_pr(
             "by the FORGE Implementation Coordinator (Backend + Frontend + Test "
             "Writer subagents via Anthropic Managed Agents -- ADR-0010).\n\n"
             f"Related FORGE tracking issue: {tracking_issue_ref}\n\n"
+            f"{related_service_line}"
             f"Managed Agents session: `{session_id}` -- per-subagent audit trail in "
             f"the Claude Console: {_CONSOLE_SESSION_URL_PREFIX}{session_id}\n\n"
             "Merge to approve (Document 6 Gate 3)."
@@ -442,6 +453,7 @@ def _commit_and_open_pr(
         f"subagents (Managed Agents session `{session_id}`), committed the result "
         f"to `{service_root}/` on branch `{branch_name}`, and opened a draft PR: "
         f"{pr['html_url']}\n\n"
+        f"{related_service_line}"
         f"Per-subagent audit trail: {_CONSOLE_SESSION_URL_PREFIX}{session_id}\n\n"
         "---\n"
         f"{recovered_note_comment}"
@@ -548,7 +560,8 @@ def recover_implementation_session(
         return {"outcome": "recovered", "pr_number": None, "pr_url": None}
 
     pr_result = _commit_and_open_pr(
-        request_id, service_root, session_id, issue_number, files_to_commit, recovered=True
+        request_id, service_root, session_id, issue_number, files_to_commit,
+        recovered=True, existing_service=existing_service,
     )
 
     archive_session(coordinator_id, environment_id, session_id, subagent_ids)
@@ -706,7 +719,8 @@ def run_implementation_coordinator(
         return {"session_id": session_id, "files": list(files_to_commit)}
 
     pr_result = _commit_and_open_pr(
-        resolved_request_id, service_root, session_id, issue_number, files_to_commit
+        resolved_request_id, service_root, session_id, issue_number, files_to_commit,
+        existing_service=existing_service,
     )
     return {"session_id": session_id, "pr_number": pr_result["pr_number"], "files": list(files_to_commit)}
 
