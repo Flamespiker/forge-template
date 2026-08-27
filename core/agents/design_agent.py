@@ -42,6 +42,19 @@ Per ADR-0011 / Document 6: the invoke_agent() call is wrapped in try/except at t
 call site. On failure (or malformed/truncated JSON, or an invalid openapi.yaml), a
 failure comment is posted to the tracking issue (best-effort, real run only)
 before the exception is re-raised.
+
+Enhancement requests (Phase 7 step 7.1): also attempts to fetch
+existing-architecture-summary.md (committed by the Codebase Ingestion Agent,
+Stage 0a, to the same pipeline-state branch) and folds it into the prompt.
+Unlike requirements_agent.py, this agent never reads the original intake
+spreadsheet -- it has no direct signal for Greenfield vs. Enhancement -- so the
+fetch is attempted unconditionally rather than gated on a parsed Request Type
+field. A 404 is tolerated exactly the same way either way: expected and silent
+for a Greenfield request (nothing was ever committed), or "Ingestion hasn't
+finished/failed yet" for an Enhancement request -- both degrade identically to
+proceeding without it, so no extra signal is lost by not distinguishing them here.
+Any OTHER fetch error propagates into the existing try/except below and produces
+the standard failure comment.
 """
 
 from __future__ import annotations
@@ -52,6 +65,7 @@ import logging
 import os
 import sys
 
+import requests
 import yaml
 
 from core.agents.utils import file_io
@@ -118,6 +132,13 @@ design.md's own architecture narrative, which may still discuss CI/CD (e.g. \
 "GitHub Actions") as part of the fixed core-layer tech choices above — the \
 boundary is on tasks.md's per-subagent task items specifically.
 
+If an Existing Architecture Summary is provided (Enhancement requests only): \
+respect the existing tech stack, naming conventions, folder layout, and API \
+surface it describes in both design.md and tasks.md — do not propose a design \
+or task breakdown as if the folder were empty. In design.md, note explicitly \
+where each new component fits alongside what already exists, and flag anywhere \
+a requirement appears to conflict with the existing observed behavior.
+
 Output format — this is strict:
 Respond with ONLY a single JSON object, no markdown code fences, no prose before \
 or after it. It must have exactly this shape:
@@ -129,12 +150,48 @@ or after it. It must have exactly this shape:
 }"""
 
 
-def _build_user_prompt(requirements_md: str, stack_prefs_text: str) -> str:
+def _fetch_existing_architecture_summary(request_id: str) -> str | None:
+    """
+    Attempt to read existing-architecture-summary.md (committed by the Codebase
+    Ingestion Agent, Stage 0a, to pipeline-state). Unlike requirements_agent.py,
+    this is attempted unconditionally -- design_agent.py never reads the original
+    spreadsheet, so it has no direct Greenfield-vs-Enhancement signal. A 404 is
+    tolerated the same way regardless of cause (see module docstring); any other
+    error propagates to the caller.
+    """
+    try:
+        return get_file_contents(
+            f"docs/{request_id}/existing-architecture-summary.md", branch="pipeline-state"
+        )
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            logger.warning(
+                "No existing-architecture-summary.md found for request %s -- proceeding "
+                "without existing-architecture grounding (expected for a Greenfield "
+                "request; for an Enhancement request, confirm the Codebase Ingestion "
+                "Agent has finished).",
+                request_id,
+            )
+            return None
+        raise
+
+
+def _build_user_prompt(
+    requirements_md: str,
+    stack_prefs_text: str,
+    existing_architecture_summary: str | None = None,
+) -> str:
+    existing_architecture_section = (
+        f"## Existing Architecture Summary (Codebase Ingestion Agent)\n\n{existing_architecture_summary}\n"
+        if existing_architecture_summary
+        else ""
+    )
     return (
         "## Approved Requirements (requirements.md)\n\n"
         f"{requirements_md}\n"
         "## Team Stack Preferences\n\n"
         f"{stack_prefs_text}\n"
+        f"{existing_architecture_section}"
         "---\n"
         "Produce your JSON response now."
     )
@@ -173,9 +230,10 @@ def run_design_agent(
     )
     stack_prefs = file_io.read_yaml(stack_preferences_path)
     stack_prefs_text = file_io.format_stack_preferences_markdown(stack_prefs)
-    user_prompt = _build_user_prompt(requirements_md, stack_prefs_text)
 
     try:
+        existing_architecture_summary = _fetch_existing_architecture_summary(resolved_request_id)
+        user_prompt = _build_user_prompt(requirements_md, stack_prefs_text, existing_architecture_summary)
         result = invoke_agent(
             system_prompt=_SYSTEM_PROMPT,
             user_prompt=user_prompt,
