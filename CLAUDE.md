@@ -1334,6 +1334,89 @@ session ID first (`--recover-session`, or check for a `managed_agents_session_st
 line / whether `feature/<request-id>` already exists as a sign of prior partial
 completion).
 
+### Manually killing a runaway Managed Agents session (raw curl, no repo tooling)
+
+**This repo's own `archive_session()` deliberately refuses to touch a session that
+isn't already idle** (it calls `wait_for_all_threads_idle()` first and does not catch
+`SessionStillRunningError`) — by design, so nothing in the codebase can accidentally
+archive a genuinely still-running Stage 3 session out from under itself. That means
+there is **no script in this repo** for force-stopping a session someone decides (e.g.
+mid-Console-review) needs to be killed right now. Live-verified end-to-end 2026-08-27
+against a real running session (`sesn_01AbaBvHhDkLpkRPHRFdrFLF`, REQ-2026-04, killed
+~16 min in, coordinator+backend+frontend all mid-turn, test_writer not yet started).
+
+**Step 1 — interrupt the running turn(s):**
+```bash
+set -a; source .env; set +a
+curl -sS https://api.anthropic.com/v1/sessions/<SESSION_ID>/events \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: managed-agents-2026-04-01" \
+  -H "content-type: application/json" \
+  -d '{"events": [{"type": "user.interrupt"}]}'
+```
+This stops the active turn(s) but does **not** archive anything — the session,
+environment, coordinator, and subagent resources are all still live (and billable)
+afterward.
+
+**Step 2 — confirm it actually landed** (mirrors `get_thread_statuses()`):
+```bash
+curl -sS "https://api.anthropic.com/v1/sessions/<SESSION_ID>/threads?limit=100" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: managed-agents-2026-04-01"
+```
+Wait for every thread's `status` to read `idle` before archiving. Note this is
+interrupt-idle, not real-completion-idle — do not treat it as "the implementation
+finished," just "it stopped."
+
+**Step 3 — check for output before archiving (worth doing, cheap):**
+```bash
+curl -sS "https://api.anthropic.com/v1/files?scope_id=<SESSION_ID>&limit=100" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: files-api-2025-04-14,managed-agents-2026-04-01"
+```
+An interrupted session almost never has `implementation.tar.gz` in
+`/mnt/session/outputs/` yet (packaging is the coordinator's last step) — confirmed
+empty on the 2026-08-27 kill — but it costs nothing to check before the environment
+(and its sandbox filesystem) is gone for good.
+
+**Step 4 — get `environment_id`/`coordinator_id`/`subagent_ids`** (mirrors
+`get_session_resource_ids()`; the coordinator's own `multiagent.agents[]` list may
+include a subagent — e.g. `test_writer_agent` — that never actually started a thread
+if the run was killed early; it still needs archiving as an agent resource):
+```bash
+curl -sS "https://api.anthropic.com/v1/sessions/<SESSION_ID>" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: managed-agents-2026-04-01"
+```
+
+**Step 5 — archive everything, in order** (same order as `archive_session()`: session
+→ environment → coordinator → each subagent):
+```bash
+for path in "sessions/<SESSION_ID>" "environments/<ENV_ID>" "agents/<COORD_ID>" \
+            "agents/<SUBAGENT_ID_1>" "agents/<SUBAGENT_ID_2>" "agents/<SUBAGENT_ID_3>"; do
+  curl -sS -X POST "https://api.anthropic.com/v1/$path/archive" \
+    -H "x-api-key: $ANTHROPIC_API_KEY" \
+    -H "anthropic-version: 2023-06-01" \
+    -H "anthropic-beta: managed-agents-2026-04-01" \
+    -H "content-type: application/json" \
+    -d '{}'
+done
+```
+Each response's `archived_at` field confirms success; the session response's own
+`status` flips to `terminated`. All calls 200'd on the first try in the 2026-08-27
+run — no need for the wrapper's idle→running archive-retry dance, since by this point
+every thread was already confirmed idle in Step 2.
+
+**Why this isn't wrapped into a repo script (yet):** it's a rare, manual,
+human-in-the-loop action (someone in the Console deciding to kill a session), not
+something any automated pipeline stage should ever do to itself. If this keeps coming
+up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
+`--recover-session` — not yet built.
+
 ---
 
 ## Open Items / Known Gaps
