@@ -36,6 +36,17 @@ Per ADR-0011 / Document 6: the invoke_agent() call is wrapped in try/except at t
 call site. On failure (or malformed/truncated JSON from the model), a failure
 comment is posted to the tracking issue (best-effort, real run only) before the
 exception is re-raised.
+
+Enhancement requests (Phase 7 step 7.1): if the spreadsheet's Request Type is
+Enhancement, this agent also attempts to fetch existing-architecture-summary.md
+(committed by the Codebase Ingestion Agent, Stage 0a, to the same pipeline-state
+branch) and folds it into the prompt. A 404 (Ingestion hasn't finished yet, or
+failed) is tolerated -- logged as a warning, proceeds without it -- since a missing
+summary shouldn't hard-block Requirements from drafting off the spreadsheet +
+clarification answers alone, same as every request took before Stage 0a existed.
+Any OTHER fetch error (not a 404) is treated as a real failure, same as any other
+exception here -- it propagates into the existing try/except below and produces
+the standard failure comment, rather than being silently swallowed.
 """
 
 from __future__ import annotations
@@ -45,9 +56,11 @@ import json
 import logging
 import sys
 
+import requests
+
 from core.agents.utils import file_io
 from core.agents.utils.claude_agent_wrapper import invoke_agent
-from core.agents.utils.github_helper import get_issue_comments, post_comment, commit_files
+from core.agents.utils.github_helper import get_file_contents, get_issue_comments, post_comment, commit_files
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +98,10 @@ requirement row, and do not invent new ones that aren't grounded in the spreadsh
 or the clarification answers.
 - Write for a Technical Approver who needs to decide whether to approve this for \
 ADO work item creation — clear, complete, plain English.
+- If an Existing Architecture Summary is provided (Enhancement requests only), note \
+where each new requirement fits into what already exists, and explicitly flag any \
+requirement that appears to conflict with the existing observed behavior described \
+in that summary.
 
 Rules for the ADO work-item hierarchy:
 - Exactly one Epic, titled after the request itself.
@@ -146,14 +163,55 @@ def _format_clarification_answers(comments: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _build_user_prompt(parsed: dict, clarification_answers: str) -> str:
+def _is_enhancement(parsed: dict) -> bool:
+    request_type_section = parsed["overview"].get("request_type") or {}
+    return (request_type_section.get("Request Type") or "").strip().lower() == "enhancement"
+
+
+def _fetch_existing_architecture_summary(parsed: dict, request_id: str) -> str | None:
+    """
+    For an Enhancement request, fetch existing-architecture-summary.md (committed
+    by the Codebase Ingestion Agent, Stage 0a, to pipeline-state). Returns None for
+    a Greenfield request (nothing to fetch) or a 404 (Ingestion hasn't finished, or
+    failed -- logged as a warning, not a hard failure). Any other error propagates
+    to the caller.
+    """
+    if not _is_enhancement(parsed):
+        return None
+    try:
+        return get_file_contents(
+            f"docs/{request_id}/existing-architecture-summary.md", branch="pipeline-state"
+        )
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            logger.warning(
+                "No existing-architecture-summary.md found for enhancement request %s "
+                "(Codebase Ingestion may not have finished yet, or may have failed) -- "
+                "proceeding without existing-architecture grounding.",
+                request_id,
+            )
+            return None
+        raise
+
+
+def _build_user_prompt(
+    parsed: dict,
+    clarification_answers: str,
+    existing_architecture_summary: str | None = None,
+) -> str:
     overview_text = file_io.format_overview_markdown(parsed["overview"])
     requirements_text = file_io.format_requirements_markdown(parsed["requirements"])
+    existing_architecture_section = (
+        f"## Existing Architecture Summary (Codebase Ingestion Agent)\n\n{existing_architecture_summary}\n"
+        if existing_architecture_summary
+        else ""
+    )
     return (
         "## Request Overview\n\n"
         f"{overview_text}\n"
         f"## Requirements ({len(parsed['requirements'])} submitted)\n\n"
         f"{requirements_text}\n"
+        f"{existing_architecture_section}"
         "## BA's Clarification Answers (from the tracking issue thread)\n\n"
         f"{clarification_answers}\n"
         "---\n"
@@ -207,9 +265,10 @@ def run_requirements_agent(
     parsed = file_io.read_xlsx(spreadsheet_path)
     comments = get_issue_comments(issue_number)
     clarification_answers = _format_clarification_answers(comments)
-    user_prompt = _build_user_prompt(parsed, clarification_answers)
 
     try:
+        existing_architecture_summary = _fetch_existing_architecture_summary(parsed, resolved_request_id)
+        user_prompt = _build_user_prompt(parsed, clarification_answers, existing_architecture_summary)
         result = invoke_agent(
             system_prompt=_SYSTEM_PROMPT,
             user_prompt=user_prompt,
