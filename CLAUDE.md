@@ -133,12 +133,45 @@ was closed 2026-08-20. Phases 1-6 are complete:
   `docs/FORGE-context_v*.md` (maintained by the Claude.ai side of the two-tool
   workflow) — the "still not run" open item there should be marked closed to match.
 
-**Standing convention — ad hoc fix-PR branch naming (decided 2026-08-13):** use
-`feature/fix-<short-description>`, not `fix/*` — `fix/*` branches never get dispatched
-to QA/Security by `forge-demo-apps`' `notify-forge.yml` (only `feature/*`/`design/*`
-are), so they hit the permanently-unsatisfiable `security-check` gate and need an admin
-merge every time. This has already happened 4 times (PRs #7, #8, #11, #16) — see Open
-Items.
+**Standing convention — ad hoc fix-PR branch naming AND tracking-issue body line
+(decided 2026-08-13, re-confirmed and extended 2026-08-27 per Items #9/#15):** any ad
+hoc fix PR (human- or Claude-opened, not agent-opened) against `forge-demo-apps` must:
+1. Use branch name `feature/fix-<short-description>`, not bare `fix/*` — `notify-forge.yml`'s
+   dispatch filter is `startsWith(head.ref, 'feature/')`, so `feature/fix-*` already gets
+   forwarded to `04-qa.yml`/`05-security.yml` for a real scan. Bare `fix/*` (or any other
+   prefix, e.g. `chore/*`) is never forwarded and hits the permanently-unsatisfiable
+   `security-check` branch-protection gate, needing an admin merge every time.
+2. Include a `Related FORGE tracking issue: Flamespiker/forge-template#N` line in the PR
+   body — `workflow_glue.py`'s `resolve_tracking_issue()` (used by `04-qa.yml`/
+   `05-security.yml`) hard-requires this line and has no fallback; a PR missing it fails
+   outright at that step even on a correctly-named `feature/fix-*` branch.
+
+**Item #9 re-verified live 2026-08-27, closed — no code fix needed:** the `feature/`
+prefix match in `notify-forge.yml` already works correctly for `feature/fix-*`, confirmed
+against real PR history rather than assumed:
+- **PR #27** (`feature/fix-appinsights-core-js-dedupe`, follows the convention) — `notify`
+  dispatch: `SUCCESS`; `security-check` ran for real and returned `SUCCESS`.
+- **PRs #7, #8, #11, #16** (the original 4 admin-merge cases) — all used bare `fix/*`,
+  which *predates* this convention (PR #16 merged the same day the convention was
+  decided). Correctly excluded by design, not a dispatch bug.
+- **PRs #28, #29** (cited as recent evidence the gap still existed) — actually used
+  `chore/verify-build-workflow` / `chore/verify-build-fix-backend-context`, neither of
+  which is `feature/fix-*` at all. Correctly skipped for a different reason: the
+  convention simply wasn't used, not a filter bug.
+No `notify-forge.yml` change was made. The remaining risk is purely a human/Claude
+process one (forgetting the convention), covered by point 1 above.
+
+**Item #15 closed 2026-08-27 — Option A (process fix), per Mike's explicit choice over
+Option B (a `resolve_tracking_issue()` code-level fallback):** documented as point 2
+above rather than making `resolve_tracking_issue()` tolerant of a missing line — keeps
+that function's existing contract (a tracking issue must be identifiable) intact for
+every other caller. No live throwaway-PR re-test was run for this closure — the
+underlying mechanics (a present tracking-issue line resolving correctly) are already
+proven by `design_agent.py`/`implementation_coordinator.py`'s existing behavior and by
+PR #27 above; only the process discipline of remembering to include the line on an ad
+hoc PR is new. Historical occurrence: PR #21 hit exactly this gap (both QA and Security
+failed at `resolve-tracking-issue` until the body was manually edited and the dispatch
+manually replayed).
 
 **Files that exist (`forge-template`):**
 
@@ -1682,16 +1715,27 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
      `tasks.md` with zero CI/CD-flavored task items, correctly redirecting the ask into
      backend/frontend test infrastructure instead ($0.09, single call).
    - Commits: `78a2f3f` (Layer 1), `5ef29de` (Layer 2).
-9. **Admin-merge pattern for ad hoc `fix/*` branches — 4 occurrences (PRs #7, #8, #11,
-   #16).** Each hit the permanently-unsatisfiable `security-check` (only `feature/*`/
-   `design/*` branches get dispatched a real or no-op check) plus no review, resolved via
-   `gh pr merge --admin`. Not decided: extend the no-op-check pattern to a `fix/*`-style
-   prefix, adopt a naming convention already covered by an existing dispatch filter (see
-   the branch-naming convention above), or accept admin-merge as standing procedure.
+9. ~~**Admin-merge pattern for ad hoc `fix/*` branches — 4 occurrences (PRs #7, #8, #11,
+   #16).**~~ — **RESOLVED 2026-08-27 (per `docs/FORGE-Item9-Item15-AdHocFixDispatch-Spec.md`)
+   — no code fix needed, closed on live evidence.** `notify-forge.yml`'s dispatch filter
+   (`startsWith(head.ref, 'feature/')`) already correctly forwards `feature/fix-*` for a
+   real `security-check` scan — confirmed live via PR #27
+   (`feature/fix-appinsights-core-js-dedupe`): `notify` dispatch `SUCCESS`,
+   `security-check` ran for real and returned `SUCCESS`. The 4 original admin-merge cases
+   all used bare `fix/*`, predating the 2026-08-13 `feature/fix-*` convention (PR #16
+   merged the same day the convention was decided) — correctly excluded by design, not a
+   bug. PRs #28/#29 (initially suspected as recent evidence the gap persisted) actually
+   used `chore/*` branch names, never `feature/fix-*` at all — again correctly skipped,
+   for an unrelated reason (convention not used). See the standing convention note above
+   for the full write-up. No admin-merge should be needed going forward as long as the
+   `feature/fix-*` convention is actually followed.
 10. **`enforce_admins` on `forge-demo-apps`' `main` branch protection is currently
     `false`**, contradicting the originally-confirmed `true` from Step 4.8. Nothing any
-    known session action changed it. Mike's call whether to flip it back now that the
-    design-PR no-op-check fix removed the original reason an admin bypass was needed.
+    known session action changed it. **Safe to flip now, pending Mike's explicit
+    go-ahead** — Items #9 and #15 (the two gaps that originally motivated leaving it off)
+    are both closed as of 2026-08-27; per `docs/FORGE-Item9-Item15-AdHocFixDispatch-Spec.md`,
+    the flip itself is a separate `gh api`/Portal action, not a code commit, and should
+    not happen silently — still awaiting Mike's confirmation to actually perform it.
 11. **21 `next@14.2.35` CVE findings have no 14.x backport** (8 High + 11 Medium + 2 Low)
     — accepted ongoing risk from the deliberate decision to stay on the 14.x line, not a
     bug. **Count refined 2026-08-21** (see Item #19's triage pass): the original count
@@ -1714,16 +1758,25 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     Server provisioned; claim/release write-path verified end-to-end via real HTTP +
     direct DB query. `AzureAd__Audience` confirmed as `api://b59886c1-12ac-42c1-895f-5fafa8e57318`
     (the default, non-custom Application ID URI) via the Portal.
-15. **Ad hoc PRs need the `Related FORGE tracking issue: <owner>/<repo>#N` body line
-    added manually if not opened by a FORGE stage agent.** `workflow_glue.py`'s
-    `resolve_tracking_issue()` (used by `04-qa.yml`/`05-security.yml`) requires this
+15. ~~**Ad hoc PRs need the `Related FORGE tracking issue: <owner>/<repo>#N` body line
+    added manually if not opened by a FORGE stage agent.**~~ — **RESOLVED 2026-08-27 via
+    Option A (process fix), per Mike's explicit choice** (per
+    `docs/FORGE-Item9-Item15-AdHocFixDispatch-Spec.md`'s design fork) **over Option B**
+    (making `resolve_tracking_issue()` tolerant of a missing line via a fallback,
+    mirroring `resolve_feature_pr()`'s Item #17 pattern) — rejected because an ad hoc PR
+    has no natural tracking issue to fall back to if one was never opened, and loosening
+    `resolve_tracking_issue()`'s contract would be a real behavior change other stages
+    rely on, not a small fix. Resolved instead by documenting the requirement as a
+    standing convention (see above) alongside the `feature/fix-*` branch-naming rule —
+    no code change to `workflow_glue.py`. `resolve_tracking_issue()` still requires this
     line in the PR body; `design_agent.py`/`implementation_coordinator.py` always write
     it, but a human- or Claude-opened ad hoc fix PR (e.g. PR #21) does not, by default —
     confirmed live: both QA and Security failed outright on `resolve-tracking-issue`
     until the PR body was edited to add the line and the `repository_dispatch` event was
-    manually replayed (`gh api repos/.../dispatches`) to get a real (re-)scan. Distinct
-    from the `feature/*` vs. `fix/*` branch-naming issue (#9) — this one bites even on a
-    correctly-named `feature/fix-*` branch.
+    manually replayed (`gh api repos/.../dispatches`) to get a real (re-)scan. Going
+    forward, any ad hoc fix PR must include this line at open time per the standing
+    convention above — no live throwaway-PR re-test was run for this closure (see that
+    convention note for why).
 16. ~~**Cleanup debt from the 2026-08-19 write-path verification session, not urgent:**~~
     — **RESOLVED 2026-08-19.** Test user "Mike App Test"
     (`AzureAdOid=3100bd61-03a4-4ebc-9327-4d2731f172f5`) flipped back to
