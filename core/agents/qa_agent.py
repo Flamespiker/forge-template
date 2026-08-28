@@ -108,7 +108,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.agents.utils.claude_agent_wrapper import invoke_agent
-from core.agents.utils.enhancement_target import resolve_service_root
+from core.agents.utils.enhancement_target import (
+    EnhancementTargetNotFoundError,
+    resolve_service_root,
+)
 from core.agents.utils.github_helper import (
     get_file_contents,
     get_issue,
@@ -758,7 +761,64 @@ def run_qa_agent(
         )
         return {"skipped": True, "reason": "qc-retry-limit-reached"}
 
-    service_root = Path(repo_path) / resolve_service_root(request_id, existing_service)
+    resolved_target = resolve_service_root(request_id, existing_service)
+    service_root = Path(repo_path) / resolved_target
+
+    # Item #25 §2.2: this check must run BEFORE any backend/frontend test-dir
+    # resolution -- both _resolve_backend_test_dir() (a glob) and
+    # _frontend_test_script_exists() (a plain .exists() check) silently
+    # return "no test project found" for a directory that doesn't exist at
+    # all, identically to a directory that exists but is genuinely test-less.
+    # A missing top-level service directory means QA never ran against any
+    # real code -- a distinct failure, not a legitimate not_applicable
+    # outcome. Same log-comment-reraise shape as Stage 3's own Layer 2 fix
+    # (Item #24) -- deliberately NOT inside the try/except below, so this
+    # gets its own specific comment instead of the generic "QA Agent failed
+    # to complete" message, and deliberately BEFORE any retry-attempt
+    # counting, so it never counts against _MAX_RETRIES (Item #25 §3.3) --
+    # the request never actually ran against real code.
+    if not service_root.is_dir():
+        if existing_service:
+            context = (
+                f"This is an Enhancement request targeting existing service "
+                f"`{existing_service}` -- confirm the 'Existing Service Name' value "
+                "on the intake spreadsheet matches a real `services/` folder in "
+                "forge-demo-apps."
+            )
+        else:
+            context = (
+                f"Expected `services/{request_id}/` to exist for this Greenfield "
+                "request -- has Implementation (Stage 3) run and committed a "
+                "feature PR yet?"
+            )
+        message = (
+            "⚠️ **FORGE QA Agent could not run.**\n\n"
+            f"Expected service directory `{resolved_target}/` does not exist in this "
+            "checkout. This is a distinct failure from a test failure or a "
+            "not-applicable suite -- QA never ran against any real code.\n\n"
+            f"{context}\n\n"
+            "No `qa-approved` or `qa-loop-back` applied to this tracking issue -- this "
+            "does not count against the QA retry budget. An Orchestration Manager "
+            "needs to investigate."
+        )
+        logger.error(
+            "QA Agent: resolved service directory '%s' does not exist under repo_path "
+            "'%s' (request_id=%s, existing_service=%s)",
+            resolved_target, repo_path, request_id, existing_service,
+        )
+        if dry_run:
+            print("=" * 20, "would post failure comment -- resolved target directory missing", "=" * 20)
+            print(message)
+        else:
+            try:
+                post_comment(issue_number, message)
+            except Exception:
+                logger.exception("Also failed to post missing-target comment to issue #%s", issue_number)
+        raise EnhancementTargetNotFoundError(
+            f"Resolved service directory '{resolved_target}/' does not exist under "
+            f"repo_path '{repo_path}'."
+        )
+
     backend_dir, backend_dir_warning = _resolve_backend_test_dir(service_root)
     if backend_dir_warning:
         logger.warning(backend_dir_warning)

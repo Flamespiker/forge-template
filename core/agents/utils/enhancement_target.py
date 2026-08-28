@@ -17,6 +17,17 @@ module exists for QA/Security only, which never had this concept before.
 from __future__ import annotations
 
 
+class EnhancementTargetNotFoundError(RuntimeError):
+    """
+    Raised by QA (Item #25 §2.2) and Security (§2.3) when resolve_service_root()'s
+    returned path doesn't exist as a real directory under --repo-path -- a
+    distinct, real failure (the request never ran against any actual code),
+    never resolved to the same outcome as a directory that exists but
+    genuinely has no test project / triggers no scanner findings. Same
+    naming convention as Ingestion Agent's EnhancementServiceNotFoundError.
+    """
+
+
 def resolve_service_root(request_id: str, existing_service: str | None) -> str:
     """
     Returns the repo-relative services/<n>/ path QA and Security should treat
