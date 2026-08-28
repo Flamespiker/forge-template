@@ -556,6 +556,87 @@ def run_security_agent(
     service_dir = str(Path(repo_path) / resolved_target)
     repo_full_name = f"{os.environ['FORGE_GITHUB_OWNER']}/{os.environ.get('FORGE_TARGET_REPO', 'forge-demo-apps')}"
 
+    # Item #25 §2.3: same directory-existence check as QA's §2.2 fix, before
+    # any scanner runs. Previously a missing target directory crashed
+    # _run_semgrep() with an unhandled FileNotFoundError (subprocess.run()
+    # raising on a nonexistent cwd) -- caught by the generic ADR-0011 except
+    # block below, which did post a real failure comment and correctly
+    # withhold security-approved (confirmed live -- this was never as silent
+    # as it first looked), but named the raw Python exception rather than
+    # the real Enhancement-target problem, and Gitleaks/Dependabot never got
+    # a chance to run at all. Handled here as its own branch, not raised --
+    # same non-raising shape as the existing any_tool_failed path below (the
+    # check run, not the Actions job's exit code, is what blocks merge) --
+    # and deliberately distinct from any_tool_failed: a scanner that never
+    # got the chance to run because its target doesn't exist is a different
+    # fact than one that ran and crashed.
+    if not Path(service_dir).is_dir():
+        if existing_service:
+            context = (
+                f"This is an Enhancement request targeting existing service "
+                f"`{existing_service}` -- confirm the 'Existing Service Name' value "
+                "on the intake spreadsheet matches a real `services/` folder in "
+                "forge-demo-apps."
+            )
+        else:
+            context = (
+                f"Expected `services/{request_id}/` to exist for this Greenfield "
+                "request -- has Implementation (Stage 3) run and committed a "
+                "feature PR yet?"
+            )
+        message = (
+            "⚠️ **FORGE Security Agent could not run.**\n\n"
+            f"Expected service directory `{resolved_target}/` does not exist in this "
+            "checkout. This is a distinct condition from a scanner crash or a clean "
+            "scan -- no scanner ran against any real code.\n\n"
+            f"{context}\n\n"
+            "No `security-approved` applied. An Orchestration Manager needs to "
+            "investigate."
+        )
+        logger.error(
+            "Security Agent: resolved service directory '%s' does not exist under "
+            "repo_path '%s' (request_id=%s, existing_service=%s)",
+            resolved_target, repo_path, request_id, existing_service,
+        )
+        check_run_title = "Security scan: blocked — target directory not found"
+        run_summary = {
+            "counts_by_severity": {sev: 0 for sev in (_SEV_CRITICAL, _SEV_HIGH, _SEV_MEDIUM, _SEV_LOW)},
+            "counts_by_tool": {},
+            "check_conclusion": "failure",
+            "label_to_apply": None,
+            "overview_markdown": message,
+            "target_missing": True,
+        }
+
+        if dry_run:
+            print("=" * 20, "would post failure comment -- resolved target directory missing", "=" * 20)
+            print(message)
+            print("=" * 20, "check run (not created)", "=" * 20)
+            print(f"name={_CHECK_RUN_NAME} conclusion=failure title={check_run_title!r}")
+            print("=" * 20, "label (not applied)", "=" * 20)
+            print("(none — resolved target directory does not exist)")
+            return run_summary
+
+        try:
+            post_comment(issue_number, message)
+        except Exception:
+            logger.exception("Also failed to post missing-target comment to issue #%s", issue_number)
+
+        pr = get_pr(pr_number)
+        create_check_run(
+            head_sha=pr["head"]["sha"],
+            name=_CHECK_RUN_NAME,
+            conclusion="failure",
+            title=check_run_title,
+            summary=message,
+        )
+        logger.info(
+            "Security Agent: resolved target directory missing for request %s -- "
+            "check run created with conclusion=failure, no label applied.",
+            request_id,
+        )
+        return run_summary
+
     try:
         semgrep_result = _run_semgrep(service_dir)
         gitleaks_result = _run_gitleaks(service_dir)
