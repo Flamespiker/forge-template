@@ -36,6 +36,17 @@ writing the actual enhancement request's intake spreadsheet) has not started —
 per `docs/FORGE-Phase7-Ingestion-Agent-Spec.md`, that's explicitly a separate,
 later session's work.
 
+**Stage 3 (Implementation) now correctly extends to Enhancement requests — built
+and live-verified 2026-08-28.** Previously `implementation_coordinator.py` always
+targeted `services/<request_id>/` unconditionally, so an Enhancement would have
+built a brand-new folder from scratch instead of editing the real existing service
+— this was Build Plan step 7.6's literal acceptance bar and the mechanism blocking
+it. See Open Item #24 below for the full fix narrative (mount-path rewrite
+discovery, the Layer-2 comment fix, the stale-code trigger incident, and live
+verification via `forge-demo-apps#32`). Build Plan v9's own step 7.6 checkbox
+still needs updating on the Claude.ai side — this session only touched
+`CLAUDE.md` per its own scope.
+
 **FORGE has completed Phase 6 (Repeatability)** — App 2 (`REQ-2026-03`, On-Call Roster
 Tracker) ran through the full pipeline; its FORGE tracking issue (`forge-template#6`)
 was closed 2026-08-20. Phases 1-6 are complete:
@@ -2102,6 +2113,207 @@ a spec (Item #6's real Stage 3 dry-run) was deliberately deferred on cost/time g
 Item #6's own entry above for the full rationale. This is a deliberate, recorded deferral
 for that one specific piece, not a claim that every fix in this session's batch went
 unverified live — #21 and #23 in particular did get real, live confirmation.
+
+24. ~~**Stage 3 (Implementation) never extended for Enhancement requests**~~ —
+    **RESOLVED AND LIVE-VERIFIED 2026-08-28**, per
+    `docs/FORGE-Item23-Stage3-Enhancement-Spec.md`. Formerly tracked as **Item #23
+    in the Open Items Backlog** (`FORGE-Open-Items-Backlog-v1.md`, the Claude.ai
+    side's own tracker); renumbered #24 here to avoid collision with this file's
+    own, already-existing Item #23 — **"No on-demand way to verify a service's
+    language build or Docker build outside the full pipeline,"** resolved
+    2026-08-26 via `forge-demo-apps`' `verify-build.yml` (see that entry above) —
+    a completely unrelated fix that happened to land on the same number in a
+    different, independently-maintained list. Flagging back to Mike to reconcile
+    on the backlog-doc side. Previously
+    `implementation_coordinator.py` always resolved `service_root` from the
+    **new** `request_id`, so an Enhancement would have built a brand-new
+    `services/<request_id>/` folder from scratch instead of editing the real
+    existing service — Build Plan step 7.6's literal acceptance bar.
+    - **§2.4 (cheap, standalone):** Excel dropdown on `docs/Intake Template.xlsx`'s
+      `Overview!C13` ("Existing Service Name"), listing current service folders as
+      defense-in-depth alongside Ingestion Agent's existing raise-on-mismatch
+      backstop.
+    - **§2.1:** new "Determine Enhancement status" step in `03-implementation.yml`
+      (mirrors `00-intake.yml`'s own pattern) resolves `--existing-service`;
+      `implementation_coordinator.py` resolves `service_root` to the real
+      `services/<existing_service>/` when set, raising (Layer 2 precedent from
+      Ingestion Agent / Item #8) if that folder doesn't exist in the monorepo.
+    - **§2.2 (sandbox population):** confirmed live that Managed Agents sessions
+      support pre-session file seeding via `resources[]`, but mounts are
+      **read-only** — existing-service files can't be edited in place at
+      `service_root`. New `EXISTING_SERVICE_MOUNT_DIR` mirrors the existing
+      `SHARED_DOCS_DIR` pattern: files mount read-only there, and the
+      coordinator's new step 1 copies what's relevant into the real (empty,
+      writable) `service_root` before delegating. New
+      `core/agents/utils/existing_service_files.py` selects which files to seed
+      and `upload_input_file()` (mirror-image, input-side counterpart to the
+      existing `list_session_output_files()`/`download_file_content()`) uploads
+      them.
+      **Deliberate deviation from the spec, flagged explicitly (not just in the
+      module docstring):** the spec called for reusing Ingestion Agent's
+      character-budget selection shape; the actual implementation is
+      **count-based** instead. Ingestion Agent's ~60k-character budget exists
+      because its file contents go into an LLM prompt (real per-character token
+      cost); here, files are mounted to disk for the coordinator/subagents to
+      read selectively with their own tools — mounting carries no token cost, so
+      truncating a real app to an arbitrary character budget would risk handing
+      subagents an incomplete, unbuildable copy for no actual savings. The real
+      constraint is the Managed Agents API's 999-file-resource-per-session cap
+      (confirmed live: App1/App2/App3 have 99/70/89 tracked files — nowhere near
+      it), so the common case seeds the full filtered tree; a count-based
+      two-pass fallback (manifests + largest remaining files) only activates
+      near that ceiling.
+    - **§2.3:** `Related service: services/<existing_service>/` line added to
+      both the PR body and tracking-issue comment when set; omitted entirely on
+      Greenfield.
+    - **Bug found and fixed during this work, not part of the original spec:**
+      the Layer 2 raise (existing service not found) was originally called
+      *before* the existing ADR-0011 try/except block in
+      `run_implementation_coordinator()`, so it would have propagated to
+      `main()`'s bare except with **no failure comment ever posted** — unlike
+      Ingestion Agent's own Layer 2 backstop. Wrapped in its own
+      log-comment-reraise block matching the identical contract. Verified via a
+      persisted test (not just an inline check) calling the real
+      `run_implementation_coordinator()` entry point with a mocked empty tree,
+      confirming `post_comment()` fires with the right issue number and message
+      before the exception propagates.
+    - **Second bug, found live and far more consequential — the mount-path
+      rewrite:** a real Stage 3 run against tracking issue #10 (`REQ-2026-04`,
+      existing service `REQ-2026-03`) was interrupted mid-flight after checking
+      the session's **actual attached resources** via the API (not just the
+      message text) and finding all 87 seeded files had resolved to
+      `/mnt/session/uploads/existing-service/...`, not the plain
+      `/mnt/session/existing-service/...` every prompt referenced. The Managed
+      Agents API silently inserts `uploads/` immediately after `/mnt/session/`
+      for every `type: "file"` session resource — confirmed, not guessed, via a
+      minimal throwaway probe session (one agent, one environment, one `idle`
+      session with three file resources requesting three different
+      `mount_path` values, no `initial_events` so zero model turns were billed):
+      the rule is unconditional insertion **unless** the requested path already
+      starts with `/mnt/session/uploads/`, in which case it resolves unchanged.
+      Fixed by changing the single `EXISTING_SERVICE_MOUNT_DIR` constant to
+      `/mnt/session/uploads/existing-service` — propagates to every prompt and
+      the resource-building code automatically, since nothing else hardcodes
+      the path. `SHARED_DOCS_DIR` was checked and confirmed **unaffected** by
+      the same bug — it's never passed through `resources[]` at all (confirmed
+      both from the code and from a real historical session, whose `resources`
+      field was `[]`, with direct tool-call evidence of the coordinator's own
+      `bash`/`write` calls landing at the literal `/mnt/session/shared-docs/...`
+      path with no rewriting).
+    - **Process incident during this work (own separate lesson, not a code
+      bug):** the first live trigger attempt fired the label-driven workflow
+      before the day's commits had been `git push`ed to `origin/main` — GitHub
+      Actions runs off the remote, not local commits. The run executed the
+      **old, unfixed** code, reproduced the original bug for real (a brand-new
+      `services/REQ-2026-04/` implementation), and the automatic
+      QA→Security→Deploy chain (no human gate exists between them — see Item
+      #26) carried it all the way to a real, live, billable Azure Container App
+      (`req-2026-04-on-call-rost-ef23ba`). Caught after the fact, not
+      prevented — decommissioned via `az containerapp delete` (independently
+      re-verified via a fresh `az containerapp show` returning
+      `ResourceNotFound`); the stray PR (`forge-demo-apps#31`) and branch were
+      closed/deleted manually. The second live trigger attempt (after pushing)
+      was itself interrupted mid-flight for the mount-path bug above — killed
+      via the documented manual-kill procedure (interrupt → confirm all 4
+      threads idle → confirmed no `implementation.tar.gz` existed yet, so
+      nothing was lost → archived session/environment/coordinator/3 subagents,
+      all 6 confirmed via real `archived_at` timestamps). **Standing lesson:**
+      always `git push` before flipping a label-driven trigger, and verify via
+      the GitHub API (not local git) that the remote actually carries the
+      expected commit before triggering anything costly.
+    - **Live verification (third trigger, real fix in place):** confirmed via
+      the session's actual first tool-use events (not the message text) that
+      the coordinator ran `ls`/`find` against
+      `/mnt/session/uploads/existing-service/`, found real content, said in its
+      own words *"the existing service has both backend and frontend,"* copied
+      all 87 files into `/services/REQ-2026-03`, and read the real existing
+      code (`AuditRepository.cs`, `UsersController.cs`, the existing
+      `audit/page.tsx`/`AuditTable.tsx`) before editing. Resulting PR:
+      `forge-demo-apps#32` (`feature/REQ-2026-04`, commit
+      `2febc2a34771248c3ed3cffc02da2d1ad9de8aa0`) — **19 files changed, all
+      under `services/REQ-2026-03/`**, zero files under `services/REQ-2026-04/`:
+      surgical modifications to existing files (`AuditRepository.cs`,
+      `AuditController.cs`, `UsersController.cs`, `UsersRepository.cs`,
+      `AuditTable.tsx` reduced 142 lines as logic was extracted out,
+      `audit/page.tsx`) plus new supporting files for the coverage-history
+      filter feature (`AuditFilterPanel.tsx`, `AuditPageContent.tsx`,
+      `useUsers.ts`, `usersApi.ts`, matching new tests) — not a rebuild. PR
+      body and tracking-issue comment both confirmed carrying the "Related
+      service: services/REQ-2026-03/" line. Greenfield behavior confirmed
+      unaffected both at the code level (`resources=[]` omitted entirely when
+      `existing_service` is falsy — no `"resources"` key even sent) and by
+      shape-matching against `forge-demo-apps#20` (REQ-2026-03's own historical
+      Greenfield PR, which has the identical body shape with no "Related
+      service" line).
+    - Commits: `ca9ef7c` (§2.4), `bf647a4` (§2.1/§2.2), `4b4420c` (§2.3),
+      `bb2b18e` (Layer 2 comment fix), `45325be` (mount-path fix).
+    - **Left deliberately as-is, not fixed this session (see Items #25/#26
+      below):** this live run surfaced that Stage 4 (QA) and Stage 5 (Security)
+      both still assume `services/<request_id>/` and were never made aware of
+      the Enhancement-target concept — QA passed with zero real test coverage,
+      Security crashed. Issue #10 and `forge-demo-apps#32` are being left
+      exactly as they landed (`qa-approved` only, no `security-approved`, no
+      deploy) as live evidence of that gap, per Mike's explicit call.
+
+25. **QA and Security both assume `services/<request_id>/`, never
+    `services/<existing_service>/` — confirmed live 2026-08-28 on
+    `forge-demo-apps#32` (REQ-2026-04, existing service REQ-2026-03).** Neither
+    `qa_agent.py` nor `security_agent.py` was updated for Item #24's
+    Enhancement-target concept; both still scan
+    `services/REQ-2026-04/{backend,frontend}`, which doesn't exist in this
+    checkout — the PR's real 19 changed files are under `services/REQ-2026-03/`.
+    Two distinct failure modes, both real problems:
+    - **(a) QA silently false-positive-passes.** `qa_agent.py`'s existing
+      `not_applicable` handling (Pipeline Hardening Spec, "no test project
+      found is a real third outcome, not a failure") can't distinguish "this
+      service genuinely has no tests" from "we're looking in the wrong
+      directory entirely because nobody told us about the Enhancement target."
+      Confirmed live: QA reported `Backend: Not applicable — no test suite in
+      scope. Frontend: Not applicable — no test suite in scope. Overall
+      Verdict: ✅ PASS`, applied `qa-approved`, and ran **zero** real tests
+      against the actual changed files. This is a genuine gap in the ADR-0011
+      fail-loud pattern — a wrong-directory case is masquerading as a
+      legitimate not-applicable case.
+    - **(b) Security crashes ungracefully.** Confirmed live via the real job
+      log: `FileNotFoundError: [Errno 2] No such file or directory:
+      '.../monorepo-checkout/services/REQ-2026-04'` inside `_run_semgrep()`.
+      No `security-approved` applied, but also no clean, informative failure —
+      just an unhandled Python traceback surfacing as a generic step failure.
+    - **Fix shape (not yet built):** both agents need the same
+      Enhancement-target-resolution concept Stage 3 now has (re-download the
+      intake spreadsheet or otherwise resolve `existing_service`, scan
+      `services/<existing_service>/` instead of `services/<request_id>/` when
+      set) — likely worth a small shared helper rather than three independent
+      copies (Ingestion Agent's, Stage 3's, and now QA/Security's). QA
+      additionally needs its missing-directory detection tightened so a
+      wrong/absent directory fails loud rather than resolving to
+      `not_applicable`.
+    - Left exactly as-is per Mike's explicit instruction: issue #10 carries
+      only `qa-approved`; `forge-demo-apps#32` carries no `security-approved`;
+      nothing further was triggered. This is live evidence of the gap, not an
+      accident to clean up.
+
+26. **No human gate exists between a feature PR opening and Deploy firing —
+    confirmed live 2026-08-28 by re-reading every trigger in the chain, not
+    from memory.** `forge-demo-apps`' `notify-forge.yml` dispatches on
+    `pull_request: [opened, synchronize]` automatically; `04-qa.yml`/
+    `05-security.yml` trigger on that `repository_dispatch` automatically;
+    `06-deploy.yml` fires the instant a `qa-approved`/`security-approved` label
+    lands (its own job-level `if:` is an `||` on either label event, gated
+    internally by a guard-clause step confirming both are actually present
+    before doing real work). Nothing in this chain requires a human click —
+    this is Document 6's designed behavior (the human gate is PR
+    review/merge, which happens *after* Deploy already ran against staging,
+    not before). Distinct from Item #25 above: even if QA/Security correctly
+    reflected the real diff, a build that happens to pass both would still
+    deploy before any human looked at the PR. Confirmed as a real, non-
+    theoretical risk by this session's own stale-code incident (Item #24) —
+    the first, unfixed run reached exactly this point and deployed a wrong
+    Container App before anyone reviewed the diff. Not fixed or scoped this
+    session — flagged for a future decision on whether Document 6's design
+    should change (e.g. an explicit deploy-stage label a human applies,
+    mirroring the other gates) or stays as-is (staging-only, low-stakes by
+    design, real review still happens before `main` merge).
 
 ## Further reading
 
