@@ -75,6 +75,14 @@ CLI arguments:
     --repo-path      Local path to an existing checkout of forge-demo-apps at
                      the feature branch (required — see module docstring;
                      this script does not clone anything itself).
+    --existing-service  Item #25 §2.1: the "If Enhancement -- Existing Service
+                     Name" value from the intake spreadsheet, resolved by
+                     04-qa.yml's own "Determine Enhancement status" step
+                     (mirrors 03-implementation.yml's Item #24 step). When
+                     set, QA scans the real existing services/<existing_service>/
+                     folder instead of services/<request_id>/, which doesn't
+                     exist for an Enhancement request. Optional -- omitted or
+                     blank means Greenfield (unchanged behavior).
     --dry-run        Run tests, parse results, compute severities, and call
                      Claude for the write-up, but print everything to stdout
                      instead of creating ADO bugs, posting to GitHub, or
@@ -100,6 +108,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.agents.utils.claude_agent_wrapper import invoke_agent
+from core.agents.utils.enhancement_target import resolve_service_root
 from core.agents.utils.github_helper import (
     get_file_contents,
     get_issue,
@@ -702,6 +711,7 @@ def run_qa_agent(
     repo_path: str,
     pr_number: int | None = None,
     dry_run: bool = False,
+    existing_service: str | None = None,
 ) -> dict:
     """
     Core entry point. Returns a dict summarizing the run (suite results, bugs
@@ -748,7 +758,7 @@ def run_qa_agent(
         )
         return {"skipped": True, "reason": "qc-retry-limit-reached"}
 
-    service_root = Path(repo_path) / "services" / request_id
+    service_root = Path(repo_path) / resolve_service_root(request_id, existing_service)
     backend_dir, backend_dir_warning = _resolve_backend_test_dir(service_root)
     if backend_dir_warning:
         logger.warning(backend_dir_warning)
@@ -999,6 +1009,7 @@ def main() -> None:
     parser.add_argument("--request-id", required=True, help="FORGE request ID")
     parser.add_argument("--pr-number", default=None, type=int, help="Feature PR number in forge-demo-apps (required for a real run)")
     parser.add_argument("--repo-path", required=True, help="Local path to an existing checkout of forge-demo-apps at the feature branch")
+    parser.add_argument("--existing-service", default=None, help="Item #25: resolved 'Existing Service Name' for an Enhancement request; omitted/blank means Greenfield")
     parser.add_argument("--dry-run", action="store_true", help="Run tests and compute results but don't file bugs, post, or label")
     args = parser.parse_args()
 
@@ -1009,6 +1020,7 @@ def main() -> None:
             repo_path=args.repo_path,
             pr_number=args.pr_number,
             dry_run=args.dry_run,
+            existing_service=args.existing_service,
         )
     except Exception:
         sys.exit(1)

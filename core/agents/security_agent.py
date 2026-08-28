@@ -108,6 +108,15 @@ CLI arguments:
     --repo-path      Local path to an existing checkout of forge-demo-apps at
                      the feature branch (required — see module docstring;
                      this script does not clone anything itself).
+    --existing-service  Item #25 §2.1: the "If Enhancement -- Existing Service
+                     Name" value from the intake spreadsheet, resolved by
+                     05-security.yml's own "Determine Enhancement status" step
+                     (mirrors 03-implementation.yml's Item #24 step). When
+                     set, Security scans the real existing
+                     services/<existing_service>/ folder instead of
+                     services/<request_id>/, which doesn't exist for an
+                     Enhancement request. Optional -- omitted or blank means
+                     Greenfield (unchanged behavior).
     --dry-run        Run all three scans, parse results, compute severities,
                      and call Claude for the overview write-up, but print
                      everything to stdout instead of posting review comments,
@@ -132,6 +141,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.agents.utils.claude_agent_wrapper import invoke_agent
+from core.agents.utils.enhancement_target import resolve_service_root
 from core.agents.utils.github_helper import (
     add_label,
     create_check_run,
@@ -522,6 +532,7 @@ def run_security_agent(
     repo_path: str,
     pr_number: int | None = None,
     dry_run: bool = False,
+    existing_service: str | None = None,
 ) -> dict:
     """
     Core entry point. Returns a dict summarizing the run (findings by tool,
@@ -534,7 +545,7 @@ def run_security_agent(
             "proceed without it."
         )
 
-    service_dir = str(Path(repo_path) / "services" / request_id)
+    service_dir = str(Path(repo_path) / resolve_service_root(request_id, existing_service))
     repo_full_name = f"{os.environ['FORGE_GITHUB_OWNER']}/{os.environ.get('FORGE_TARGET_REPO', 'forge-demo-apps')}"
 
     try:
@@ -682,6 +693,7 @@ def main() -> None:
     parser.add_argument("--request-id", required=True, help="FORGE request ID")
     parser.add_argument("--pr-number", default=None, type=int, help="Feature PR number in forge-demo-apps (required for a real run)")
     parser.add_argument("--repo-path", required=True, help="Local path to an existing checkout of forge-demo-apps at the feature branch")
+    parser.add_argument("--existing-service", default=None, help="Item #25: resolved 'Existing Service Name' for an Enhancement request; omitted/blank means Greenfield")
     parser.add_argument("--dry-run", action="store_true", help="Run scans and compute results but don't post, check, or label")
     args = parser.parse_args()
 
@@ -692,6 +704,7 @@ def main() -> None:
             repo_path=args.repo_path,
             pr_number=args.pr_number,
             dry_run=args.dry_run,
+            existing_service=args.existing_service,
         )
     except Exception:
         sys.exit(1)

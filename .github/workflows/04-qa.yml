@@ -23,6 +23,12 @@
 # duplicate. A failure in "Resolve tracking issue number" itself has nowhere
 # to post to (that step is what resolves the only issue number we have) --
 # the Actions run failing loudly is the fallback signal for that specific case.
+#
+# "Determine Enhancement status and existing service" (Item #25 §2.1) mirrors
+# 03-implementation.yml's own Item #24 step exactly -- re-downloads the intake
+# spreadsheet to resolve --existing-service, so QA scans the real
+# services/<existing_service>/ folder for an Enhancement request instead of
+# services/<request_id>/, which Stage 3 never creates for one.
 
 name: FORGE Stage 4 — QA
 
@@ -87,6 +93,45 @@ jobs:
         run: |
           python -m core.agents.workflow_glue resolve-request-id --issue-number "${{ steps.issue.outputs.issue_number }}"
 
+      - name: Determine Enhancement status and existing service (Item #25)
+        id: enhancement_decide
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.workflow_glue download-issue-attachment \
+            --issue-number "${{ steps.issue.outputs.issue_number }}" \
+            --output intake.xlsx \
+            --extension .xlsx
+          python - <<'PY'
+          import os
+          from core.agents.utils import file_io
+
+          parsed = file_io.read_xlsx("intake.xlsx")
+          request_type_section = parsed["overview"].get("request_type") or {}
+          request_type_value = (request_type_section.get("Request Type") or "").strip()
+          is_enhancement = request_type_value.lower() == "enhancement"
+
+          existing_service = ""
+          if is_enhancement:
+              for key, value in request_type_section.items():
+                  if "existing service name" in key.lower():
+                      existing_service = (value or "").strip()
+                      break
+              if not existing_service:
+                  print(
+                      "Request Type is 'Enhancement' but 'Existing Service Name' is "
+                      "blank -- treating as Greenfield for QA (Ingestion Agent's own "
+                      "Stage 0a check should already have flagged this at Intake)."
+                  )
+
+          if not existing_service:
+              print(f"Request Type = '{request_type_value or '(blank)'}' -- Greenfield or unrecognized, no --existing-service flag.")
+          else:
+              print(f"Enhancement request -- existing service: '{existing_service}'")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"existing_service={existing_service}\n")
+          PY
+
       - name: Generate GitHub App installation token (scoped to forge-demo-apps)
         if: steps.guard.outputs.proceed == 'true'
         id: app-token
@@ -137,7 +182,8 @@ jobs:
             --issue-number "${{ steps.issue.outputs.issue_number }}" \
             --request-id "$request_id" \
             --pr-number "$PR_NUMBER" \
-            --repo-path "$GITHUB_WORKSPACE/monorepo-checkout"
+            --repo-path "$GITHUB_WORKSPACE/monorepo-checkout" \
+            --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}"
 
       - name: Clear a stale qa-loop-back/qc-retry-limit-reached label on pass
         if: steps.guard.outputs.proceed == 'true' && success()
