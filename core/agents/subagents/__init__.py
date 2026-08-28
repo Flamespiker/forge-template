@@ -21,7 +21,22 @@ SHARED_DOCS_DIR = "/mnt/session/shared-docs"
 # delegating, mirroring the SHARED_DOCS_DIR pattern above. On a Greenfield
 # run this path simply doesn't exist in the sandbox -- subagents check for
 # its presence to tell the two cases apart.
-EXISTING_SERVICE_MOUNT_DIR = "/mnt/session/existing-service"
+#
+# MUST start with "/mnt/session/uploads/" -- confirmed live (2026-08-28) via
+# a throwaway probe session (three file resources requesting three different
+# mount_path values, session created idle with no initial_events so nothing
+# was billed for model turns) that the Managed Agents API unconditionally
+# inserts "uploads/" immediately after "/mnt/session/" for every `type:
+# "file"` session resource, UNLESS the requested path already starts with
+# "/mnt/session/uploads/" (in which case it resolves unchanged -- confirmed
+# idempotent, not doubled). A live Stage 3 run against REQ-2026-04 was killed
+# mid-flight after discovering the sandbox's real files sat at
+# /mnt/session/uploads/existing-service/... while this constant (and every
+# prompt referencing it) said plain /mnt/session/existing-service -- the
+# coordinator could never find its seeded files under the path it was told
+# to check. This is real, empirically-confirmed API behavior, not documented
+# in the cached Managed Agents skill docs at the time this was written.
+EXISTING_SERVICE_MOUNT_DIR = "/mnt/session/uploads/existing-service"
 
 DEFAULT_SCOPED_TOOLS: list[dict] = [
     {
