@@ -377,7 +377,7 @@ def _dependabot_alert_to_finding(alert: dict) -> Finding:
     )
 
 
-def _run_dependabot_check(repo_full_name: str, request_id: str) -> ScanResult:
+def _run_dependabot_check(repo_full_name: str, service_root: str) -> ScanResult:
     """
     ran=False on any of: API auth/permission failure (see
     get_dependabot_alerts()'s own docstring on the 403/404 ambiguity),
@@ -385,12 +385,19 @@ def _run_dependabot_check(repo_full_name: str, request_id: str) -> ScanResult:
     legitimately clean repo."
 
     Filters the repo-wide alert list down to this request's manifests under
-    services/<request_id>/ -- Dependabot alerts are repo-wide, unlike
+    service_root (the resolved target from resolve_service_root() -- Item #25
+    §2.1/§2.3: services/<existing_service>/ for an Enhancement request, else
+    services/<request_id>/) -- Dependabot alerts are repo-wide, unlike
     Dependency-Check's old --scan services/<request-id>/ path scoping, so
     without this filter a PR touching REQ-2026-03 would surface findings
     from every other request's manifests too (confirmed live: 102 open
     alerts repo-wide across REQ-2026-01/02/03 combined, only ~28 actually
-    under REQ-2026-03).
+    under REQ-2026-03). Real latent bug fixed here: this used to build its
+    own prefix from raw request_id independently of service_dir/service_root
+    -- for an Enhancement request that would have silently filtered against
+    the wrong (nonexistent) request_id path even once Semgrep/Gitleaks were
+    correctly scanning the real existing-service directory, returning zero
+    findings for the actual changed manifests rather than a genuine failure.
     """
     try:
         alerts = get_dependabot_alerts(repo_full_name, state="open")
@@ -418,7 +425,7 @@ def _run_dependabot_check(repo_full_name: str, request_id: str) -> ScanResult:
                 ),
             )
 
-    prefix = f"services/{request_id}/"
+    prefix = f"{service_root}/"
     relevant = [a for a in alerts if (a.get("dependency", {}).get("manifest_path") or "").startswith(prefix)]
     findings = [_dependabot_alert_to_finding(a) for a in relevant]
     return ScanResult(tool="dependabot", ran=True, findings=findings)
@@ -545,13 +552,14 @@ def run_security_agent(
             "proceed without it."
         )
 
-    service_dir = str(Path(repo_path) / resolve_service_root(request_id, existing_service))
+    resolved_target = resolve_service_root(request_id, existing_service)
+    service_dir = str(Path(repo_path) / resolved_target)
     repo_full_name = f"{os.environ['FORGE_GITHUB_OWNER']}/{os.environ.get('FORGE_TARGET_REPO', 'forge-demo-apps')}"
 
     try:
         semgrep_result = _run_semgrep(service_dir)
         gitleaks_result = _run_gitleaks(service_dir)
-        dependabot_result = _run_dependabot_check(repo_full_name, request_id)
+        dependabot_result = _run_dependabot_check(repo_full_name, resolved_target)
 
         all_results = [semgrep_result, gitleaks_result, dependabot_result]
         any_tool_failed = any(not r.ran for r in all_results)
