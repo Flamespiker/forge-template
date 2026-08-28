@@ -47,6 +47,21 @@ verification via `forge-demo-apps#32`). Build Plan v9's own step 7.6 checkbox
 still needs updating on the Claude.ai side — this session only touched
 `CLAUDE.md` per its own scope.
 
+**QA (Stage 4) and Security (Stage 5) now correctly resolve an Enhancement
+request's real target directory too — built and live-verified 2026-08-28.**
+Item #24 fixed Stage 3; QA and Security had never been updated to match, so
+an Enhancement request reaching those stages hit `services/<request_id>/`
+(nonexistent) instead of the real `services/<existing_service>/` — QA
+silently false-positive-passed with zero real test coverage, Security
+crashed. See Open Item #25 below for the full fix narrative (the shared
+`resolve_service_root()` helper, QA/Security fail-loud fixes, the Dependabot
+filter fix, a second stale-code incident, a real frontend-install CI gap the
+fix itself exposed, and full live re-verification against
+`forge-demo-apps#32`/`forge-template#10` ending in a genuine `qa-approved` +
+`security-approved` pass). Item #27 (a related, separately-discovered
+stale-label-clearing bug in `04-qa.yml`) was found and fixed during this same
+verification pass — see its own entry below.
+
 **FORGE has completed Phase 6 (Repeatability)** — App 2 (`REQ-2026-03`, On-Call Roster
 Tracker) ran through the full pipeline; its FORGE tracking issue (`forge-template#6`)
 was closed 2026-08-20. Phases 1-6 are complete:
@@ -2255,43 +2270,147 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
       exactly as they landed (`qa-approved` only, no `security-approved`, no
       deploy) as live evidence of that gap, per Mike's explicit call.
 
-25. **QA and Security both assume `services/<request_id>/`, never
-    `services/<existing_service>/` — confirmed live 2026-08-28 on
-    `forge-demo-apps#32` (REQ-2026-04, existing service REQ-2026-03).** Neither
-    `qa_agent.py` nor `security_agent.py` was updated for Item #24's
-    Enhancement-target concept; both still scan
+25. ~~**QA and Security both assumed `services/<request_id>/`, never
+    `services/<existing_service>/`**~~ — **RESOLVED AND LIVE-VERIFIED
+    2026-08-28**, per `docs/FORGE-Item25-QASecurity-EnhancementTarget-Spec.md`.
+    Originally confirmed live on `forge-demo-apps#32` (REQ-2026-04, existing
+    service REQ-2026-03): neither `qa_agent.py` nor `security_agent.py` had
+    been updated for Item #24's Enhancement-target concept — both scanned
     `services/REQ-2026-04/{backend,frontend}`, which doesn't exist in this
-    checkout — the PR's real 19 changed files are under `services/REQ-2026-03/`.
-    Two distinct failure modes, both real problems:
-    - **(a) QA silently false-positive-passes.** `qa_agent.py`'s existing
-      `not_applicable` handling (Pipeline Hardening Spec, "no test project
-      found is a real third outcome, not a failure") can't distinguish "this
-      service genuinely has no tests" from "we're looking in the wrong
-      directory entirely because nobody told us about the Enhancement target."
-      Confirmed live: QA reported `Backend: Not applicable — no test suite in
-      scope. Frontend: Not applicable — no test suite in scope. Overall
-      Verdict: ✅ PASS`, applied `qa-approved`, and ran **zero** real tests
-      against the actual changed files. This is a genuine gap in the ADR-0011
-      fail-loud pattern — a wrong-directory case is masquerading as a
-      legitimate not-applicable case.
-    - **(b) Security crashes ungracefully.** Confirmed live via the real job
-      log: `FileNotFoundError: [Errno 2] No such file or directory:
-      '.../monorepo-checkout/services/REQ-2026-04'` inside `_run_semgrep()`.
-      No `security-approved` applied, but also no clean, informative failure —
-      just an unhandled Python traceback surfacing as a generic step failure.
-    - **Fix shape (not yet built):** both agents need the same
-      Enhancement-target-resolution concept Stage 3 now has (re-download the
-      intake spreadsheet or otherwise resolve `existing_service`, scan
-      `services/<existing_service>/` instead of `services/<request_id>/` when
-      set) — likely worth a small shared helper rather than three independent
-      copies (Ingestion Agent's, Stage 3's, and now QA/Security's). QA
-      additionally needs its missing-directory detection tightened so a
-      wrong/absent directory fails loud rather than resolving to
-      `not_applicable`.
-    - Left exactly as-is per Mike's explicit instruction: issue #10 carries
-      only `qa-approved`; `forge-demo-apps#32` carries no `security-approved`;
-      nothing further was triggered. This is live evidence of the gap, not an
-      accident to clean up.
+    checkout (the PR's real 19 changed files are under `services/REQ-2026-03/`).
+    QA silently false-positive-passed (`not_applicable` on both suites,
+    `qa-approved`, zero real tests run); Security crashed with an unhandled
+    `FileNotFoundError` inside `_run_semgrep()`.
+
+    **§1 investigation correction to the original framing (worth keeping,
+    not just historical):** Security's crash was already caught by the
+    existing ADR-0011 `except` block — a real comment was posted
+    ("FORGE Security Agent failed to complete...") and `security-approved`
+    was correctly withheld before any fix landed. The gap was a raw Python
+    exception string standing in for a message naming the real problem, not
+    a silent, uncaught failure as first assumed.
+
+    **Fix (§2, sequenced and committed separately per the spec):**
+    - **§2.1 (foundational):** new `core/agents/utils/enhancement_target.py`
+      — `resolve_service_root(request_id, existing_service)`, a third
+      independent copy of Item #24's resolution rule factored into one
+      shared helper (Ingestion Agent and Stage 3 already each had their
+      own). `04-qa.yml`/`05-security.yml` gained a "Determine Enhancement
+      status" step mirroring `03-implementation.yml`'s Item #24 step
+      exactly; `qa_agent.py`/`security_agent.py` gained a matching
+      `--existing-service` flag. Per §3.1 (Mike's confirmed default): the
+      spreadsheet is re-downloaded, not parsed from the posted "Related
+      service" comment line — consistent with the project's existing
+      "authoritative lookup over weak-signal parsing" precedent. Commit
+      `ea9c85a`.
+    - **§2.2 (QA fail-loud):** a directory-existence check on the resolved
+      target now runs *before* any backend/frontend test-dir resolution —
+      both `_resolve_backend_test_dir()`'s glob and
+      `_frontend_test_script_exists()`'s `.exists()` check previously
+      silently returned "no test project" for a missing directory,
+      identically to a directory that exists but is genuinely test-less. A
+      missing directory now raises `EnhancementTargetNotFoundError`
+      (log-comment-reraise, same shape as Stage 3's own Layer 2 fix) and —
+      per §3.3 (Mike's confirmed default) — does not count against
+      `_MAX_RETRIES`, since the request never ran against real code. A
+      directory that exists but is genuinely test-less is unchanged
+      (`not_applicable` remains legitimate). Commit `18e51e5`.
+    - **Dependabot filter fix (found during §1.2's investigation, fixed
+      alongside):** `_run_dependabot_check()` built its own manifest-path
+      prefix from raw `request_id`, independently of `service_dir` —
+      unreachable in the live crash (Semgrep's exception aborted the run
+      first) but would have silently returned zero findings against the
+      wrong path the moment a working Enhancement run reached it. Renamed
+      the param to `service_root` and threaded the same resolved target
+      through. Commit `2b1f2a6`.
+    - **§2.3 (Security fail-loud):** the same directory-existence check,
+      before the three-scanner loop. A missing directory now posts a
+      comment naming the real problem (not a stack trace), creates the
+      `security-check` run directly with `conclusion=failure` and a
+      distinct title ("blocked — target directory not found", a fourth
+      branch alongside blocked/incomplete/passed), and applies no label —
+      without raising, same non-raising shape as the existing
+      `any_tool_failed` path. Commit `9a88421`.
+    - **§2.4 (Greenfield unaffected):** confirmed via the scoped regression
+      cases inside §2.2/§2.3's own test harnesses (directory-exists,
+      `existing_service` unset) plus the original live §1.6 baseline
+      (PR #27/REQ-2026-01) — no new live re-dispatch against a Greenfield
+      PR was run, per Mike's explicit call (real side effects: duplicate
+      ADO Bugs for known pre-existing failures, possible redeploy).
+
+    **§5 live verification against `forge-demo-apps#32`/`forge-template#10`
+    — full narrative, including two real problems this run itself
+    surfaced:**
+    - **Diff review before go-ahead:** the real 19-file diff was read in
+      full before triggering anything — a clean, well-scoped coverage-history
+      filter feature (no write endpoints added, auth enforced consistently,
+      no secrets; the one notable change, audit timestamps displayed in UTC
+      instead of `America/Edmonton`, is a disclosed product choice, not a
+      bug). `forge-req2026-03-pg` confirmed `Ready` (started) beforehand.
+    - **Same stale-code incident as Item #24, reproduced exactly:** the
+      first re-dispatch ran against un-pushed local commits (GitHub Actions
+      runs off the remote) — reproduced the original crash/false-pass one
+      more time, posting a duplicate Security failure comment and
+      re-applying the stale `qa-approved`. Caught, commits pushed, verified
+      via the GitHub API (not local git) that `main` actually carried the
+      fix before re-triggering.
+    - **Real fix confirmed working, live:** re-dispatched against the
+      pushed fix — Security correctly resolved `services/REQ-2026-03/`, ran
+      real Semgrep + Gitleaks (`cwd=.../services/REQ-2026-03` in the log),
+      found 22 findings (0 Critical), applied `security-approved` for a
+      genuine reason. QA correctly resolved the same target and ran a real
+      `dotnet test` (42 backend tests passed) — the Enhancement-target
+      resolution and §2.2 fix both worked exactly as designed.
+    - **A real bug the fix itself hadn't covered:** QA's frontend suite
+      failed with `next: not found`. Root cause: `04-qa.yml`'s *separate*
+      "Install frontend dependencies" step independently rebuilds the
+      frontend path from raw `request_id`, untouched by §2.1's fix —  it
+      looked for `services/REQ-2026-04/frontend/package.json` (absent),
+      silently skipped `npm install`, so `node_modules` was missing when
+      `qa_agent.py` correctly tried to build the real
+      `services/REQ-2026-03/frontend`. Fixed to use the same
+      `existing_service` value. Commit `b08ad31`. This filed a real,
+      now-misleading ADO Bug (`#178`) — closed with a comment documenting
+      the real cause once the fix was confirmed (Mike's explicit
+      instruction; see the process note below).
+    - **Deploy fired automatically** the first time the stale `qa-approved`
+      briefly coincided with a freshly-real `security-approved` — confirmed
+      via the job log that `deploy_agent.py` raised
+      `ValueError: No deployable units detected under services/REQ-2026-04/
+      ... nothing to deploy` immediately, before any `docker build`/`az`
+      call — **no real Azure resource was touched**. This is the first live
+      confirmation (not just inferred) that `deploy_agent.py`/
+      `06-deploy.yml` have zero Enhancement-target awareness at all — out
+      of scope for this spec per Mike's explicit instruction not to touch
+      Deploy Agent, but now a confirmed gap rather than a theoretical one
+      (ties into Item #26).
+    - **A second, unrelated latent bug this exposed — logged as Item #27
+      below and fixed separately:** the stale `qa-approved` left over from
+      the un-pushed re-run caused `04-qa.yml`'s "clear a stale label on
+      pass" step to delete a freshly-applied, genuinely-earned
+      `qa-loop-back` label, leaving issue #10 showing an incorrect all-clear
+      state. Manually corrected (`qa-loop-back` + `security-approved`) via
+      direct API calls before the underlying logic itself was fixed and
+      committed separately (Item #27, commit `5d07169`).
+    - **Final live re-dispatch, with both fixes in place, genuinely passed
+      end to end:** `npm install --prefix services/REQ-2026-03/frontend`
+      ran for real (695 packages), `npm run build` succeeded, QA applied
+      `qa-approved` (attempt 4, 0 bugs) for a real reason; Security
+      re-confirmed its genuine pass; Deploy fired again and failed cleanly
+      the same safe way (Item #26, still unfixed, still not silently
+      dangerous). `forge-template#10` now genuinely carries `qa-approved` +
+      `security-approved` — an accurate reflection of reality, not a stale
+      artifact. `forge-demo-apps#32` was never merged, closed, or otherwise
+      touched throughout.
+    - **Process note on the ADO Bug #178 closure:** Mike's instruction was
+      "Close ADO Bug #178 with a note pointing to the real cause" — executed
+      as a literal, explicit instruction, not an independently-weighed
+      judgment call. Flagged in retrospect as an instruction that had a
+      plausible second reading (annotate while leaving open) worth
+      confirming before acting on a real external system's state, even when
+      one reading seems more likely.
+    - Commits, in order: `ea9c85a`, `18e51e5`, `2b1f2a6`, `9a88421`,
+      `b08ad31`, `5d07169`.
 
 26. **No human gate exists between a feature PR opening and Deploy firing —
     confirmed live 2026-08-28 by re-reading every trigger in the chain, not
