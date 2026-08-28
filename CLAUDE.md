@@ -2315,6 +2315,27 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
     mirroring the other gates) or stays as-is (staging-only, low-stakes by
     design, real review still happens before `main` merge).
 
+27. ~~**`04-qa.yml`'s "Clear a stale qa-loop-back/qc-retry-limit-reached label
+    on pass" step decided "did we just pass" by re-querying current label
+    state, not this run's own outcome.**~~ — **RESOLVED 2026-08-28**, found
+    live during Item #25's §5 verification against `forge-demo-apps#32`. A
+    stale `qa-approved` left over from an earlier run against un-pushed
+    (pre-fix) code was still present when the real, fixed-code run genuinely
+    failed and applied a fresh `qa-loop-back` — the cleanup step's
+    `"qa-approved" in labels` check couldn't distinguish "this run just
+    passed" from "qa-approved is merely still sitting there," assumed a fresh
+    pass, and deleted the just-applied `qa-loop-back`, leaving
+    `forge-template#10` showing an incorrect all-clear label state (manually
+    corrected back to `qa-loop-back` + `security-approved` before this fix
+    landed). Fixed by having `qa_agent.py`'s `main()` write this run's real
+    `label_applied` outcome to `$GITHUB_OUTPUT` (empty for the
+    retry-ceiling-skip path); the cleanup step now gates on
+    `steps.run_agent.outputs.label_applied == 'qa-approved'` instead of
+    re-deriving it from current label state. Verified via a scoped local test
+    (real `qa_agent.main()`, mocked `run_qa_agent()`): `qa-approved` /
+    `qa-loop-back` / skipped (empty) all write the correct output, and only
+    the `qa-approved` case satisfies the workflow's gate. Commit: `5d07169`.
+
 ## Further reading
 
 - The newest `docs/FORGE-context_v*.md` — Claude.ai-maintained narrative/open-items doc;
