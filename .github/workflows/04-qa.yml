@@ -166,7 +166,20 @@ jobs:
         working-directory: ${{ github.workspace }}/monorepo-checkout
         run: |
           request_id="${{ steps.request_id.outputs.request_id }}"
-          frontend_dir="services/$request_id/frontend"
+          existing_service="${{ steps.enhancement_decide.outputs.existing_service }}"
+          # Item #25 follow-up: this step builds its own frontend path independently
+          # of qa_agent.py's resolve_service_root() -- for an Enhancement request it
+          # must use the resolved existing_service too, or npm install silently no-ops
+          # against services/<request_id>/frontend (which doesn't exist), leaving
+          # node_modules missing when qa_agent.py later runs `npm run build` against
+          # the real services/<existing_service>/frontend (confirmed live on PR #32:
+          # `next: not found`).
+          if [ -n "$existing_service" ]; then
+            target="$existing_service"
+          else
+            target="$request_id"
+          fi
+          frontend_dir="services/$target/frontend"
           if [ -f "$frontend_dir/package.json" ]; then
             npm install --prefix "$frontend_dir"
           else
