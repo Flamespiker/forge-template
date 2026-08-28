@@ -1074,7 +1074,7 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        run_qa_agent(
+        result = run_qa_agent(
             issue_number=args.issue_number,
             request_id=args.request_id,
             repo_path=args.repo_path,
@@ -1084,6 +1084,18 @@ def main() -> None:
         )
     except Exception:
         sys.exit(1)
+
+    # Item #27: expose this run's own real outcome as a job output so
+    # 04-qa.yml's "clear a stale label on pass" step can gate on what THIS
+    # run actually did, instead of re-querying current label state (which
+    # can still reflect a stale qa-approved left over from an earlier,
+    # unrelated run and misfire into deleting a freshly-applied
+    # qa-loop-back). Absent/empty for the retry-ceiling-skip path (no
+    # "label_applied" key) -- the cleanup step correctly no-ops either way.
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if output_path:
+        with open(output_path, "a", encoding="utf-8") as f:
+            f.write(f"label_applied={result.get('label_applied', '')}\n")
 
 
 if __name__ == "__main__":

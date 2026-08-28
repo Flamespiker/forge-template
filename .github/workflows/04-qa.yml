@@ -199,7 +199,15 @@ jobs:
             --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}"
 
       - name: Clear a stale qa-loop-back/qc-retry-limit-reached label on pass
-        if: steps.guard.outputs.proceed == 'true' && success()
+        # Item #27: gate on THIS run's own real outcome (steps.run_agent's
+        # label_applied output), not a fresh re-query of current label state.
+        # The old `"qa-approved" in labels` check couldn't tell "this run just
+        # passed" apart from "qa-approved is merely still sitting there from
+        # an earlier, unrelated run" -- confirmed live: a stale qa-approved
+        # from an earlier broken dispatch caused this step to delete a
+        # freshly-applied qa-loop-back from a real, later, genuinely-failing
+        # run, leaving the tracking issue showing an incorrect all-clear state.
+        if: steps.guard.outputs.proceed == 'true' && success() && steps.run_agent.outputs.label_applied == 'qa-approved'
         run: |
           python - <<'PY'
           import os
@@ -208,10 +216,9 @@ jobs:
           issue_number = int("${{ steps.issue.outputs.issue_number }}")
           issue = get_issue(issue_number)
           labels = [l["name"] for l in issue["labels"]]
-          if "qa-approved" in labels:
-              for stale in ("qa-loop-back", "qc-retry-limit-reached"):
-                  if stale in labels:
-                      remove_label(issue_number, stale)
+          for stale in ("qa-loop-back", "qc-retry-limit-reached"):
+              if stale in labels:
+                  remove_label(issue_number, stale)
           PY
 
       - name: Post failure comment for a pre-agent step failure
