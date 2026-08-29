@@ -142,6 +142,20 @@ resolve the tracking issue number from the dispatched PR (via the existing
 `resolve-tracking-issue`, which reads the PR body regardless of state) and use
 the dispatch payload's own PR number/SHA for the checkout step.
 
+**Additional plumbing gap, request-type-agnostic (applies identically to
+Greenfield and Enhancement, since it's mechanism-level, not app-level):**
+`06-deploy.yml` currently sets `ISSUE_NUMBER: ${{ github.event.issue.number }}`
+at the job level, which only resolves on the `issues: [labeled]` trigger.
+`github.event.issue` does not exist on a `repository_dispatch` event —
+`06-deploy.yml` needs an early step, run only on the `pr-merged` trigger
+path, that calls `resolve-tracking-issue` against the dispatch payload's PR
+number and writes the result to `$GITHUB_OUTPUT`, with every subsequent step
+(`resolve-request-id`, the guard clause's re-fetch, the Item #28 Enhancement-
+status step) referencing that resolved value instead of the job-level
+`ISSUE_NUMBER` env var when running on this trigger. Without this, the
+`pr-merged` path cannot resolve anything downstream of the guard clause for
+either request type — this is not specific to Enhancement requests.
+
 ---
 
 ## 3. Design forks (Mike decides — do not resolve silently)
@@ -251,6 +265,12 @@ action, not a reversible test. See §5.
 6. Confirm no regression to the existing single-label no-op skip behavior
    (only one of `qa-approved`/`security-approved` present) — unaffected by this
    fix, should behave exactly as before.
+7. Confirm the `ISSUE_NUMBER` resolution fix (§3.1's plumbing addition) works
+   identically for a Greenfield request and an Enhancement request — since the
+   gate itself doesn't branch on request type, one real end-to-end run (either
+   type) that reaches Item #28's Enhancement-status step successfully via the
+   `pr-merged` trigger is sufficient evidence for both; no need to construct a
+   second, separate reproduction case purely to prove type-independence.
 
 ---
 
