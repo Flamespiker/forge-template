@@ -76,6 +76,43 @@ confirmation, and full live re-verification against
 `forge-demo-apps#32`/`forge-template#10` ending in a genuine update-in-place
 redeploy).
 
+**Deploy no longer fires until the feature PR is actually merged — §2.1/§2.2
+implemented and confirmed on `origin/main` in both repos 2026-08-29; §5 live
+verification deliberately deferred pending Mike's separate go-ahead.** Item
+#26 (`docs/Specs/FORGE-Item26-DeployTriggerGate-Spec.md`): `06-deploy.yml`
+previously deployed the instant `qa-approved`/`security-approved` both
+landed, regardless of whether the feature PR had been merged — confirmed
+live 2026-08-28 that nothing in the label-driven trigger chain checked merge
+state at all. §1 investigation (all six points) surfaced a finding beyond
+the spec's own anticipation: `resolve_feature_pr()`/`list_open_prs_by_head()`
+hardcode `state=open` against GitHub's list-PRs endpoint, so that function is
+structurally incapable of resolving an already-merged PR — not just
+untested for merge state, blind to it by construction. Also confirmed
+`forge-demo-apps`' `main` branch protection (`required_approving_review_
+count: 1`, `security-check` required, `enforce_admins: true`) already
+constitutes a real, enforced human gate, resolving §3.3 in favor of leaving
+branch protection unchanged. Mike decided Option A (§3.1): `forge-demo-apps`'
+`notify-forge.yml` gained a `pull_request: [closed]` trigger (filtered on
+`merged == true`) dispatching a new `pr-merged` `repository_dispatch` event;
+`06-deploy.yml` gained a matching trigger, and its guard clause now requires
+both labels **and** a confirmed merge (derived from which trigger fired,
+never `resolve-feature-pr`) before a real Deploy proceeds — on the
+`pr-merged` path, the tracking issue number is resolved via the existing
+`resolve-tracking-issue` (reads the PR body regardless of open/closed state)
+and exported to `$GITHUB_ENV` so every existing downstream step keeps
+working unchanged; the dispatch payload's own PR number/head SHA are used
+directly for the checkout and Deploy Agent invocation. Landing the
+`notify-forge.yml` change itself surfaced a real, separate gap — see new
+Open Item #30 below — now permanently closed via `ops-pr-security-noop.yml`.
+Commits: `92a20b7` (forge-template, `06-deploy.yml`); `forge-demo-apps#33`
+(`notify-forge.yml`, merge commit `9f3bc24c`) and `forge-demo-apps#34`
+(`ops-pr-security-noop.yml`, merge commit `34f40dd5`), both confirmed live
+on `origin/main` via the GitHub API. **Not yet closed as fully resolved:**
+§5's live verification (merging a real feature PR — `forge-demo-apps#32` is
+the ready-made reproduction case — and confirming Deploy correctly waits
+then fires) requires Mike's separate, explicit go-ahead given the real
+first-merge/real-Deploy consequence, and has not happened yet.
+
 **FORGE has completed Phase 6 (Repeatability)** — App 2 (`REQ-2026-03`, On-Call Roster
 Tracker) ran through the full pipeline; its FORGE tracking issue (`forge-template#6`)
 was closed 2026-08-20. Phases 1-6 are complete:
@@ -2447,6 +2484,18 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
     should change (e.g. an explicit deploy-stage label a human applies,
     mirroring the other gates) or stays as-is (staging-only, low-stakes by
     design, real review still happens before `main` merge).
+    **§1/§2 implemented and confirmed on `origin/main` 2026-08-29 — see the
+    Current Build Phase entry above for the full narrative
+    (`docs/Specs/FORGE-Item26-DeployTriggerGate-Spec.md`); commits `92a20b7`
+    (forge-template), `forge-demo-apps#33`/`#34`.** Mike decided Option A
+    (`notify-forge.yml` dispatches a `pr-merged` event on real merge;
+    `06-deploy.yml`'s guard clause now requires both labels AND a confirmed
+    merge) and left branch protection unchanged (§3.3 — it already
+    constitutes a real human gate). **Not yet closed as fully resolved:** §5
+    live verification (merging a real feature PR and confirming Deploy
+    correctly waits then fires) is deliberately deferred pending Mike's
+    separate, explicit go-ahead — `forge-demo-apps#32` remains unmerged and
+    untouched for this purpose.
 
 27. ~~**`04-qa.yml`'s "Clear a stale qa-loop-back/qc-retry-limit-reached label
     on pass" step decided "did we just pass" by re-querying current label
@@ -2613,6 +2662,41 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
       table, and every production-deploy reference, not a targeted patch.
       Flagged here so the drift is documented and doesn't need
       rediscovering from scratch next time it's picked up.
+
+30. ~~**No `security-check` mechanism existed for a non-`feature/*`/
+    non-`design/*` branch PR** (e.g. an ops/infra change to
+    `.github/workflows/*` itself) — found 2026-08-29 while landing Item
+    #26 §2.1's `notify-forge.yml` change.~~ — **RESOLVED 2026-08-29,
+    permanently, not with another one-off bypass.** Item #23's
+    `verify-build.yml` PRs (`forge-demo-apps#28`/`#29`) hit this identical
+    gap and were "admin-merged" past it — a bypass that predates Item #10's
+    `enforce_admins: true` flip and no longer exists. Confirmed live: PR #33
+    (the `notify-forge.yml` change itself) sat `mergeable_state: "blocked"`
+    with zero matching `security-check` status/check-run, since
+    `notify-forge.yml`'s own dispatch only forwards `feature/*` branches and
+    `design-pr-security-noop.yml` only fires for `design/*`. Fixed via a new
+    `ops-pr-security-noop.yml` in `forge-demo-apps` (landed via
+    `forge-demo-apps#34`), mirroring `design-pr-security-noop.yml`'s existing
+    pattern exactly (same double-guarded, clearly-labeled-as-a-no-op
+    structure) but scoped to `ops/*` branches.
+    **Live finding that corrected the original plan's own premise:** the plan
+    called for one manual, one-off `security-check` posted via the API to
+    bootstrap PR #34's own first merge (a presumed chicken-and-egg problem —
+    the workflow that would satisfy the check doesn't exist on `main` until
+    this PR merges). That manual check was posted, but turned out to be
+    unnecessary — the Actions run history for PR #34 shows
+    `ops-pr-security-noop.yml` actually ran automatically and produced a
+    genuine `security-check: success` on its own, because GitHub evaluates
+    `pull_request`-triggered workflows using the files present on the PR's
+    own head branch for a same-repo (non-fork) PR, not just what's already
+    on `main` — a brand-new workflow file *can* satisfy its own first PR in
+    this situation. Confirmed working for a second, independent case too:
+    after PR #34 merged, `main` was merged into PR #33's own branch and
+    pushed, and `ops-pr-security-noop.yml` fired for real from the committed
+    `main` copy, producing a genuine `security-check: success` with zero
+    manual intervention — PR #33 then merged on Mike's own review, same as
+    PR #34. Both PRs' merge commits confirmed live on `origin/main` via the
+    GitHub API (`34f40dd5...`, `9f3bc24c...`).
 
 ## Further reading
 
