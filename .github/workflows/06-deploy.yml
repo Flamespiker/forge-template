@@ -1,19 +1,52 @@
 # FORGE Stage 6 — Deploy (staging only, this phase)
 #
-# Trigger: BOTH qa-approved AND security-approved present on the tracking
-# issue. The "labeled" event fires whichever label lands second, so this job
-# listens for either one and re-checks the full label set at run time via the
-# guard clause -- if only one is present (this run's own label was the first
-# to land), it's a clean no-op skip, not a failure.
+# Two triggers, converging on one guard clause (Item #26):
+#   1. issues: [labeled] -- fires when qa-approved or security-approved lands
+#      on the tracking issue. The realistic sequence (04-qa.yml/05-security.yml
+#      gate BEFORE merge) means this trigger almost always finds the feature PR
+#      still open -- the guard clause below now requires BOTH labels present
+#      AND a confirmed merge before a real Deploy fires, so this trigger alone
+#      typically just re-confirms "waiting for merge" and skips cleanly.
+#   2. repository_dispatch: [types: pr-merged] -- forwarded by forge-demo-apps'
+#      notify-forge.yml the moment the feature PR itself is merged to main.
+#      This is what actually fires Deploy in the normal case: QA/Security have
+#      already labeled the tracking issue by the time a human merges, so the
+#      merge event is the one still-missing condition.
+# The guard clause re-checks both conditions (labels + merge) regardless of
+# which trigger fired this run -- whichever of "both labels land" or "PR
+# merges" happens LAST is what actually triggers a real Deploy. If only one
+# condition holds, it's a clean no-op skip (log line, no failure, no posted
+# comment), not an error.
 #
-# Deploys against the feature PR's HEAD commit, not a post-merge commit --
-# nothing in this label-driven trigger chain guarantees the feature PR has
-# been merged yet by the time both labels land (QA/Security gate BEFORE
-# merge, per 04-qa.yml/05-security.yml's own header comments), and
-# deploy_agent.py's own docstring only requires a commit SHA to tag the image
-# with, not a merged one. Staging is a pre-merge verification environment for
-# the human reviewer here, not a post-merge release step -- consistent with
-# CLAUDE.md's "staging is a verification step, not a release gate" framing.
+# Prior behavior (fixed by Item #26): this workflow used to deploy the
+# instant both labels landed, regardless of whether the feature PR had been
+# merged yet -- deploying an unmerged PR's HEAD commit to staging. Confirmed
+# live 2026-08-28 that nothing in the old label-driven trigger chain checked
+# merge state at all.
+#
+# ISSUE_NUMBER resolution differs by trigger: the "issues" trigger carries it
+# directly (github.event.issue.number, set at job level below); the
+# "repository_dispatch" trigger only carries the merged PR's number/head SHA
+# (client_payload.pr_number/head_sha) -- the new "Resolve tracking issue
+# number" step below resolves the tracking issue via resolve-tracking-issue
+# (same mechanism 04-qa.yml/05-security.yml already use) and exports it to
+# $GITHUB_ENV so every later step's existing "$ISSUE_NUMBER" usage works
+# unchanged. Same accepted limitation as 04-qa.yml/05-security.yml: a failure
+# in that step itself has nowhere to post a comment (it's what resolves the
+# only issue number available) -- the Actions run failing loudly is the
+# fallback signal for that specific case.
+#
+# The pr-merged trigger also carries the definitive pr_number/head_sha
+# directly (DISPATCH_PR_NUMBER/DISPATCH_HEAD_SHA, job-level env below) -- used
+# directly for the checkout and Deploy Agent invocation instead of calling
+# resolve-feature-pr, which only ever finds an OPEN PR (confirmed during Item
+# #26's own investigation, §1.2) and would find nothing for a PR that's
+# already merged/closed.
+#
+# Deploys against the feature PR's HEAD commit (the branch tip that was
+# actually reviewed/approved), not a separate post-merge merge commit --
+# consistent with deploy_agent.py's own docstring, which only requires a
+# commit SHA to tag the image with.
 #
 # Label lifecycle: deploy_agent.py applies no label on success (Document 6's
 # Label Reference table has no deploy-stage label -- see CLAUDE.md). This
@@ -23,24 +56,26 @@
 # clearing them would only lose information for no operational benefit.
 # On failure inside deploy_agent.py itself: it posts its own failure comment
 # (same ADR-0011 pattern as every other stage). The final step below covers a
-# failure in an earlier glue step (resolving request_id, resolving the
-# feature PR, checking it out) and is skipped entirely once the agent step
-# actually runs, to avoid ever posting a duplicate.
+# failure in an earlier glue step (resolving request_id, checking it out) and
+# is skipped entirely once the agent step actually runs, to avoid ever
+# posting a duplicate.
 #
 # "Determine Enhancement status and existing service" (Item #28 §2.1) mirrors
 # 03-implementation.yml's own Item #24 step (and 04-qa.yml's/05-security.yml's
 # Item #25 step) exactly -- re-downloads the intake spreadsheet to resolve
 # --existing-service, so Deploy reads code from the real
 # services/<existing_service>/ folder for an Enhancement request instead of
-# services/<request_id>/, which Stage 3 never creates for one. Unlike
-# QA/Security, Deploy already has ISSUE_NUMBER directly from
-# github.event.issue.number -- no extra request-id/PR resolution needed first.
+# services/<request_id>/, which Stage 3 never creates for one. By the time
+# this step runs, ISSUE_NUMBER is already resolved for either trigger (see
+# above) -- no extra request-id/PR resolution needed first.
 
 name: FORGE Stage 6 — Deploy
 
 on:
   issues:
     types: [labeled]
+  repository_dispatch:
+    types: [pr-merged]
 
 permissions:
   contents: read
@@ -48,7 +83,10 @@ permissions:
 
 jobs:
   deploy:
-    if: github.event.label.name == 'qa-approved' || github.event.label.name == 'security-approved'
+    if: >
+      github.event_name == 'repository_dispatch' ||
+      github.event.label.name == 'qa-approved' ||
+      github.event.label.name == 'security-approved'
     runs-on: ubuntu-latest
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -62,6 +100,9 @@ jobs:
       ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
       AZURE_STAGING_CREDENTIALS: ${{ secrets.AZURE_STAGING_CREDENTIALS }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
+      TRIGGER_TYPE: ${{ github.event_name == 'repository_dispatch' && 'pr_merged' || 'labeled' }}
+      DISPATCH_PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+      DISPATCH_HEAD_SHA: ${{ github.event.client_payload.head_sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -72,7 +113,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Guard clause — confirm both qa-approved and security-approved are present
+      - name: Resolve tracking issue number (pr-merged trigger)
+        if: github.event_name == 'repository_dispatch'
+        run: |
+          python - <<'PY'
+          import os
+          from core.agents.workflow_glue import resolve_tracking_issue
+
+          issue_number = resolve_tracking_issue(int(os.environ["DISPATCH_PR_NUMBER"]))
+          print(f"Resolved tracking issue #{issue_number} for merged PR #{os.environ['DISPATCH_PR_NUMBER']}")
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"ISSUE_NUMBER={issue_number}\n")
+          PY
+
+      - name: Guard clause — confirm qa-approved, security-approved, and a confirmed merge
         id: guard
         run: |
           python - <<'PY'
@@ -81,9 +135,19 @@ jobs:
 
           issue = get_issue(int(os.environ["ISSUE_NUMBER"]))
           labels = [l["name"] for l in issue["labels"]]
-          proceed = "qa-approved" in labels and "security-approved" in labels
+          labels_ok = "qa-approved" in labels and "security-approved" in labels
+          merged = os.environ.get("TRIGGER_TYPE") == "pr_merged"
+          proceed = labels_ok and merged
           if not proceed:
-              print(f"Only one gate present so far (labels: {labels}) -- waiting for the other. Skipping this run.")
+              if not labels_ok:
+                  print(f"Only one gate present so far (labels: {labels}) -- waiting for the other. Skipping this run.")
+              else:
+                  print(
+                      "Both gates present, but this run was triggered by a label event, not "
+                      "a confirmed merge -- the feature PR must be merged before Deploy fires "
+                      "(Item #26). Skipping this run; the merge itself will re-trigger Deploy "
+                      "via the pr-merged dispatch once it happens."
+                  )
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"proceed={'true' if proceed else 'false'}\n")
           PY
@@ -133,12 +197,6 @@ jobs:
               f.write(f"existing_service={existing_service}\n")
           PY
 
-      - name: Resolve feature PR number and head commit SHA
-        if: steps.guard.outputs.proceed == 'true'
-        id: pr
-        run: |
-          python -m core.agents.workflow_glue resolve-feature-pr --issue-number "$ISSUE_NUMBER"
-
       - name: Generate GitHub App installation token (scoped to forge-demo-apps)
         if: steps.guard.outputs.proceed == 'true'
         id: app-token
@@ -154,7 +212,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Flamespiker/forge-demo-apps
-          ref: ${{ steps.pr.outputs.head_sha }}
+          ref: ${{ env.DISPATCH_HEAD_SHA }}
           token: ${{ steps.app-token.outputs.token }}
           path: monorepo-checkout
 
@@ -166,8 +224,8 @@ jobs:
             --issue-number "$ISSUE_NUMBER" \
             --request-id "${{ steps.request.outputs.request_id }}" \
             --repo-path "$GITHUB_WORKSPACE/monorepo-checkout" \
-            --commit-sha "${{ steps.pr.outputs.head_sha }}" \
-            --pr-number "${{ steps.pr.outputs.pr_number }}" \
+            --commit-sha "$DISPATCH_HEAD_SHA" \
+            --pr-number "$DISPATCH_PR_NUMBER" \
             --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}"
 
       - name: Post failure comment for a pre-agent step failure
@@ -179,8 +237,8 @@ jobs:
           post_comment(
               int(os.environ["ISSUE_NUMBER"]),
               "⚠️ **FORGE Deploy workflow failed before the Deploy Agent could run** "
-              "(most likely: could not resolve the request ID or the feature PR). Check "
-              "the GitHub Actions run log for this workflow for the exact error. An "
-              "Orchestration Manager needs to investigate.",
+              "(most likely: could not resolve the request ID, or an earlier checkout/"
+              "setup step failed). Check the GitHub Actions run log for this workflow "
+              "for the exact error. An Orchestration Manager needs to investigate.",
           )
           PY
