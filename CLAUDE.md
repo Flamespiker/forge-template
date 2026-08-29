@@ -2568,6 +2568,52 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
 
     Commits: `3a2d5c5` (§2.1), `885b318` (§2.2).
 
+29. **`README.md` describes a materially different (partly aspirational,
+    never-built) pipeline than what's actually implemented — found
+    2026-08-29 during a routine README/memory review, not fixed this
+    session (Mike's explicit call — README rewrite deferred).** Checked the
+    repo-facing setup doc, last touched 2026-08-19, against current reality:
+    - **Approval mechanism described doesn't exist.** README instructs
+      commenting `/approve-requirements`, `/approve-qa`,
+      `/reject-<stage> <reason>` on the tracking issue. Confirmed via `grep`
+      across every `.github/workflows/*.yml` file: there is no slash-command
+      handling anywhere in the codebase. The real pipeline is 100%
+      label-driven (`clarification-complete`, `requirements-approved`,
+      `design-approved`, `qa-approved`, `security-approved` applied as
+      GitHub labels, each workflow triggering on `issues: types: [labeled]`
+      with a guard clause re-checking the label at run time). A team
+      following the README literally would comment a slash command and
+      nothing would happen.
+    - **Production deploy is claimed but was never built.** README's
+      pipeline diagram says "Deploy ✅ One-click production approval" and
+      its gate table lists approving a `production` GitHub Environment —
+      contradicts this same file's own `deploy_agent.py` module docstring
+      ("EXPLICITLY OUT OF SCOPE... Production path... not built, not
+      stubbed") and Document 3/FORGE-context's repeated confirmation that
+      FORGE has never deployed anything to production, staging only.
+    - **Intake template path is wrong.** README points to
+      `templates/forge-intake-template.xlsx` — confirmed via `ls` that the
+      `templates/` directory doesn't exist at all. The real file is
+      `docs/Intake Template.xlsx`.
+    - **`tracking/` directory's stated purpose is inaccurate.** README's
+      repository-layout section describes it as holding "per-request
+      tracking issue metadata." The directory exists but contains only a
+      `.gitkeep` placeholder — all real tracking metadata lives in GitHub
+      Issues (comments, labels), never as local files in this directory.
+    - **Everything else checked out:** `verify-setup.yml` exists as
+      described; all seven numbered reference docs (`docs/00...` through
+      `docs/07...`) exist and match the README's table; `team/` directory
+      structure (`config.yaml`, `stack-preferences.yaml`, `personas/`)
+      matches, modulo two extra files not mentioned
+      (`gitleaks-allowlist.toml`, `dependency-check-suppressions.xml` — the
+      latter itself stale per Item #13's resolution, unrelated to this
+      item).
+    - **Not fixed this session per Mike's explicit instruction** — a proper
+      fix means rewriting the pipeline diagram, the full "Approving a gate"
+      table, and every production-deploy reference, not a targeted patch.
+      Flagged here so the drift is documented and doesn't need
+      rediscovering from scratch next time it's picked up.
+
 ## Further reading
 
 - The newest `docs/FORGE-context_v*.md` — Claude.ai-maintained narrative/open-items doc;
