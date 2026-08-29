@@ -62,6 +62,20 @@ fix itself exposed, and full live re-verification against
 stale-label-clearing bug in `04-qa.yml`) was found and fixed during this same
 verification pass — see its own entry below.
 
+**Deploy (Stage 6) now correctly resolves and updates an Enhancement
+request's real existing-service Container Apps too — built and
+live-verified 2026-08-29.** Items #24/#25 fixed Stage 3/QA/Security; Deploy
+had never been updated to match, so an Enhancement reaching Deploy hit
+`services/<request_id>/` (nonexistent) and raised `ValueError: No
+deployable units detected`. Unlike the other three stages, Deploy also owns
+a live, named Azure resource — fixing directory resolution alone would have
+deployed the existing service's real code under a brand-new, never-touched
+Container App set. See Open Item #28 below for the full fix narrative (the
+`naming_id` concept, the `_finalize_unit_name()` byte-for-byte reproduction
+confirmation, and full live re-verification against
+`forge-demo-apps#32`/`forge-template#10` ending in a genuine update-in-place
+redeploy).
+
 **FORGE has completed Phase 6 (Repeatability)** — App 2 (`REQ-2026-03`, On-Call Roster
 Tracker) ran through the full pipeline; its FORGE tracking issue (`forge-template#6`)
 was closed 2026-08-20. Phases 1-6 are complete:
@@ -2454,6 +2468,105 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
     (real `qa_agent.main()`, mocked `run_qa_agent()`): `qa-approved` /
     `qa-loop-back` / skipped (empty) all write the correct output, and only
     the `qa-approved` case satisfies the workflow's gate. Commit: `5d07169`.
+
+28. ~~**Deploy Agent (Stage 6) had zero Enhancement-target awareness.**~~ —
+    **RESOLVED AND LIVE-VERIFIED 2026-08-29**, per
+    `docs/FORGE-Item28-DeployAgent-EnhancementTarget-Spec.md`. Confirmed live
+    2026-08-28 during Item #25's verification pass: a real dispatch against
+    `forge-template#10`/`forge-demo-apps#32` (REQ-2026-04, existing service
+    REQ-2026-03) reached `deploy_agent.py`, which raised `ValueError: No
+    deployable units detected under services/REQ-2026-04/ ... nothing to
+    deploy` — a third independent copy of the directory-resolution bug Items
+    #24/#25 already fixed, this time in the one stage that also owns a live,
+    named Azure resource.
+
+    Root cause confirmed via a dedicated diagnosis pass (spec §1):
+    `_detect_units()` built `services/<request_id>/` unconditionally, with no
+    `existing_service` concept at all. But directory resolution alone wasn't
+    the whole story — Deploy's unit **naming** (`_finalize_unit_name()`) was
+    separately keyed on the same `request_id`, so fixing only the directory
+    bug (the same way #24/#25 were fixed) would have built a container from
+    REQ-2026-03's real code and deployed it under a brand-new, never-touched
+    `req-2026-04-*` Container App set — new surface area #24/#25 never had to
+    face, since none of those three stages own a persistent, named external
+    resource.
+
+    **§1.5's investigation finding, gating the whole fix:** confirmed live via
+    `az containerapp list` (`req-2026-03-on-call-rost-5bb949`,
+    `req-2026-03-frontend`) plus a direct call to the real
+    `_finalize_unit_name('req-2026-03', slug)`, that recomputing the naming
+    scheme with `existing_service` substituted for `request_id` reproduces
+    both live names byte-for-byte — no one-time manual reconciliation was
+    needed before the fix could work as designed.
+
+    **Fix, two separately-committed pieces per the spec's §6 sequencing:**
+    - **§2.1 (directory resolution, commit `3a2d5c5`):** third call site of
+      the shared `resolve_service_root()` helper (built for Item #25) — a new
+      `--existing-service` flag on `deploy_agent.py`, threaded from a new
+      "Determine Enhancement status" step in `06-deploy.yml` mirroring
+      `03-implementation.yml`'s/`04-qa.yml`'s/`05-security.yml`'s own
+      identical steps.
+    - **§2.2 (unit naming / resource identity, commit `885b318`):**
+      introduces `naming_id` (`existing_service` when set, else
+      `request_id`) as a value distinct from the directory-resolution
+      target, threaded through `_detect_backend_units()`/
+      `_detect_frontend_unit()` and both `_finalize_unit_name()` call sites
+      — so an Enhancement deploy updates the existing live
+      `req-<existing_service>-*` Container Apps in place, per Mike's
+      explicit choice on the spec's §3.2 design fork (over the alternative
+      of a new, parallel `req-<request_id>-*` slot requiring an
+      undocumented manual cutover step). Cross-service FQDN prediction
+      (§2.3) needed no separate code change, confirmed by reading the call
+      site — it already only reads `unit.name`, correct by construction
+      once naming lands. Greenfield behavior (§2.5) is unaffected by
+      construction — `naming_id`/`resolved_service_dir` both fall back to
+      `request_id` exactly as before whenever `existing_service` is unset.
+
+    **§3.1's resolution-mechanism fork** (spreadsheet re-download vs. parsing
+    the posted "Related service" PR body line) was decided the same way as
+    Item #25's identical fork — spreadsheet re-download, for consistency and
+    to avoid the ad hoc-PR gap the PR-body path would inherit (spec §2.4,
+    flagged not fixed, since it's not live risk under the chosen default).
+
+    **Live verification (spec §5), re-using `forge-template#10`/
+    `forge-demo-apps#32` as the vehicle**, gated on Mike's explicit go-ahead
+    per the real live-Azure-resource stakes: re-triggered via a label
+    removal/re-add on issue #10 (run `33263474117`, `success`). Confirmed
+    from the raw log: `Enhancement request -- existing service:
+    'REQ-2026-03'`; `Detected 2 unit(s) for REQ-2026-04
+    (naming_id=REQ-2026-03): ...`; both Docker builds tagged with PR #32's
+    real head SHA (`2febc2a34771248c3ed3cffc02da2d1ad9de8aa0`) against
+    `services/REQ-2026-03/...` paths. Independently verified (not trusted
+    from the log) via `az containerapp show`/`list`:
+    - Names match exactly: `req-2026-03-on-call-rost-5bb949`,
+      `req-2026-03-frontend` — zero new `req-2026-04-*` resources
+      (`az containerapp list --query "[?starts_with(name,'req-2026-04')]"` →
+      `[]`), confirming "update in place" worked as designed, not a parallel
+      slot.
+    - Both images' tags changed live from the prior `ba994a8531...` (PR
+      #26's commit) to `2febc2a3477...` (PR #32's real head SHA) — a genuine
+      redeploy, not a stale or simulated one.
+    - Cross-service FQDN wiring resolved correctly:
+      `FRONTEND_ORIGIN`/`NEXT_PUBLIC_API_BASE_URL`/`NEXTAUTH_URL` all
+      pointed at the real, already-live counterpart app's FQDN.
+    - Greenfield isolation confirmed live: REQ-2026-01's three units were
+      all still on their known-good `71890f7e2399...` commit (Item #20's
+      closure commit) after this run — completely untouched, no
+      cross-contamination.
+
+    **One item from live verification not completed, flagged rather than
+    glossed over:** visual, signed-in browser confirmation that the live
+    frontend actually renders REQ-2026-04's coverage-history filter feature
+    was not done — no browser-automation/credential tool was available in
+    this session's environment to authenticate through the app's real Azure
+    AD sign-in. A `WebFetch` check confirmed the app is live and correctly
+    serving the sign-in shell (not erroring) on the new image, but that's
+    reachability, not a feature-rendering confirmation. The image-SHA match
+    to PR #32's exact commit is strong technical evidence the right code is
+    running, but this specific visual check is **pending a manual sign-in
+    confirmation from Mike**, not an unresolved code issue.
+
+    Commits: `3a2d5c5` (§2.1), `885b318` (§2.2).
 
 ## Further reading
 
