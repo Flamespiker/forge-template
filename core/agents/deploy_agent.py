@@ -32,11 +32,14 @@ automatic, not AI judgment" discipline, same as QA/Security):
   - Treat services/<request-id>/frontend/package.json as one additional
     "frontend" unit if present.
   - Each unit gets a Container App / image name of
-    "<request-id>-<slug>" (all lowercase — both Docker repository names and
+    "<naming-id>-<slug>" (all lowercase — both Docker repository names and
     Azure Container App names reject uppercase), its own Dockerfile
     (generated from template ONLY if the project directory doesn't already
     have one of its own — see _generate_dockerfile_if_missing()), its own
-    ACR image tag, and its own Container App.
+    ACR image tag, and its own Container App. naming-id is request-id for a
+    Greenfield request; for an Enhancement (Item #28 §2.2) it's the existing
+    service's own id, so the deploy updates that service's existing live
+    Container Apps in place rather than naming a new, parallel set.
 
 KNOWN, PRE-EXISTING GAP THIS AGENT SURFACES BUT DOES NOT FIX: neither
 design.md nor any prior stage ever assigned the EmailWorker unit a
@@ -96,9 +99,13 @@ CLI arguments:
                      set, Deploy reads code from the real existing
                      services/<existing_service>/ folder instead of
                      services/<request_id>/ (which doesn't exist for an
-                     Enhancement). Omitted/blank means Greenfield (unchanged
-                     behavior). See Item #28 §2.2 for the separate, later
-                     change to which id unit *naming* uses.
+                     Enhancement), AND (Item #28 §2.2 -- new territory #24/#25
+                     never faced, since Deploy is the only stage that owns a
+                     persistent, named external resource) names/updates the
+                     existing req-<existing_service>-* Container Apps in
+                     place instead of creating a new, never-reconciled
+                     req-<request_id>-* set. Omitted/blank means Greenfield
+                     (unchanged behavior).
     --dry-run        Run real `docker build`/`docker push` (same "exercise
                      the real tool, skip only the posting" pattern as QA/
                      Security dry-runs) and real read-only `az` queries
@@ -314,7 +321,15 @@ def _classify_backend_unit(csproj_path: Path) -> str:
     return "worker"
 
 
-def _detect_backend_units(backend_dir: Path, request_id: str) -> list[DeployUnit]:
+def _detect_backend_units(backend_dir: Path, naming_id: str) -> list[DeployUnit]:
+    """
+    naming_id (Item #28 §2.2) is the id used to build each unit's Container
+    App / image name -- request_id for Greenfield, existing_service for an
+    Enhancement, so an Enhancement deploy names/updates the existing live
+    req-<existing_service>-* apps rather than a new req-<request_id>-* set.
+    Distinct from where the code is read from, which the caller resolves
+    separately via resolve_service_root() (Item #28 §2.1).
+    """
     units: list[DeployUnit] = []
     if not backend_dir.is_dir():
         return units
@@ -330,7 +345,7 @@ def _detect_backend_units(backend_dir: Path, request_id: str) -> list[DeployUnit
         units.append(DeployUnit(
             slug=slug,
             unit_type=unit_type,
-            name=f"{request_id.lower()}-{slug}",
+            name=f"{naming_id.lower()}-{slug}",
             project_label=project_label,
             dockerfile_path=csproj_path.parent / "Dockerfile",
             build_context=backend_dir,
@@ -339,32 +354,33 @@ def _detect_backend_units(backend_dir: Path, request_id: str) -> list[DeployUnit
     return units
 
 
-def _detect_frontend_unit(frontend_dir: Path, request_id: str) -> DeployUnit | None:
+def _detect_frontend_unit(frontend_dir: Path, naming_id: str) -> DeployUnit | None:
+    """naming_id: see _detect_backend_units()'s docstring."""
     if not (frontend_dir / "package.json").is_file():
         return None
     slug = "frontend"
     return DeployUnit(
         slug=slug,
         unit_type="frontend",
-        name=f"{request_id.lower()}-{slug}",
+        name=f"{naming_id.lower()}-{slug}",
         project_label="frontend",
         dockerfile_path=frontend_dir / "Dockerfile",
         build_context=frontend_dir,
     )
 
 
-def _detect_units(repo_path: str, service_dir: str, request_id: str) -> list[DeployUnit]:
+def _detect_units(repo_path: str, service_dir: str, naming_id: str) -> list[DeployUnit]:
     """
     service_dir: repo-relative directory to read code from (e.g.
     "services/REQ-2026-03"), resolved by the caller via resolve_service_root()
-    -- Item #28 §2.1. request_id here still drives unit *naming* in this
-    commit; see Item #28 §2.2 for the follow-up that makes naming diverge
-    from directory resolution for an Enhancement (not needed yet -- no
-    Enhancement request has reached Deploy without failing until that lands).
+    (Item #28 §2.1) -- may differ from naming_id for an Enhancement, since an
+    Enhancement's code lives under the existing service's directory but
+    updates that same existing service's live Container Apps (Item #28 §2.2),
+    not a new set named after the new request.
     """
     service_root = Path(repo_path) / service_dir
-    units = _detect_backend_units(service_root / "backend", request_id)
-    frontend_unit = _detect_frontend_unit(service_root / "frontend", request_id)
+    units = _detect_backend_units(service_root / "backend", naming_id)
+    frontend_unit = _detect_frontend_unit(service_root / "frontend", naming_id)
     if frontend_unit:
         units.append(frontend_unit)
     return units
@@ -878,18 +894,31 @@ def run_deploy_agent(
         # request the same way Items #24/#25 already do, via the shared
         # resolve_service_root() helper -- services/<existing_service>/
         # instead of services/<request_id>/, which doesn't exist for one.
-        # Unit *naming* is not addressed by this commit -- see Item #28 §2.2.
+        #
+        # Item #28 §2.2: naming_id is a SEPARATE value from resolved_service_dir
+        # -- it drives unit *naming*, so an Enhancement deploy updates the
+        # existing live req-<existing_service>-* apps in place rather than
+        # naming a new, never-touched req-<request_id>-* set. Confirmed live
+        # 2026-08-29: _finalize_unit_name() reproduces REQ-2026-03's real live
+        # names (req-2026-03-on-call-rost-5bb949, req-2026-03-frontend)
+        # byte-for-byte when naming_id=existing_service, since the hash
+        # suffix is a pure function of the string value, not of which
+        # variable supplied it -- no one-time reconciliation step is needed.
+        # Both values are identical to request_id today for every Greenfield
+        # request (existing_service unset); only an Enhancement makes them
+        # diverge.
         resolved_service_dir = resolve_service_root(request_id, existing_service)
+        naming_id = existing_service or request_id
 
-        units = _detect_units(repo_path, resolved_service_dir, request_id)
+        units = _detect_units(repo_path, resolved_service_dir, naming_id)
         if not units:
             raise ValueError(
                 f"No deployable units detected under {resolved_service_dir}/ in {repo_path} — "
                 "nothing to deploy. Check --repo-path, --request-id, and --existing-service."
             )
         logger.info(
-            "Detected %d unit(s) for %s: %s",
-            len(units), request_id, ", ".join(f"{u.name} ({u.unit_type})" for u in units),
+            "Detected %d unit(s) for %s (naming_id=%s): %s",
+            len(units), request_id, naming_id, ", ".join(f"{u.name} ({u.unit_type})" for u in units),
         )
 
         for unit in units:
@@ -932,7 +961,7 @@ def run_deploy_agent(
         if backend_web_unit is not None:
             try:
                 backend_web_unit.name = _finalize_unit_name(
-                    request_id.lower(), backend_web_unit.slug,
+                    naming_id.lower(), backend_web_unit.slug,
                 )
             except ValueError as name_exc:
                 logger.warning(
@@ -973,7 +1002,7 @@ def run_deploy_agent(
         results: list[DeployResult] = []
         for unit in units:
             try:
-                unit.name = _finalize_unit_name(request_id.lower(), unit.slug)
+                unit.name = _finalize_unit_name(naming_id.lower(), unit.slug)
             except ValueError as name_exc:
                 logger.exception(
                     "Could not compute a valid Container App name for unit %s -- "
