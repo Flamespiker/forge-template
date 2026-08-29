@@ -54,53 +54,58 @@ confirms, ahead of Claude Code CLI's own investigation:**
 
 ---
 
-## 1. Investigate first (do this before designing anything)
+## 1. Investigate first — COMPLETE, confirmed live by Claude Code CLI 2026-08-29
 
-1. **Current `06-deploy.yml`** — re-confirm this session's read above directly
-   (`git show`/`view` the live file), including the exact guard-clause step and
-   the exact `resolve-feature-pr` call, since this spec's understanding is
-   accurate as of a `raw.githubusercontent.com` fetch this session but may have
-   drifted or been cached stale (per CLAUDE.md's standing CDN-staleness note —
-   re-fetch by commit SHA or via the GitHub API, not a cached `main` ref).
-2. **`workflow_glue.py`'s `resolve_feature_pr()` and `list_open_prs_by_head()`**
-   — read in full. Confirm whether either function, or any caller, currently
-   has access to the feature PR's `merged`/`merged_at` field from the GitHub API
-   response (the PR object `get_pr()`/`list_open_prs*` return likely already
-   carries this — confirm exactly what fields are available without an extra
-   API call).
-3. **`notify-forge.yml` in `forge-demo-apps`** — read in full. Confirm its
-   current trigger (`pull_request: [opened, synchronize]`, per CLAUDE.md) and
-   confirm whether it already listens to `closed` at all today (even if unused
-   downstream), since adding `closed` filtered on `merged == true` as a new
-   dispatch type is the most direct way to notify `forge-template` the moment a
-   feature PR actually merges — the alternative to polling merge status from
-   inside Deploy's own guard clause.
-4. **Branch protection on `main` in `forge-demo-apps`** — confirm via the
-   GitHub API (`GET /repos/Flamespiker/forge-demo-apps/branches/main/protection`)
-   whether `main` currently enforces any status checks or required reviews
-   before merge, and specifically whether `qa-approved`/`security-approved`
-   (or any FORGE-applied state) are wired in as merge conditions today, or
-   whether merging to `main` is currently unconstrained (a human can merge
-   regardless of FORGE's labels). This determines whether "require merge before
-   Deploy" actually adds a meaningful human checkpoint, or whether merge itself
-   is already just as automatic/unconstrained as label application is today —
-   if the latter, §3's fix still closes the literal gap Item #26 names, but
-   Mike should know it doesn't by itself introduce a *human* gate unless branch
-   protection also requires manual review.
-5. **A currently open, real feature PR** (if one exists at investigation time,
-   e.g. anything mid-flight from Item #28's closeout) — use it to confirm empirically
-   whether `resolve_feature_pr()` today returns a PR regardless of its mergeable/
-   merged state, matching this session's read of the code, not just a code-reading
-   inference.
-6. **`forge-template#10` / `forge-demo-apps#32`'s current live state** — confirm
-   current labels post-Item-#28-closeout (last known: `qa-approved` +
-   `security-approved`, PR #32 never merged) — relevant to §5's verification
-   plan, since this PR is already sitting in exactly the state Item #26 describes
-   as the risk (both gates passed, nothing merged, nothing stopping a Deploy
-   re-fire today).
+1. **`06-deploy.yml`** (HEAD `origin/main` = `7ac6815`, confirmed clean) —
+   matches this spec's original read exactly: `issues: [labeled]` trigger,
+   guard clause re-fetches the issue and checks both labels before proceeding,
+   resolves `request_id` and Item #28's `existing_service`, calls
+   `resolve-feature-pr`, checks out `forge-demo-apps` at that SHA, runs
+   `deploy_agent.py`. No merge-state check anywhere in the path.
+2. **`resolve_feature_pr()` / `list_open_prs_by_head()` / `list_open_prs()` /
+   `get_pr()`** — **important finding beyond what this spec anticipated:**
+   `list_open_prs_by_head()` and `list_open_prs()` both hardcode
+   `state=open` against GitHub's list-PRs endpoint, and a merged PR is always
+   `state=closed`. So `resolve_feature_pr()` as written today is **structurally
+   incapable of resolving an already-merged PR** — not just untested for merge
+   state, but blind to it by construction, since its Step 1/Step 2 fallback
+   both only ever see open PRs. By contrast, `get_pr(pr_number)` (single-PR
+   fetch, already used by `resolve_tracking_issue()`) works regardless of state
+   and its response carries `merged`/`merged_at` directly — confirmed live on
+   PR #32 (`"merged": false, "merged_at": null`), no extra API call needed.
+   **Design implication for §3.1:** Option A's re-fire step must consume the
+   `pull_request: closed` dispatch payload's own `pull_request.number`/
+   `pull_request.head.sha` directly, not call `resolve_feature_pr()` — that
+   function would find nothing once the PR is closed/merged. Folded into
+   §2.1/§2.2 below.
+3. **`notify-forge.yml`** (`forge-demo-apps`, fetched live via API) — confirmed:
+   trigger is exactly `pull_request: types: [opened, synchronize]`, nothing
+   else. No `closed` handling exists today, not even unused — adding a
+   `closed`-filtered-on-`merged == true` branch is a clean addition, not a
+   modification of existing behavior.
+4. **Branch protection on `forge-demo-apps` `main`** (fetched live via API) —
+   `required_pull_request_reviews.required_approving_review_count: 1`,
+   `required_status_checks.contexts: ["security-check"]` (app_id `4388813`,
+   `strict: false`), `enforce_admins.enabled: true` (Item #10's fix still in
+   effect), `allow_force_pushes`/`allow_deletions: false`. **This changes
+   §3.3's answer:** merge is already a real, enforced human gate — a PR
+   cannot merge to `main` without at least one human approval and a passing
+   `security-check`, and admins aren't exempt. Requiring merge-before-Deploy
+   does introduce a genuine human checkpoint, not merely close the literal
+   gap — this spec's original hedge ("may not add the human checkpoint the
+   item's framing implies") is resolved: it does.
+5. **`forge-demo-apps#32`** (`feature/REQ-2026-04`) — confirmed empirically via
+   the same list-PRs-by-head query `resolve_feature_pr()` makes: `state: open`,
+   `merged: false`, head SHA `2febc2a3...`, resolves cleanly via Step 1 with no
+   merge-state check anywhere in the path. Matches the code-reading inference
+   exactly.
+6. **`forge-template#10` / `forge-demo-apps#32`** — issue #10 open, labels
+   `["qa-approved", "security-approved"]`, both gates present. PR #32 still
+   open/unmerged. Confirmed as the live reproduction case: both labels landed,
+   nothing merged, today's code would let Deploy fire again right now if
+   re-triggered.
 
-Report findings back before proceeding — in particular §1.3/§1.4, since they
-determine which of §3.1's options is actually viable without new plumbing.
+§1.3/§1.4 are now both confirmed, unblocking §3.1/§3.3 for Mike's decision below.
 
 ---
 
@@ -127,11 +132,21 @@ the crux of §3.1 — the fix needs *some* event tied to the merge itself to
 re-enter Deploy's job, not just a stricter check inside a job that only ever
 runs on a label event.
 
+**Confirmed by §1.2:** the `pull_request: closed` dispatch payload must supply
+the merged PR's number/head SHA directly to `06-deploy.yml` (via whatever
+`repository_dispatch` client-payload shape `04-qa.yml`/`05-security.yml`
+already use for their own dispatches). `06-deploy.yml` must **not** call
+`resolve-feature-pr` when triggered this way — that function only ever sees
+open PRs and would find nothing for an already-merged one. It should instead
+resolve the tracking issue number from the dispatched PR (via the existing
+`resolve-tracking-issue`, which reads the PR body regardless of state) and use
+the dispatch payload's own PR number/SHA for the checkout step.
+
 ---
 
 ## 3. Design forks (Mike decides — do not resolve silently)
 
-### 3.1 Trigger mechanism — where does "merged" get checked, and what re-fires Deploy at merge time?
+### 3.1 Trigger mechanism — RESOLVED by Mike: Option A
 
 **Option A — `forge-demo-apps` dispatches a new event on merge, mirroring the
 existing `repository_dispatch` pattern.** Add `pull_request: [closed]` to
@@ -163,10 +178,11 @@ regardless, unless Mike's actual intended flow is "merge first, then QA/Security
 then Deploy," which would be a bigger process change than this item currently
 scopes.
 
-**Recommendation:** Option A, because it's the only one that guarantees Deploy
-re-fires at the moment the missing condition (merge) becomes true, symmetric
-with how it already re-fires at the moment each label lands. Final call is
-Mike's, pending §1.3's confirmation of `notify-forge.yml`'s current shape.
+**Decided:** Option A — it's the only one that guarantees Deploy re-fires at
+the moment the missing condition (merge) becomes true, symmetric with how it
+already re-fires at the moment each label lands. Implement per §2.1/§2.2,
+including §1.2/§2.2's plumbing correction (dispatch payload's own PR
+number/head SHA, resolved via `resolve-tracking-issue`, not `resolve-feature-pr`).
 
 ### 3.2 Staging-only or does this reasoning extend to production?
 
@@ -177,15 +193,15 @@ need revisiting the moment a production path is added — §2's proposed changes
 don't need to branch on environment either way, based on this session's read of
 `06-deploy.yml`.
 
-### 3.3 Does branch protection need to change too?
+### 3.3 Does branch protection need to change too? — RESOLVED: no, leave as-is
 
-Depends entirely on §1.4's finding. If `main` currently allows an unreviewed
-merge, requiring merge-before-Deploy closes Item #26's literal gap (Deploy no
-longer races ahead of the PR record) but may not add the *human* checkpoint the
-item's framing implies, since a merge could still happen without a person
-looking at the diff. Mike should decide, once §1.4 reports back, whether
-tightening branch protection (e.g. requiring a review approval on `main`) is
-part of this item's scope or a separate future item.
+`main` already requires 1 approving review, a passing `security-check` status,
+and applies to admins (`enforce_admins: true`) — a real, enforced human
+checkpoint exists today independent of this fix. Requiring merge-before-Deploy
+therefore genuinely gates Deploy behind that existing human review, not just
+behind a formality. Mike's decision: leave branch protection exactly as
+configured today — Item #26's fix alone is sufficient, no additional required
+status checks on `main`.
 
 ### 3.4 Re-verification path
 
@@ -240,13 +256,15 @@ action, not a reversible test. See §5.
 
 ## 6. Sequencing
 
-1. §1 investigation — all six points, reported back before any design commitment.
-   §1.3/§1.4 in particular gate §3.1's real options.
-2. §3.1 resolved by Mike (with recommendation given, not defaulted silently).
-3. §3.3 resolved by Mike once §1.4 reports back.
-4. §2.1/§2.2 implemented per §3.1's choice.
+1. §1 investigation — **complete**, all six points confirmed live 2026-08-29.
+2. §3.1 — **decided: Option A.**
+3. §3.3 — **decided: leave branch protection as-is.**
+4. §2.1/§2.2 — implement per Option A, including §1.2/§2.2's plumbing
+   correction (dispatch payload's own PR number/head SHA via
+   `resolve-tracking-issue`, not `resolve-feature-pr`, on the `pr-merged` path).
 5. §5 live verification — **gated on Mike's explicit go-ahead per §5 step 2**,
-   given the real first-merge/real-Deploy consequence.
+   given the real first-merge/real-Deploy consequence. Do not merge PR #32
+   without that separate confirmation, even though §3.1/§3.3 are now decided.
 6. `CLAUDE.md` close-out: mark Item #26 resolved with the real fix narrative and
    live evidence, same format as Items #24/#25/#27/#28's entries.
 
