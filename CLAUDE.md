@@ -76,10 +76,9 @@ confirmation, and full live re-verification against
 `forge-demo-apps#32`/`forge-template#10` ending in a genuine update-in-place
 redeploy).
 
-**Deploy no longer fires until the feature PR is actually merged — §2.1/§2.2
-implemented and confirmed on `origin/main` in both repos 2026-08-29; §5 live
-verification deliberately deferred pending Mike's separate go-ahead.** Item
-#26 (`docs/Specs/FORGE-Item26-DeployTriggerGate-Spec.md`): `06-deploy.yml`
+**Deploy no longer fires until the feature PR is actually merged — built and
+fully live-verified 2026-08-29, including a real Deploy run triggered by a
+real merge.** Item #26 (`docs/Specs/FORGE-Item26-DeployTriggerGate-Spec.md`): `06-deploy.yml`
 previously deployed the instant `qa-approved`/`security-approved` both
 landed, regardless of whether the feature PR had been merged — confirmed
 live 2026-08-28 that nothing in the label-driven trigger chain checked merge
@@ -107,11 +106,33 @@ Open Item #30 below — now permanently closed via `ops-pr-security-noop.yml`.
 Commits: `92a20b7` (forge-template, `06-deploy.yml`); `forge-demo-apps#33`
 (`notify-forge.yml`, merge commit `9f3bc24c`) and `forge-demo-apps#34`
 (`ops-pr-security-noop.yml`, merge commit `34f40dd5`), both confirmed live
-on `origin/main` via the GitHub API. **Not yet closed as fully resolved:**
-§5's live verification (merging a real feature PR — `forge-demo-apps#32` is
-the ready-made reproduction case — and confirming Deploy correctly waits
-then fires) requires Mike's separate, explicit go-ahead given the real
-first-merge/real-Deploy consequence, and has not happened yet.
+on `origin/main` via the GitHub API.
+
+**§5 live verification — completed 2026-08-29, on Mike's explicit go-ahead,
+using `forge-demo-apps#32`/`forge-template#10` as the ready-made reproduction
+case.** Mike merged PR #32 for real (`merged_at: 18:44:13Z`). Confirmed live,
+in order: (1) `notify-forge.yml`'s `pr-merged` dispatch fired 13 seconds
+after the merge, and `06-deploy.yml` actually ran (not skipped) —
+`repository_dispatch`-triggered run
+[`33269070840`](https://github.com/Flamespiker/forge-template/actions/runs/33269070840),
+`conclusion: success`; (2) its job log shows `Resolved tracking issue #10 for
+merged PR #32`, `Enhancement request -- existing service: 'REQ-2026-03'`,
+`Detected 2 unit(s) for REQ-2026-04 (naming_id=REQ-2026-03): ...`, and both
+`docker build`/`push` running against real `services/REQ-2026-03/...` paths
+tagged with PR #32's actual head commit (`2febc2a34771248c3ed3cffc02da2d1ad9de8aa0`),
+ending in `Deploy Agent complete for request REQ-2026-04 -- 2 of 2 unit(s)
+deployed to staging` with no errors; (3) independently re-confirmed via `az
+containerapp show` (not the job log) that both `req-2026-03-on-call-rost-5bb949`
+and `req-2026-03-frontend` carry that exact image tag, `provisioningState:
+Succeeded`, and `az containerapp list` filtered to `req-2026-04-*` returns
+`[]` — update-in-place confirmed, zero parallel resources created; (4) both
+apps reachable and behaving normally (frontend `/` → `307` to
+`/api/auth/signin`; backend `/api/v1/shifts` → `401`, not a crash) — same
+caveat as Item #28: no authenticated browser session in this environment, so
+the coverage-history filter feature itself is confirmed deployed but not
+visually confirmed rendering. Item #26 is now fully resolved — both the
+trigger-gate mechanism and a real end-to-end merge-to-deploy cycle are
+live-verified.
 
 **FORGE has completed Phase 6 (Repeatability)** — App 2 (`REQ-2026-03`, On-Call Roster
 Tracker) ran through the full pipeline; its FORGE tracking issue (`forge-template#6`)
@@ -2463,9 +2484,10 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
     - Commits, in order: `ea9c85a`, `18e51e5`, `2b1f2a6`, `9a88421`,
       `b08ad31`, `5d07169`.
 
-26. **No human gate exists between a feature PR opening and Deploy firing —
+26. ~~**No human gate exists between a feature PR opening and Deploy firing —
     confirmed live 2026-08-28 by re-reading every trigger in the chain, not
-    from memory.** `forge-demo-apps`' `notify-forge.yml` dispatches on
+    from memory.**~~ — **RESOLVED AND LIVE-VERIFIED 2026-08-29.**
+    `forge-demo-apps`' `notify-forge.yml` dispatches on
     `pull_request: [opened, synchronize]` automatically; `04-qa.yml`/
     `05-security.yml` trigger on that `repository_dispatch` automatically;
     `06-deploy.yml` fires the instant a `qa-approved`/`security-approved` label
@@ -2491,11 +2513,18 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
     (`notify-forge.yml` dispatches a `pr-merged` event on real merge;
     `06-deploy.yml`'s guard clause now requires both labels AND a confirmed
     merge) and left branch protection unchanged (§3.3 — it already
-    constitutes a real human gate). **Not yet closed as fully resolved:** §5
-    live verification (merging a real feature PR and confirming Deploy
-    correctly waits then fires) is deliberately deferred pending Mike's
-    separate, explicit go-ahead — `forge-demo-apps#32` remains unmerged and
-    untouched for this purpose.
+    constitutes a real human gate). **§5 live verification completed
+    2026-08-29 on Mike's explicit go-ahead:** Mike merged `forge-demo-apps#32`
+    for real; the `pr-merged` dispatch fired 13 seconds later and
+    `06-deploy.yml` ran for real (run `33269070840`, `conclusion: success`),
+    correctly resolving `services/REQ-2026-03/` (Item #28's `naming_id`) and
+    building/pushing both units from PR #32's actual head commit
+    (`2febc2a3...`) with zero errors. Independently re-confirmed via `az
+    containerapp show` (not the job log) that both live Container Apps carry
+    that exact image tag, `provisioningState: Succeeded`, and zero
+    `req-2026-04-*` resources exist — update-in-place, not a parallel slot.
+    Both apps confirmed reachable and behaving normally post-deploy. Full
+    evidence in the Current Build Phase entry above.
 
 27. ~~**`04-qa.yml`'s "Clear a stale qa-loop-back/qc-retry-limit-reached label
     on pass" step decided "did we just pass" by re-querying current label
