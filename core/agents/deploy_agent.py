@@ -89,6 +89,16 @@ CLI arguments:
                      and included in the PR comment (required).
     --pr-number      The feature PR number in forge-demo-apps, used to post
                      the summary comment (required).
+    --existing-service  Item #28 §2.1: the "If Enhancement -- Existing Service
+                     Name" value from the intake spreadsheet, resolved by
+                     06-deploy.yml's "Determine Enhancement status" step
+                     (mirrors 03-implementation.yml's Item #24 step). When
+                     set, Deploy reads code from the real existing
+                     services/<existing_service>/ folder instead of
+                     services/<request_id>/ (which doesn't exist for an
+                     Enhancement). Omitted/blank means Greenfield (unchanged
+                     behavior). See Item #28 §2.2 for the separate, later
+                     change to which id unit *naming* uses.
     --dry-run        Run real `docker build`/`docker push` (same "exercise
                      the real tool, skip only the posting" pattern as QA/
                      Security dry-runs) and real read-only `az` queries
@@ -130,6 +140,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from core.agents.utils import file_io
+from core.agents.utils.enhancement_target import resolve_service_root
 from core.agents.utils.github_helper import get_file_contents, post_comment, post_pr_comment
 
 load_dotenv()
@@ -342,8 +353,16 @@ def _detect_frontend_unit(frontend_dir: Path, request_id: str) -> DeployUnit | N
     )
 
 
-def _detect_units(repo_path: str, request_id: str) -> list[DeployUnit]:
-    service_root = Path(repo_path) / "services" / request_id
+def _detect_units(repo_path: str, service_dir: str, request_id: str) -> list[DeployUnit]:
+    """
+    service_dir: repo-relative directory to read code from (e.g.
+    "services/REQ-2026-03"), resolved by the caller via resolve_service_root()
+    -- Item #28 §2.1. request_id here still drives unit *naming* in this
+    commit; see Item #28 §2.2 for the follow-up that makes naming diverge
+    from directory resolution for an Enhancement (not needed yet -- no
+    Enhancement request has reached Deploy without failing until that lands).
+    """
+    service_root = Path(repo_path) / service_dir
     units = _detect_backend_units(service_root / "backend", request_id)
     frontend_unit = _detect_frontend_unit(service_root / "frontend", request_id)
     if frontend_unit:
@@ -841,6 +860,7 @@ def run_deploy_agent(
     commit_sha: str,
     pr_number: int,
     dry_run: bool = False,
+    existing_service: str | None = None,
 ) -> dict:
     """Core entry point. Returns a dict summarizing the run."""
     try:
@@ -854,11 +874,18 @@ def run_deploy_agent(
 
         staging_cfg = _load_staging_config()
 
-        units = _detect_units(repo_path, request_id)
+        # Item #28 §2.1: resolve the real target directory for an Enhancement
+        # request the same way Items #24/#25 already do, via the shared
+        # resolve_service_root() helper -- services/<existing_service>/
+        # instead of services/<request_id>/, which doesn't exist for one.
+        # Unit *naming* is not addressed by this commit -- see Item #28 §2.2.
+        resolved_service_dir = resolve_service_root(request_id, existing_service)
+
+        units = _detect_units(repo_path, resolved_service_dir, request_id)
         if not units:
             raise ValueError(
-                f"No deployable units detected under services/{request_id}/ in {repo_path} — "
-                "nothing to deploy. Check --repo-path and --request-id."
+                f"No deployable units detected under {resolved_service_dir}/ in {repo_path} — "
+                "nothing to deploy. Check --repo-path, --request-id, and --existing-service."
             )
         logger.info(
             "Detected %d unit(s) for %s: %s",
@@ -1112,6 +1139,7 @@ def main() -> None:
     parser.add_argument("--repo-path", help="Local path to an existing checkout of forge-demo-apps at the feature branch")
     parser.add_argument("--commit-sha", help="Commit SHA being deployed (used as the image tag)")
     parser.add_argument("--pr-number", type=int, help="Feature PR number in forge-demo-apps")
+    parser.add_argument("--existing-service", default=None, help="Item #28: resolved 'Existing Service Name' for an Enhancement request; omitted/blank means Greenfield")
     parser.add_argument("--dry-run", action="store_true", help="Real docker build/push, but print (don't execute) az containerapp commands and post nothing")
     parser.add_argument(
         "--wire-keyvault-secret", action="store_true",
@@ -1164,6 +1192,7 @@ def main() -> None:
             commit_sha=args.commit_sha,
             pr_number=args.pr_number,
             dry_run=args.dry_run,
+            existing_service=args.existing_service,
         )
     except Exception:
         sys.exit(1)

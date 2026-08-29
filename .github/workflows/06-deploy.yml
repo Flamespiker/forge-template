@@ -26,6 +26,15 @@
 # failure in an earlier glue step (resolving request_id, resolving the
 # feature PR, checking it out) and is skipped entirely once the agent step
 # actually runs, to avoid ever posting a duplicate.
+#
+# "Determine Enhancement status and existing service" (Item #28 §2.1) mirrors
+# 03-implementation.yml's own Item #24 step (and 04-qa.yml's/05-security.yml's
+# Item #25 step) exactly -- re-downloads the intake spreadsheet to resolve
+# --existing-service, so Deploy reads code from the real
+# services/<existing_service>/ folder for an Enhancement request instead of
+# services/<request_id>/, which Stage 3 never creates for one. Unlike
+# QA/Security, Deploy already has ISSUE_NUMBER directly from
+# github.event.issue.number -- no extra request-id/PR resolution needed first.
 
 name: FORGE Stage 6 — Deploy
 
@@ -85,6 +94,45 @@ jobs:
         run: |
           python -m core.agents.workflow_glue resolve-request-id --issue-number "$ISSUE_NUMBER"
 
+      - name: Determine Enhancement status and existing service (Item #28)
+        id: enhancement_decide
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.workflow_glue download-issue-attachment \
+            --issue-number "$ISSUE_NUMBER" \
+            --output intake.xlsx \
+            --extension .xlsx
+          python - <<'PY'
+          import os
+          from core.agents.utils import file_io
+
+          parsed = file_io.read_xlsx("intake.xlsx")
+          request_type_section = parsed["overview"].get("request_type") or {}
+          request_type_value = (request_type_section.get("Request Type") or "").strip()
+          is_enhancement = request_type_value.lower() == "enhancement"
+
+          existing_service = ""
+          if is_enhancement:
+              for key, value in request_type_section.items():
+                  if "existing service name" in key.lower():
+                      existing_service = (value or "").strip()
+                      break
+              if not existing_service:
+                  print(
+                      "Request Type is 'Enhancement' but 'Existing Service Name' is "
+                      "blank -- treating as Greenfield for Deploy (Ingestion Agent's own "
+                      "Stage 0a check should already have flagged this at Intake)."
+                  )
+
+          if not existing_service:
+              print(f"Request Type = '{request_type_value or '(blank)'}' -- Greenfield or unrecognized, no --existing-service flag.")
+          else:
+              print(f"Enhancement request -- existing service: '{existing_service}'")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"existing_service={existing_service}\n")
+          PY
+
       - name: Resolve feature PR number and head commit SHA
         if: steps.guard.outputs.proceed == 'true'
         id: pr
@@ -119,7 +167,8 @@ jobs:
             --request-id "${{ steps.request.outputs.request_id }}" \
             --repo-path "$GITHUB_WORKSPACE/monorepo-checkout" \
             --commit-sha "${{ steps.pr.outputs.head_sha }}" \
-            --pr-number "${{ steps.pr.outputs.pr_number }}"
+            --pr-number "${{ steps.pr.outputs.pr_number }}" \
+            --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}"
 
       - name: Post failure comment for a pre-agent step failure
         if: always() && steps.guard.outputs.proceed == 'true' && steps.run_agent.outcome == 'skipped'
