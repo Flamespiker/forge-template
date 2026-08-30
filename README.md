@@ -12,22 +12,27 @@ Agents do the work. Humans approve the outcomes.
 
 FORGE is a GitHub template repository. You clone it, configure it for your team, and it orchestrates development work *into* your existing codebase via a GitHub App — your application code never lives here.
 
-The pipeline is event-driven through GitHub Actions. Each stage spins up a Claude agent, produces an artifact, and waits for a human to approve before the next stage begins.
+The pipeline is event-driven through GitHub Actions. Each stage spins up a Claude agent, produces an artifact, and gates on a GitHub label or PR approval before the next stage begins. The whole pipeline is label-driven — there is no chat/slash-command interface.
 
 ```
 BA uploads spreadsheet
         ↓
 Intake & clarification  (no gate)
         ↓
-Requirements            ✅ Approve ADO work items
+Requirements            ✅ Review ADO work items, apply requirements-approved label
         ↓
-Spec & design           ✅ Approve architecture + API contracts
+Spec & design           ✅ Approve architecture + API contracts (PR), apply design-approved label
         ↓
-Implementation          ✅ Review draft PR  (Implementation Coordinator runs Backend, Frontend, Test Writer subagents in parallel)
+Implementation          ✅ Approve + merge the feature PR  (Implementation Coordinator runs Backend, Frontend, Test Writer subagents in parallel)
         ↓
-QA + security           ✅ QA sign-off  ✅ Security sign-off  (run in parallel)
+QA + security           ⚙️  Automatic — QA Agent and Security Agent apply their own
+                             qa-approved / security-approved labels from real test
+                             and scan results (run in parallel); each posts a
+                             human-readable report on the PR
         ↓
-Deploy                  ✅ One-click production approval
+Deploy                  ⚙️  Automatic — fires once both labels are present AND the
+                             feature PR is actually merged to main. Staging only —
+                             there is no production deploy stage yet.
 ```
 
 ---
@@ -37,12 +42,14 @@ Deploy                  ✅ One-click production approval
 Before you start, make sure you have:
 
 - **GitHub** — a repository for your application code (the "target" monorepo) and permissions to create a GitHub App
-- **Azure** — an active subscription with permissions to create Container Apps environments and a Container Registry
+- **Azure** — an active subscription with permissions to create a Container Apps environment and a Container Registry
 - **Azure DevOps** — a project with Boards enabled; a Personal Access Token with Work Items (Read & Write) scope
 - **Anthropic API** — a standard Anthropic API key. Stage 3 (Implementation) additionally requires the **Managed Agents beta header** (`managed-agents-2026-04-01`) — this worked directly on a standard personal API key during build-phase testing, with no separate approval step observed, though this may vary by account. All other stages call the standard Messages API and need no beta flags. Opus tier is used for the Stage 3 coordinator; Sonnet tier for everything else.
 - **Node.js 20+** and **Docker** installed locally
 
-> **Build phase note:** A personal Anthropic API account and personal Azure subscription are fine for initial setup. Before going to production, plan to migrate to your organisation's accounts.
+> **Build phase note:** A personal Anthropic API account and personal Azure subscription are fine for initial setup. Before going to production use of FORGE itself, plan to migrate to your organisation's accounts.
+
+> **Production deploys:** FORGE currently deploys to **staging only**. A production deploy stage (a second, GitHub Environment-gated deploy path with its own service principal) is a known, explicitly out-of-scope gap in the Deploy Agent — not yet built, not stubbed. Don't provision production Azure infrastructure expecting FORGE to use it yet.
 
 ---
 
@@ -78,6 +85,8 @@ FORGE authenticates into your target monorepo through a GitHub App — never a p
 6. Generate a private key and download it
 
 Save the **App ID**, **Client ID** (a separate value from the App ID, shown on the same settings page), and the private key — you'll need all three in the next step.
+
+> **Note:** the GitHub App's permissions above do not include `workflows`. If you ever need FORGE's agents to modify a `.github/workflows/*` file in the target monorepo, that change must be pushed via a human's own git credentials first and opened as a PR through the App identity for review — the App cannot push workflow-file changes directly.
 
 ### 3. Configure secrets (5 min)
 
@@ -120,34 +129,27 @@ ado_area_path: YourProject\\YourTeam
 # Azure Container Apps
 registry: yourregistry.azurecr.io
 staging_env: forge-staging
-production_env: forge-production
 resource_group: your-rg
 
 # Intake
 intake_method: issue_attachment   # or: repo_path
 ```
 
-### 5. Provision Azure Container Apps environments (5 min)
+### 5. Provision your Azure Container Apps environment (5 min)
 
-Create both environments with the Azure CLI, matching the defaults `team/config.yaml` expects:
+Create the staging environment with the Azure CLI, matching the default `team/config.yaml` expects:
 
 ```bash
 az containerapp env create \
   --name forge-staging --resource-group your-rg --location canadacentral
-
-az containerapp env create \
-  --name forge-production --resource-group your-rg --location canadacentral
 ```
 
-Then size each environment's Container Apps to match:
+Then size its Container Apps:
 - **forge-staging** — scale to zero, max 2 replicas, 0.25 vCPU / 0.5 Gi
-- **forge-production** — min 1 replica, max 5, 0.5 vCPU / 1.0 Gi
 
 > **Provisioning via the Azure Portal instead:** the Portal currently only offers environment creation as a byproduct of creating an actual Container App — create a throwaway Container App using the built-in quickstart image, choose "Create new" for the environment during that flow, then delete just the placeholder Container App afterward (the environment persists on its own). The CLI path above avoids this workaround entirely.
 
-Also create two **GitHub Environments** in your FORGE repo (**Settings → Environments**) — named plainly `staging` and `production`. These are a different, GitHub-native concept from the Azure Container Apps environment names above (`forge-staging`/`forge-production`) — don't conflate the two:
-- **`staging`** — no required reviewers, so staging deploys automatically
-- **`production`** — add a required reviewer; this is the approval gate for production deploys
+Also create a **GitHub Environment** in your FORGE repo (**Settings → Environments**) named plainly `staging` — no required reviewers, so staging deploys run automatically once the pipeline's own label/merge gates are satisfied. This is a different, GitHub-native concept from the Azure Container Apps environment name above (`forge-staging`) — don't conflate the two.
 
 ### 6. Verify your setup
 
@@ -163,14 +165,14 @@ Check the Actions tab — all steps should pass. If anything fails, the output w
 
 ## Running your first pipeline
 
-1. Your BA fills out the Excel intake template (`templates/forge-intake-template.xlsx`) and uploads it as an attachment to a new GitHub Issue in the FORGE repository
+1. Your BA fills out the Excel intake template (`docs/Intake Template.xlsx`) and uploads it as an attachment to a new GitHub Issue in the FORGE repository
 2. The Intake Agent reads the spreadsheet and posts clarifying questions in the issue comments
 3. The BA answers the questions and applies the label **`clarification-complete`** to the issue
 4. The pipeline runs from here automatically, pausing at each gate for your approval
 
-Each gate shows up as a required PR review or a GitHub Environment approval — no separate dashboard to learn.
+Each gate is a GitHub label applied to the tracking issue or a required PR review — no separate dashboard to learn.
 
-> **Intake template:** A copy of the intake template is at `templates/forge-intake-template.xlsx`. Instructions and examples are on the first tab.
+> **Intake template:** a copy of the intake template is at `docs/Intake Template.xlsx`. Instructions and examples are on the first tab.
 
 ---
 
@@ -178,14 +180,14 @@ Each gate shows up as a required PR review or a GitHub Environment approval — 
 
 | Gate | Where to approve |
 |---|---|
-| Requirements | Comment `/approve-requirements` on the tracking issue |
-| Design | Approve the `design/<request-id>` PR |
-| Implementation | Approve the `feature/<request-id>` PR |
-| QA sign-off | Comment `/approve-qa` on the tracking issue |
-| Security sign-off | Comment `/approve-security` on the tracking issue |
-| Production deploy | Approve the **`production`** GitHub Environment |
+| Requirements | Review the ADO work items the Requirements Agent created, then apply the `requirements-approved` label to the tracking issue |
+| Design | Approve and merge the `design/<request-id>` PR, then apply the `design-approved` label to the tracking issue |
+| Implementation | Approve and merge the `feature/<request-id>` PR — this is what allows QA and Security to run |
+| QA sign-off | Automatic — the QA Agent applies `qa-approved` (or sends it back with a retry label) based on real test results; review its posted report on the PR |
+| Security sign-off | Automatic — the Security Agent applies `security-approved` based on real scan results; review its posted report on the PR |
+| Deploy (staging) | Automatic — fires once both labels above are present **and** the feature PR has actually been merged to `main` |
 
-If you need to send a stage back, comment `/reject-<stage> <reason>` on the tracking issue.
+There is no slash-command interface (`/approve-*`, `/reject-*`) anywhere in the pipeline — every gate above is either a GitHub label or a native PR review/merge. If a stage needs to be sent back, the agent's own retry/loop-back label handles it automatically (QA); Requirements and Design currently rely on you not applying the `*-approved` label (or not merging the PR) until you're satisfied — there's no separate reject action to take.
 
 ---
 
@@ -221,9 +223,11 @@ your-forge-instance/
 │   ├── config.yaml         # Your team configuration
 │   ├── stack-preferences.yaml  # Tech choices fed to the Design Agent
 │   └── personas/           # Optional agent persona overrides
-├── templates/
-│   └── forge-intake-template.xlsx
-└── tracking/               # Per-request tracking issue metadata
+├── docs/
+│   └── Intake Template.xlsx
+└── tracking/               # Reserved — currently empty (.gitkeep only); all real
+                             # tracking data lives on the GitHub tracking issue
+                             # itself (labels, comments), not as local files here
 ```
 
 Your application code lives in your **target monorepo** — not here. FORGE opens branches and PRs there on your behalf.
@@ -240,7 +244,7 @@ Your application code lives in your **target monorepo** — not here. FORGE open
 | [Tool & Licensing Inventory](docs/03_FORGE_Tooling_v8.md) | Every tool, license, cost — including security tooling defaults |
 | [Governance Model](docs/04_FORGE_Governance-v2.md) | RFC process, ADRs, decision authority, core vs team layer boundaries |
 | [AI Foundations Guide](docs/05_FORGE_AI_Foundation_v2.md) | How LLMs and agents work — required reading for all developers using FORGE |
-| [Orchestration Manager Guide](docs/06_Orchestration_v6.md) | Full setup, gate-by-gate operations, failure handling, production checklist |
+| [Orchestration Manager Guide](docs/06_Orchestration_v6.md) | Full setup, gate-by-gate operations, failure handling |
 | [Customization Reference](docs/07_Customization_Ref_v3.md) | ~65 items explicitly marked Locked / Flexible / Fully Open |
 
 ---
