@@ -2646,11 +2646,27 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
 
     Commits: `3a2d5c5` (§2.1), `885b318` (§2.2).
 
-29. **`README.md` describes a materially different (partly aspirational,
+29. ~~**`README.md` describes a materially different (partly aspirational,
     never-built) pipeline than what's actually implemented — found
-    2026-08-29 during a routine README/memory review, not fixed this
-    session (Mike's explicit call — README rewrite deferred).** Checked the
-    repo-facing setup doc, last touched 2026-08-19, against current reality:
+    2026-08-29 during a routine README/memory review.**~~ — **RESOLVED
+    2026-08-29.** README.md rewritten to match the real, label-driven
+    pipeline (fictional `/approve-*`/`/reject-*` slash-command interface
+    removed; fictional "One-click production approval" deploy stage and
+    `production` GitHub Environment removed, replaced with an explicit
+    staging-only callout; intake template path corrected
+    `templates/forge-intake-template.xlsx` → `docs/Intake Template.xlsx`;
+    `tracking/` directory description corrected to note it's
+    `.gitkeep`-only, with real tracking data living on the GitHub issue
+    itself). Landed alongside a reconciled `docs/FORGE-Open-Items-Backlog-v2.md`
+    (supersedes v1, stale since ~Item #20 — corrects #9/#10/#15/#27, which
+    were already resolved but still listed as open, and adds #21-#30).
+    Commits: `8cc02fc` (context doc), `0ad7aaf` (README.md +
+    `docs/FORGE-Open-Items-Backlog-v2.md`, both in one commit rather than
+    the two separate commits originally planned) — both confirmed live on
+    `origin/main` via the GitHub API (`GET
+    repos/Flamespiker/forge-template/commits/main` → tip `0ad7aaf`).
+    Original findings, checked the repo-facing setup doc (then last touched
+    2026-08-19) against current reality:
     - **Approval mechanism described doesn't exist.** README instructs
       commenting `/approve-requirements`, `/approve-qa`,
       `/reject-<stage> <reason>` on the tracking issue. Confirmed via `grep`
@@ -2686,11 +2702,9 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
       (`gitleaks-allowlist.toml`, `dependency-check-suppressions.xml` — the
       latter itself stale per Item #13's resolution, unrelated to this
       item).
-    - **Not fixed this session per Mike's explicit instruction** — a proper
-      fix means rewriting the pipeline diagram, the full "Approving a gate"
-      table, and every production-deploy reference, not a targeted patch.
-      Flagged here so the drift is documented and doesn't need
-      rediscovering from scratch next time it's picked up.
+    - **Fix, once picked up (2026-08-29):** rewrote the pipeline diagram,
+      the full "Approving a gate" table, and every production-deploy
+      reference — not a targeted patch. See the resolution note above.
 
 30. ~~**No `security-check` mechanism existed for a non-`feature/*`/
     non-`design/*` branch PR** (e.g. an ops/infra change to
