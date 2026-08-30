@@ -2632,17 +2632,18 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
       closure commit) after this run — completely untouched, no
       cross-contamination.
 
-    **One item from live verification not completed, flagged rather than
-    glossed over:** visual, signed-in browser confirmation that the live
-    frontend actually renders REQ-2026-04's coverage-history filter feature
-    was not done — no browser-automation/credential tool was available in
-    this session's environment to authenticate through the app's real Azure
-    AD sign-in. A `WebFetch` check confirmed the app is live and correctly
-    serving the sign-in shell (not erroring) on the new image, but that's
-    reachability, not a feature-rendering confirmation. The image-SHA match
-    to PR #32's exact commit is strong technical evidence the right code is
-    running, but this specific visual check is **pending a manual sign-in
-    confirmation from Mike**, not an unresolved code issue.
+    **Visual, signed-in browser confirmation — completed, closed.** No
+    browser-automation/credential tool was available in this session's own
+    environment to authenticate through the app's real Azure AD sign-in, so
+    a `WebFetch` check only confirmed the app was live and correctly
+    serving the sign-in shell (not erroring) on the new image — reachability,
+    not a feature-rendering confirmation. **Mike confirmed the actual visual
+    check directly in the v75 session (2026-08-29): "visual check is good.
+    new view is there and works nicely."** The coverage-history filter
+    feature is confirmed rendering correctly on the live
+    `req-2026-03-frontend` app — combined with the image-SHA match to PR
+    #32's exact commit, this item is fully closed, not just technically
+    inferred.
 
     Commits: `3a2d5c5` (§2.1), `885b318` (§2.2).
 
