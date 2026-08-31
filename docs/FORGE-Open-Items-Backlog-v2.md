@@ -24,6 +24,19 @@ now in "Real Bugs" below, no longer empty) and one new, deliberately
 not-yet-decided process question (a PR self-approval / branch-protection
 deadlock that will recur — see "Design / Policy Decisions" below).
 
+**Update 2026-08-31 (later still, same day):** Item #31 is now **fully
+resolved** too — root-cause fixed (forced tool-use structured output via
+`invoke_agent()`'s new `output_schema` param), not just mitigated. Scope grew
+from `design_agent.py` alone to all five stage agents that call `invoke_agent()`
+for JSON output — `requirements_agent.py`/`qa_agent.py`/`security_agent.py`
+were found to have the identical fragile pattern during this fix's own
+investigation, and `ingestion_agent.py` (a fifth instance) was found afterward
+during the four-stage migration's own close-out sweep, outside that
+investigation's original scope. Real, costed live verification across all 5
+stages plus one deliberate `max_tokens`-truncation probe: **$0.526872 total**
+actual spend. "Real Bugs" below is empty again as a result. Full narrative in
+CLAUDE.md's Item #31 entry.
+
 ---
 
 ## Design / Policy Decisions — need Mike's call, not a spec
@@ -59,22 +72,8 @@ Mike's own account.** Real options for a future decision, not urgent:
 
 ## Real Bugs — well-scoped, good spec-and-fix candidates
 
-### Item #31 — `design_agent.py`'s `_parse_model_json()` has zero resilience to a malformed large JSON-mode response
-Surfaced 2026-08-31 during Item #1 Option 1's §4.4 verification (not something
-anyone was looking for): a real, costed Messages API call (~12,973 output tokens)
-failed `json.loads()` with a `JSONDecodeError`, and `run_design_agent()` re-raises
-without ever persisting the raw `output_text` anywhere — the $0.205 spend bought
-zero diagnostic signal, and the malformed text itself is now unrecoverable. A
-second, byte-identical-prompt call immediately after succeeded cleanly, so this
-looks like intermittent model-output flakiness on long JSON-mode responses, not a
-deterministic trigger from specific prompt content (including the new Required
-Secrets section, the initial suspect) — **n=2 isn't enough to confirm root cause
-either way.** Orthogonal to Item #1's own feature; could hit any design.md
-generation large enough to trigger it, and per this file's own cost-log history,
-~12-13k output tokens is this stage's typical size, not an edge case. Suggested
-scope: persist raw `output_text` on parse failure at minimum, possibly a bounded
-retry-on-`JSONDecodeError`, or a more lenient parser. See CLAUDE.md's Item #31
-entry for the full writeup.
+**None currently open.** Item #31 (below) was the last occupant of this section
+and is now root-cause resolved — see "Resolved since v1."
 
 ---
 
@@ -164,6 +163,7 @@ doc doesn't need re-deriving from scratch again next time.
 | #27 | `04-qa.yml`'s stale-label-clearing step re-queried current label state instead of this run's outcome | **resolved 2026-08-28**, found live during Item #25's §5 verification | 2026-08-28 | `5d07169` |
 | #28 | Deploy Agent (Stage 6) had zero Enhancement-target awareness | **resolved and live-verified 2026-08-29**, per `docs/FORGE-Item28-DeployAgent-EnhancementTarget-Spec.md` | 2026-08-29 | `3a2d5c5`, `885b318` |
 | #30 | No `security-check` mechanism existed for non-`feature/*`/non-`design/*` branch PRs | **resolved 2026-08-29**, permanently, via `ops-pr-security-noop.yml` | 2026-08-29 | `forge-demo-apps#34` (`34f40dd5`) |
+| #31 | Fragile free-text JSON parsing across 5 stage agents (design/requirements/qa/security/ingestion) | **RESOLVED 2026-08-31** — root-cause fix via forced tool-use structured output (`invoke_agent()`'s new `output_schema` param); scope grew from design-only to all 5 during investigation (ingestion found during close-out sweep, not original spec scope); real live-verification spend $0.526872 across 5 stages + 1 deliberate `max_tokens` probe | 2026-08-31 | `29fed6e`, `ccb23fa`, `43b11d4`, `89985d7`, `ad74ba8`, `7cfd87d` |
 
 ---
 
@@ -178,9 +178,10 @@ doc doesn't need re-deriving from scratch again next time.
    2026-08-31**, no longer needs sequencing.
 3. **Items #7, #11** — leave as-is; revisit only if either recurs or the underlying
    decision (staying on Next.js 14.x) changes.
-4. **Item #31** — low effort, no urgency (n=2 evidence, not yet confirmed
+4. ~~**Item #31** — low effort, no urgency (n=2 evidence, not yet confirmed
    recurring); pick up opportunistically, e.g. alongside the next
-   `design_agent.py` change.
+   `design_agent.py` change.~~ — **RESOLVED 2026-08-31**, no longer needs
+   sequencing.
 5. **The PR self-approval / branch-protection deadlock (flagged under "Design /
    Policy Decisions")** — no urgency until the next ad hoc PR needs opening under
    Mike's own account; send to Mike whenever convenient.

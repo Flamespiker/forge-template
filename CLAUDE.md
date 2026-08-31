@@ -2989,27 +2989,104 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
     PR #34. Both PRs' merge commits confirmed live on `origin/main` via the
     GitHub API (`34f40dd5...`, `9f3bc24c...`).
 
-31. **`design_agent.py`'s `_parse_model_json()` has zero resilience to a malformed
-    large JSON-mode response.** Surfaced 2026-08-31 during Item #1 Option 1's §4.4
-    verification, not something anyone was looking for: a real, costed Messages
-    API call produced a ~12,973-output-token response that failed `json.loads()`
-    with a `JSONDecodeError` (`"Expecting ',' delimiter: line 2 column 4617"`), and
-    `run_design_agent()` re-raises without ever printing or persisting the raw
-    `output_text` anywhere on a parse failure — the $0.205 spend bought zero
-    diagnostic signal, and the actual malformed text is now unrecoverable. A
-    second, byte-identical-prompt call immediately after ($0.201) succeeded
-    cleanly — so this looks like intermittent model-output flakiness on long
-    JSON-mode responses, not a deterministic trigger from any specific prompt
-    content (including the new Required Secrets section, which was the initial
-    suspect). **n=2 is not enough to confirm root cause either way.** Not yet
-    fixed — flagged as its own item rather than folded into Item #1, since the
-    failure mode is orthogonal to the Required Secrets feature and could hit any
-    design.md generation large enough to trigger it (per CLAUDE.md's own cost-log
-    history, ~12-13k output tokens is this stage's *typical* size, not an edge
-    case). Suggested scope for whoever picks it up: persist raw `output_text`
-    somewhere recoverable on parse failure at minimum (so a recurrence isn't
-    another $0.20 for nothing), possibly a bounded retry-on-`JSONDecodeError`, or
-    a more lenient parser tolerant of minor escaping mistakes.
+31. ~~**`design_agent.py`'s `_parse_model_json()` has zero resilience to a malformed
+    large JSON-mode response.**~~ — **RESOLVED 2026-08-31**, per
+    `docs/Specs/FORGE-Item31-StructuredModelOutput-Spec.md`. Originally surfaced
+    during Item #1 Option 1's §4.4 verification: a real, costed Messages API call
+    produced a ~12,973-output-token response that failed `json.loads()` with a
+    `JSONDecodeError`, and `run_design_agent()` re-raised without ever persisting
+    the raw `output_text` anywhere — the $0.205 spend bought zero diagnostic
+    signal, and the malformed text was unrecoverable. This session's own §1
+    investigation (before any fix code was written) found the identical fragile
+    pattern — free-text JSON parsing via a dedicated or inlined `_parse_model_json`
+    helper — independently duplicated in `requirements_agent.py`, `qa_agent.py`,
+    and `security_agent.py`. Per Mike's explicit decision, scope grew from
+    "design_agent.py only" to all four, and fix depth was root-cause (forced
+    tool-use structured output) rather than a persist-and-retry mitigation.
+
+    **A fifth instance — `ingestion_agent.py` — was found and folded in later,
+    during the four-stage migration's own close-out sweep, not part of the
+    original spec's §1 investigation scope** (that investigation explicitly ruled
+    out only `deploy_agent.py`/`intake_agent.py`; `ingestion_agent.py` was never
+    checked and had the byte-for-byte identical pattern — single `summary_markdown`
+    field, same `_parse_model_json()` helper, same "Output format — this is
+    strict" framing). Confirmed the exact shape before touching it, folded in as a
+    fifth mechanical migration on Mike's explicit approval, held to the same
+    verification bar as the other four.
+
+    **Fix — centralized in the wrapper, not five independent copies (per §3.3's
+    resolved fork):** `claude_agent_wrapper.py`'s `invoke_agent()` gained an
+    optional `output_schema: dict | None` param — when passed, forces a single
+    tool call (`tools=[...]`, `tool_choice={"type": "tool", ...}`) whose `input`
+    is guaranteed to validate against the given JSON Schema; `AgentResult` gained
+    `structured_output: dict | None`, populated from that `input` directly (no
+    `json.loads()`/fence-stripping at any call site ever again). Per §1.5's
+    confirmed Anthropic guidance ("Incomplete tool use blocks"): the wrapper
+    checks `stop_reason != "max_tokens"` before ever reading `.input`, and leaves
+    `structured_output=None` on a truncation — every stage's existing
+    `if result.stop_reason == "max_tokens": raise ValueError(...)` guard fires
+    unchanged at the call site, never touching a possibly-truncated tool_use
+    block. Extraction failures (zero/multiple tool_use blocks, non-dict `.input`)
+    persist the full raw response to disk before raising, so a malformed response
+    is never unrecoverable again — the original gap this item exists to fix.
+
+    **Per-stage migration (5 separate commits):** each stage defines its own JSON
+    Schema (translating the old prompt-documented shape into `properties`/
+    `required`/`additionalProperties: false`), passes it to
+    `invoke_agent(..., output_schema=SCHEMA)`, and reads `result.structured_output`
+    directly — the dead `_parse_model_json()` helpers (or inlined fence-stripping
+    blocks in `qa_agent.py`/`security_agent.py`) and any now-unused `import json`
+    were deleted. Each stage's redundant "Respond with ONLY a single JSON
+    object..." prompt framing was trimmed to a one-line "submit via the tool"
+    instruction — content-level guidance (per-field descriptions, the Required
+    Secrets section rules, etc.) was left untouched. Per §3.4's recommendation:
+    `requirements_agent.py`'s manual
+    `if "epic" not in ado_payload or "features" not in ado_payload: raise
+    ValueError(...)` check was removed, folded into the schema's nested
+    `required: ["epic", "features"]` instead — strictly more general, since it now
+    also covers the top-level keys and every nested field that had no explicit
+    check before.
+
+    **Verified twice, mocked then real.** Per-stage: a scoped local mock test for
+    each of the 5 files (no real API calls) covering schema shape sent to
+    `invoke_agent()`, successful extraction, downstream logic unaffected (design's
+    `yaml.safe_load()`, QA/Security's deterministic label decisions, the ADO
+    summary renderer), and the `max_tokens` guard firing correctly without ever
+    touching `structured_output` — all passed. **Then a real, costed live-
+    verification pass across all 5 stages plus one deliberate truncation probe,
+    on Mike's explicit cost go-ahead — real total spend $0.526872** (estimate was
+    $0.75–$2.00): QA ($0.011919, real `dotnet test` against a real
+    `forge-demo-apps` clone of `services/REQ-2026-03`, 42/42 backend tests pass)
+    and Security ($0.009918, real Gitleaks + real Dependabot API, 22 findings)
+    both ran against a real shallow clone; Ingestion ($0.148839, real
+    `get_repo_tree()`/`get_file_contents()` against `services/REQ-2026-03`) and
+    Requirements ($0.114570, the real `docs/FORGE-Intake-REQ-2026-04-
+    CoverageHistoryView.xlsx` spreadsheet) both produced real, substantive,
+    schema-valid output; Design ($0.235329, real `requirements.md` for
+    REQ-2026-03) produced a valid `design.md`/`openapi.yaml`/`tasks.md` triple,
+    YAML-validated cleanly. `result.structured_output` populated with every
+    expected key across all 5, no `KeyError`s, cost/token logging fired on every
+    call, no dead imports found in any of the 5 files. **The `max_tokens`
+    guidance from §1.5 was confirmed live, not just via docs:** a real forced
+    call at `max_tokens=50` against design's schema ($0.006297) returned
+    `stop_reason == "max_tokens"` with `structured_output` staying `None` and no
+    crash — the wrapper's ordering (check `stop_reason` before ever reading
+    `.input`) holds exactly as designed. All verification runs used
+    `--dry-run`/`dry_run=True` — zero GitHub state touched.
+
+    A pre-existing, unrelated Windows-codepage bug in Semgrep's own output
+    writer (`UnicodeEncodeError` on real non-ASCII repo content, confirmed by
+    running Semgrep standalone) surfaced during Security's live-verification run
+    — worked around by stubbing only `_run_semgrep()` for that one run (Gitleaks/
+    Dependabot/the real Anthropic call all ran unmodified). Not logged as its own
+    item, per Mike's explicit call: confirmed local-Windows-only, `04-qa.yml`/
+    `05-security.yml` run on `ubuntu-latest` and have never hit this, no code
+    change needed.
+
+    Commits: `29fed6e` (wrapper), `ccb23fa` (design_agent.py), `43b11d4`
+    (requirements_agent.py), `89985d7` (qa_agent.py), `ad74ba8`
+    (security_agent.py), `7cfd87d` (ingestion_agent.py) — all confirmed live on
+    `origin/main` via the GitHub API.
 
 ## Further reading
 
