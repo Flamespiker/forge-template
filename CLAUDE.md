@@ -1661,7 +1661,9 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     Enhancement, with a Managed Agents mount-path rewrite fix
     (`/mnt/session/uploads/...`) discovered along the way. Real verification via
     `forge-demo-apps#32`: 19 files changed, all under `services/REQ-2026-03/`, zero
-    under a new folder. Full narrative:
+    under a new folder. This zero-Enhancement-awareness pattern recurred twice more
+    (Items #25, #28) before Item #32 found a fourth instance in Stage 2/ADO item
+    creation. Full narrative:
     `docs/CLAUDE-archive-2026-08-resolved-open-items.md`.
 25. ~~**QA and Security both assumed `services/<request_id>/`, never
     `services/<existing_service>/`.**~~ — **RESOLVED AND LIVE-VERIFIED 2026-08-28**,
@@ -1670,7 +1672,8 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     false-pass/crash) on a missing target. The same stale-code re-dispatch incident
     recurred twice during verification (corrected in Item #12's backfill) before a
     genuine `qa-approved` + `security-approved` pass was confirmed. Also surfaced Item
-    #27 (found during this same pass). Full narrative:
+    #27 (found during this same pass). Same zero-Enhancement-awareness pattern as
+    Item #24 before it, and Items #28/#32 after it. Full narrative:
     `docs/CLAUDE-archive-2026-08-resolved-open-items.md`.
 26. ~~**No human gate exists between a feature PR opening and Deploy firing.**~~ —
     **RESOLVED 2026-08-29**, per `docs/Specs/FORGE-Item26-DeployTriggerGate-Spec.md`.
@@ -1693,7 +1696,9 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     existing live `req-<existing_service>-*` Container Apps in place rather than a new
     parallel slot. Live-verified: zero new `req-2026-04-*` resources created, image
     tags updated in place. Mike separately confirmed the visual result (coverage-history
-    filter feature) renders correctly. Full narrative:
+    filter feature) renders correctly. Third occurrence of the same
+    zero-Enhancement-awareness pattern as Items #24/#25 — Item #32 later found a
+    fourth, in Stage 2/ADO item creation. Full narrative:
     `docs/CLAUDE-archive-2026-08-resolved-open-items.md`.
 29. ~~**`README.md` describes a materially different (partly aspirational, never-built)
     pipeline** (fictional slash-command approvals, a never-built production-deploy
@@ -1719,6 +1724,26 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     migration's own close-out sweep). Real live-verification spend: **$0.526872**
     across 5 stages + 1 deliberate `max_tokens` probe. Full narrative:
     `docs/CLAUDE-archive-2026-08-resolved-open-items.md`.
+32. ~~**ADO Enhancement work lands as a new parallel Epic, never linked to the
+    existing Epic.**~~ — **RESOLVED AND LIVE-VERIFIED 2026-08-31**, per
+    `docs/Specs/FORGE-Item32-ADOEpicLinkage-Spec.md`. `create_ado_items.py` gained
+    a new `existing_service` param/`--existing-service` CLI arg and a
+    `_resolve_existing_epic_id()` helper — for an Enhancement, Features/User
+    Stories are now created as children of the existing service's own real Epic
+    (looked up from its `ado-work-items.json`) instead of a brand-new,
+    disconnected one; `02-design.yml` (the one remaining stage with zero
+    Enhancement awareness) gained the matching "Determine Enhancement status"
+    step. **This is the fourth occurrence of the same underlying pattern** — a
+    pipeline stage built with zero `existing_service`/Enhancement awareness —
+    following Item #24 (Stage 3), Item #25 (QA/Security), and Item #28 (Deploy).
+    Live-verified against a throwaway, non-production existing-service Epic
+    rather than REQ-2026-03's real Epic #134, to avoid polluting real backlog
+    data with test items: Feature/User Story correctly parented under the reused
+    Epic (independently confirmed via a fresh ADO API read); Greenfield path
+    confirmed byte-for-byte unchanged (still creates a brand-new Epic); the
+    deliberate-failure case (a bogus `--existing-service`) correctly raised
+    before any ADO call and posted a real, readable failure comment. Commits:
+    `bbbe3d0`, `759cc58`, `c4b3d0c`.
 
 ## Further reading
 
