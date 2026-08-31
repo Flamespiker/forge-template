@@ -23,6 +23,27 @@ security → deploy) with human approval gates at each stage.
 
 ---
 
+## Documentation Ownership
+
+**Each tracking doc has exactly one owner, to prevent the staleness/overlap that
+happened around 2026-08-31:**
+
+- **`CLAUDE.md`** — owned by Claude Code CLI. The live source of truth, tied to
+  actual committed code. Claude.ai never edits this file directly; it may flag
+  staleness and hand Claude Code CLI a prompt to fix it.
+- **`docs/FORGE-Open-Items-Backlog-v2.md`** — owned by Claude.ai. A forward-planning
+  index (one line per item, open or resolved-pointer). Claude Code CLI never edits
+  this file directly, even if asked to as part of a larger task — flag back to
+  Mike/Claude.ai instead of writing to it.
+- **`docs/FORGE-context_v*.md`** — owned by Claude.ai. Session-by-session diary.
+  Claude Code CLI never touches these.
+
+**Default for any newly-resolved CLAUDE.md item:** a short pointer (3-8 lines) plus
+a dated archive-file entry for the full narrative — not full narrative inline. Only
+genuinely short resolutions stay inline from the start.
+
+---
+
 
 ## Current Build Phase
 
@@ -541,8 +562,11 @@ Entry point: `python -m core.agents.requirements_agent --spreadsheet <path> --is
   `ado-work-items.json` to stdout. Does NOT commit or post.
 - `_MAX_TOKENS = 8000` — model produces ~3,500–3,900 output tokens for a 4-requirement intake.
   Raise if output is regularly truncated (`stop_reason == "max_tokens"`).
-- `_parse_model_json()` defensively strips ` ```json ``` ` fences if the model adds them despite
-  instructions; raises `json.JSONDecodeError` otherwise, caught by the outer `try/except`.
+- Structured output via `invoke_agent(..., output_schema=SCHEMA)` (Item #31, 2026-08-31) —
+  `result.structured_output` is read directly as a dict; no separate JSON-parsing function
+  exists anymore. The forced tool-use call guarantees the shape, so a malformed response
+  now surfaces as a wrapper-level `RuntimeError` (raw response persisted to disk for
+  diagnosis first), not a `json.JSONDecodeError` from this file.
 - **Phase 7 step 7.1:** for an Enhancement-flagged spreadsheet, also attempts to fetch
   `docs/<request_id>/existing-architecture-summary.md` from `pipeline-state` (committed by
   `ingestion_agent.py`, Stage 0a) and folds it into the prompt. A 404 is tolerated (logged,
