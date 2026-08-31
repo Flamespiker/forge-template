@@ -103,10 +103,19 @@ def run_create_ado_items(
     issue_number: int,
     request_id: str,
     dry_run: bool = False,
+    existing_service: str = "",
 ) -> dict:
     """
     Core entry point. Returns the updated ado-work-items.json payload (with
     real ADO IDs merged in).
+
+    Item #32: when existing_service is set (an Enhancement request whose
+    existing service resolved to a real value -- same "" convention
+    enhancement_target.py's resolve_service_root() already documents), the
+    Features/User Stories below are created as children of that existing
+    service's own real Epic (looked up via _resolve_existing_epic_id())
+    instead of a brand-new, disconnected one. Greenfield (existing_service
+    falsy): zero behavior change from before this fix.
     """
     path = _ado_items_path(request_id)
     content = get_file_contents(path, branch="pipeline-state")
@@ -122,18 +131,28 @@ def run_create_ado_items(
     primary_user_story_id: int | None = None
 
     try:
-        epic = ado_helper.create_epic(
-            title=payload["epic"]["title"],
-            description=payload["epic"].get("description", ""),
-        )
-        payload["epic"]["ado_id"] = epic["id"]
-        created_summary.append(f"Epic #{epic['id']}: {payload['epic']['title']}")
+        if existing_service:
+            epic_id = _resolve_existing_epic_id(existing_service)
+            payload["epic"]["ado_id"] = epic_id
+            payload["epic"]["reused_existing"] = True
+            created_summary.append(
+                f"Reused existing Epic #{epic_id} (not created this run) -- "
+                f"existing service '{existing_service}'"
+            )
+        else:
+            epic = ado_helper.create_epic(
+                title=payload["epic"]["title"],
+                description=payload["epic"].get("description", ""),
+            )
+            epic_id = epic["id"]
+            payload["epic"]["ado_id"] = epic_id
+            created_summary.append(f"Epic #{epic_id}: {payload['epic']['title']}")
 
         for feature in payload["features"]:
             created_feature = ado_helper.create_feature(
                 title=feature["title"],
                 description=feature.get("description", ""),
-                parent_epic_id=epic["id"],
+                parent_epic_id=epic_id,
             )
             feature["ado_id"] = created_feature["id"]
             created_summary.append(f"  Feature #{created_feature['id']}: {feature['title']}")
@@ -209,6 +228,12 @@ def main() -> None:
     parser.add_argument("--issue-number", required=True, type=int, help="FORGE tracking issue number in forge-template")
     parser.add_argument("--request-id", required=True, help="FORGE request ID")
     parser.add_argument("--dry-run", action="store_true", help="Create real ADO items but don't commit the updated json back")
+    parser.add_argument(
+        "--existing-service", default="",
+        help="Item #32: for an Enhancement request, the existing service whose real "
+             "Epic these Features/User Stories should be created under. Empty string "
+             "(default) means Greenfield or unresolved -- creates a brand-new Epic.",
+    )
     args = parser.parse_args()
 
     try:
@@ -216,6 +241,7 @@ def main() -> None:
             issue_number=args.issue_number,
             request_id=args.request_id,
             dry_run=args.dry_run,
+            existing_service=args.existing_service,
         )
     except Exception:
         sys.exit(1)
