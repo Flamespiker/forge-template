@@ -524,13 +524,20 @@ passed and, if applicable, that `security-approved` was applied to the tracking 
 that a Security Reviewer's PR approval is still required regardless of finding severity \
 (Document 6 Gate 5: even an all-clear scan needs an explicit human approval).
 
-Output format — this is strict:
-Respond with ONLY a single JSON object, no markdown code fences, no prose before or after it. \
-It must have exactly this shape:
+Submit the comment via the submit_structured_output tool — do not respond with plain \
+text."""
 
-{
-  "overview_markdown": "<string - the full Markdown overview comment body>"
-}"""
+_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "overview_markdown": {
+            "type": "string",
+            "description": "The full Markdown overview comment body.",
+        },
+    },
+    "required": ["overview_markdown"],
+    "additionalProperties": False,
+}
 
 
 def run_security_agent(
@@ -674,7 +681,7 @@ def run_security_agent(
         user_prompt = (
             "## Deterministic Security Scan Results (already computed — report exactly as given)\n\n"
             f"```json\n{json.dumps(summary_for_model, indent=2)}\n```\n"
-            "---\nProduce your JSON response now."
+            "---\nProduce your structured output now."
         )
 
         result = invoke_agent(
@@ -683,19 +690,14 @@ def run_security_agent(
             max_tokens=_MAX_TOKENS,
             stage_name=_STAGE_NAME,
             request_id=request_id,
+            output_schema=_OUTPUT_SCHEMA,
         )
         if result.stop_reason == "max_tokens":
             raise ValueError(
                 f"Model response was truncated at max_tokens={_MAX_TOKENS} — "
                 "increase _MAX_TOKENS in security_agent.py and retry."
             )
-        text = result.output_text.strip()
-        if text.startswith("```"):
-            text = text.strip("`")
-            if text.lower().startswith("json"):
-                text = text[4:]
-            text = text.strip()
-        parsed_output = json.loads(text)
+        parsed_output = result.structured_output
         overview_markdown = parsed_output["overview_markdown"]
 
     except Exception as exc:
