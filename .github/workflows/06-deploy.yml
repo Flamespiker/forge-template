@@ -228,6 +228,45 @@ jobs:
             --pr-number "$DISPATCH_PR_NUMBER" \
             --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}"
 
+      - name: Upload deploy context for post-deploy health check (Item #1)
+        # Only runs when "Run Deploy Agent" actually succeeded (the default
+        # step condition -- no `if: success()` needed beyond the explicit
+        # guard check below). 07-post-deploy-health.yml's workflow_run
+        # trigger fires on this job's *conclusion*, which is 'success' both
+        # when a real deploy happened AND when the guard clause above
+        # skipped cleanly (waiting for the other gate/merge) -- this
+        # artifact is how that workflow tells the two apart: no artifact
+        # means no real deploy happened this run, and it exits clean. Kept
+        # as a separate small step (not folded into deploy_agent.py itself)
+        # since run_summary already exists in-process but is discarded on a
+        # real run (see deploy_agent.py's own run_deploy_agent -- printed
+        # only under --dry-run) -- re-deriving the handful of fields this
+        # needs here avoids changing Deploy Agent's own return contract.
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          context = {
+              "issue_number": int(os.environ["ISSUE_NUMBER"]),
+              "request_id": "${{ steps.request.outputs.request_id }}",
+              "existing_service": "${{ steps.enhancement_decide.outputs.existing_service }}",
+              "commit_sha": os.environ["DISPATCH_HEAD_SHA"],
+              "pr_number": int(os.environ["DISPATCH_PR_NUMBER"]),
+          }
+          with open("deploy-context.json", "w", encoding="utf-8") as f:
+              json.dump(context, f)
+          print(f"Wrote deploy-context.json: {context}")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: steps.guard.outputs.proceed == 'true'
+        with:
+          name: deploy-context
+          path: deploy-context.json
+          retention-days: 7
+
       - name: Post failure comment for a pre-agent step failure
         if: always() && steps.guard.outputs.proceed == 'true' && steps.run_agent.outcome == 'skipped'
         run: |
