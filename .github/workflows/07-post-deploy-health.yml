@@ -1,0 +1,182 @@
+# FORGE Post-Deploy Health Check (Item #1, Option 3)
+#
+# Spec: docs/Specs/FORGE-Item1-PostDeployCrashLoopFlag-Spec.md
+#
+# NOT a pipeline gate. Document 6's Label Reference table gains nothing from
+# this workflow -- it never applies/removes a label, never fails a PR check,
+# never blocks anything. It only posts a non-blocking, deduped flag comment
+# to the FORGE tracking issue if a just-deployed unit's Container App
+# revision looks crash-looping shortly after Deploy Agent (Stage 6) ran.
+# Item #1's underlying discovery/prevention gap (a machine-readable
+# secrets-declaration convention -- Option 1) stays open by design; this
+# only closes the "silent forever" half of it.
+#
+# Two triggers:
+#   1. workflow_run, keyed to "FORGE Stage 6 -- Deploy"'s completion. This is
+#      the real, automatic path. IMPORTANT: that job's conclusion is
+#      'success' both when a real deploy happened AND when 06-deploy.yml's
+#      own guard clause skipped cleanly (only one of qa-approved/
+#      security-approved/merge present so far -- see that workflow's own
+#      header comment). This workflow tells the two apart via the
+#      deploy-context artifact 06-deploy.yml now uploads ONLY when its own
+#      "Run Deploy Agent" step actually succeeded -- no artifact means no
+#      real deploy happened this run, and the "Resolve run context" step
+#      below exits clean with should_run=false.
+#   2. workflow_dispatch, with manual request_id/unit_name/issue_number/
+#      existing_service inputs -- purely for testing this workflow directly
+#      against an already-known Container App (e.g. the known-broken
+#      req-2026-01-email-worker) without waiting for or forcing a real
+#      deploy cycle (spec §5). issue_number is NOT one of the two inputs the
+#      spec named (request_id/unit_name) -- added here because posting a
+#      tracking-issue comment structurally requires knowing which issue,
+#      and there is no existing request_id -> issue_number lookup in this
+#      codebase (only the reverse) to derive it from request_id alone.
+#
+# Azure auth reuses AZURE_STAGING_CREDENTIALS exactly as 06-deploy.yml does
+# (plain service-principal client-secret login via deploy_agent.py's own
+# _az_login(), not OIDC/federated) -- confirmed live 2026-08-30 that no
+# federated-credential setup exists anywhere in this repo today, so a
+# second workflow referencing the same secret needs no new Azure-side
+# configuration. workflow_run-triggered jobs get full secret access per
+# GitHub's own docs (this is the documented, intentional behavior for
+# exactly this "privileged workflow reacting to a less-privileged one"
+# pattern), and AZURE_STAGING_CREDENTIALS is a plain repo-level secret, not
+# scoped to any GitHub Environment -- no protection-rule friction either.
+
+name: FORGE Post-Deploy Health Check
+
+on:
+  workflow_run:
+    workflows: ["FORGE Stage 6 — Deploy"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "FORGE tracking issue number in forge-template (required to post a comment)"
+        required: true
+      request_id:
+        description: "FORGE request ID, e.g. REQ-2026-01"
+        required: true
+      existing_service:
+        description: "Optional: Enhancement existing-service name (blank = Greenfield)"
+        required: false
+      unit_name:
+        description: "Optional: check only this one already-finalized Container App name instead of every unit detected for request_id"
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  health-check:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORGE_APP_ID: ${{ secrets.FORGE_APP_ID }}
+      FORGE_APP_PRIVATE_KEY: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+      FORGE_GITHUB_OWNER: Flamespiker
+      FORGE_TARGET_REPO: forge-demo-apps
+      FORGE_SOURCE_REPO: forge-template
+      AZURE_STAGING_CREDENTIALS: ${{ secrets.AZURE_STAGING_CREDENTIALS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download deploy context artifact (workflow_run path only)
+        if: github.event_name == 'workflow_run'
+        id: download_context
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-context
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve run context
+        id: context
+        env:
+          INPUT_ISSUE_NUMBER: ${{ github.event.inputs.issue_number }}
+          INPUT_REQUEST_ID: ${{ github.event.inputs.request_id }}
+          INPUT_EXISTING_SERVICE: ${{ github.event.inputs.existing_service }}
+          INPUT_UNIT_NAME: ${{ github.event.inputs.unit_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          event_name = os.environ["GITHUB_EVENT_NAME"]
+
+          if event_name == "workflow_dispatch":
+              context = {
+                  "issue_number": int(os.environ["INPUT_ISSUE_NUMBER"]),
+                  "request_id": os.environ["INPUT_REQUEST_ID"],
+                  "existing_service": os.environ.get("INPUT_EXISTING_SERVICE", "") or "",
+                  "commit_sha": "",  # unset -> forge-demo-apps checked out at main below
+                  "unit_name": os.environ.get("INPUT_UNIT_NAME", "") or "",
+              }
+              should_run = True
+          else:
+              path = "deploy-context.json"
+              if not os.path.exists(path):
+                  print(
+                      "No deploy-context.json artifact found -- this workflow_run "
+                      "completion was a clean guard-clause skip in 06-deploy.yml "
+                      "(waiting on the other gate/merge), not a real deploy. "
+                      "Nothing to health-check. Exiting clean."
+                  )
+                  should_run = False
+                  context = {}
+              else:
+                  with open(path, encoding="utf-8") as f:
+                      context = json.load(f)
+                  context["unit_name"] = ""  # automatic path always checks every detected unit
+                  should_run = True
+                  print(f"Loaded deploy context from artifact: {context}")
+
+          unit_name = context.get("unit_name", "")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"should_run={'true' if should_run else 'false'}\n")
+              f.write(f"issue_number={context.get('issue_number', '')}\n")
+              f.write(f"request_id={context.get('request_id', '')}\n")
+              f.write(f"existing_service={context.get('existing_service', '')}\n")
+              f.write(f"commit_sha={context.get('commit_sha', '')}\n")
+              f.write(f"unit_name_flag={'--unit-name ' + unit_name if unit_name else ''}\n")
+          PY
+
+      - name: Generate GitHub App installation token (scoped to forge-demo-apps)
+        if: steps.context.outputs.should_run == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.FORGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+          owner: Flamespiker
+          repositories: forge-demo-apps
+
+      - name: Checkout forge-demo-apps
+        if: steps.context.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Flamespiker/forge-demo-apps
+          ref: ${{ steps.context.outputs.commit_sha || 'main' }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: monorepo-checkout
+
+      - name: Run post-deploy health check
+        if: steps.context.outputs.should_run == 'true'
+        run: |
+          python -m core.agents.post_deploy_health_agent \
+            --issue-number "${{ steps.context.outputs.issue_number }}" \
+            --request-id "${{ steps.context.outputs.request_id }}" \
+            --repo-path "$GITHUB_WORKSPACE/monorepo-checkout" \
+            --existing-service "${{ steps.context.outputs.existing_service }}" \
+            ${{ steps.context.outputs.unit_name_flag }}
