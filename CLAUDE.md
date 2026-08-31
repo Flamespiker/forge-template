@@ -2503,13 +2503,40 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
       no secrets; the one notable change, audit timestamps displayed in UTC
       instead of `America/Edmonton`, is a disclosed product choice, not a
       bug). `forge-req2026-03-pg` confirmed `Ready` (started) beforehand.
-    - **Same stale-code incident as Item #24, reproduced exactly:** the
-      first re-dispatch ran against un-pushed local commits (GitHub Actions
-      runs off the remote) — reproduced the original crash/false-pass one
-      more time, posting a duplicate Security failure comment and
-      re-applying the stale `qa-approved`. Caught, commits pushed, verified
-      via the GitHub API (not local git) that `main` actually carried the
-      fix before re-triggering.
+    - **Same stale-code incident as Item #24, reproduced exactly — twice, not
+      once.** Both occurrences confirmed independently via the GitHub Actions
+      API during the 2026-08-30 cost-log backfill (Item #12), not assumed
+      from this file's own earlier prose or the cost log alone:
+      - **Run 1, 2026-08-28T03:55:27Z** (QA
+        [`33140302933`](https://github.com/Flamespiker/forge-template/actions/runs/33140302933),
+        Security
+        [`33140302917`](https://github.com/Flamespiker/forge-template/actions/runs/33140302917)):
+        QA's log shows `No frontend package.json at
+        services/REQ-2026-04/frontend -- skipping npm install (backend-only
+        request)` and `No *.Tests.csproj found anywhere under
+        .../services/REQ-2026-04 -- treating backend testing as not
+        applicable` — both suites false-passed on a nonexistent directory,
+        `qa-approved` applied (attempt 1, 0 bugs). Security's log shows
+        `Running: semgrep ... (cwd=.../services/REQ-2026-04)` immediately
+        followed by `FileNotFoundError: [Errno 2] No such file or directory:
+        '.../services/REQ-2026-04'` and a bare `Traceback` — the raw,
+        undiagnosed crash this item's §1 investigation later corrected (see
+        above).
+      - **Run 2, 2026-08-28T22:27:57Z** (QA
+        [`33216902141`](https://github.com/Flamespiker/forge-template/actions/runs/33216902141),
+        Security
+        [`33216902143`](https://github.com/Flamespiker/forge-template/actions/runs/33216902143)):
+        byte-identical failure signature — same "not applicable" backend/
+        frontend messages, same `qa-approved` (attempt 2, 0 bugs), same
+        `FileNotFoundError` on `.../services/REQ-2026-04` from Security. Both
+        runs fired off the identical un-pushed-local-commits mistake (GitHub
+        Actions runs off the remote, not local git) recurring a second time
+        before it was caught.
+      Each occurrence posted its own duplicate Security failure comment and
+      re-applied the stale `qa-approved` label. Caught only after the second
+      recurrence; commits were then pushed and verified via the GitHub API
+      (not local git) that `main` actually carried the fix before
+      re-triggering a third time.
     - **Real fix confirmed working, live:** re-dispatched against the
       pushed fix — Security correctly resolved `services/REQ-2026-03/`, ran
       real Semgrep + Gitleaks (`cwd=.../services/REQ-2026-03` in the log),
