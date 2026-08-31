@@ -370,6 +370,69 @@ def _sanity_check_extracted_files(
             )
 
 
+def _detect_missing_secrets_declaration(design_md: str) -> bool:
+    """
+    Deterministic, flag-only completeness check (Item #1 Option 1): does this
+    request's design.md declare a "## Required Secrets" section at all.
+
+    This is NOT a secrets-accuracy or code-correctness check -- a present
+    section is never verified against what the generated code actually reads,
+    and a missing section never blocks implementation. It only confirms
+    whether the author wrote the section down, so a gap like
+    req-2026-01-email-worker's undeclared Service Bus connection string
+    surfaces here (before merge) instead of being discovered later as a live
+    crash loop. design_agent.py (Item #1 §2.1) writes this section
+    unconditionally, including a literal "None identified" when nothing
+    applies -- so "missing" is unambiguous: the author never declared,
+    not "declared none."
+
+    Callers are responsible for keeping a design.md *fetch failure* entirely
+    separate from this function's result -- this function must only ever be
+    called with content that was actually fetched. See
+    _build_secrets_declaration_flag() for how the two cases get distinct
+    wording.
+    """
+    return "## Required Secrets" not in design_md
+
+
+def _build_secrets_declaration_flag(
+    missing_secrets_declaration: bool,
+    secrets_check_fetch_error: str | None,
+) -> str | None:
+    """
+    Renders the (optional) secrets-declaration flag paragraph appended to the
+    tracking-issue comment -- mirrors deploy_agent.py's _detect_design_gaps()
+    conditional-append shape, but for two genuinely distinct problems that
+    must not collapse into the same wording (a missing section is a real,
+    confirmed finding; a fetch failure means the check simply couldn't run):
+
+    - secrets_check_fetch_error set: design.md could not be read at all for
+      this check -- say so explicitly rather than silently treating it as
+      "missing" (which would be a false positive) or silently dropping it
+      (which would hide a real fetch problem).
+    - missing_secrets_declaration True (and no fetch error): design.md was
+      read successfully but has no "## Required Secrets" section.
+    - Neither: no paragraph at all.
+    """
+    if secrets_check_fetch_error:
+        return (
+            "⚠️ **Could not check for a `## Required Secrets` declaration** -- "
+            f"fetching design.md failed (`{secrets_check_fetch_error}`). This is "
+            "a fetch problem, not a confirmed missing declaration -- an "
+            "Orchestration Manager should check design.md manually."
+        )
+    if missing_secrets_declaration:
+        return (
+            "⚠️ **design.md has no `## Required Secrets` section.** This is a "
+            "completeness check only -- it confirms the section was never "
+            "declared, not that any secrets are missing or misconfigured in the "
+            "generated code. An Orchestration Manager should confirm whether "
+            "this service needs secrets and, if so, add the section to "
+            "design.md before this ships further."
+        )
+    return None
+
+
 def _commit_and_open_pr(
     request_id: str,
     service_root: str,
@@ -378,6 +441,8 @@ def _commit_and_open_pr(
     files_to_commit: dict[str, str],
     recovered: bool = False,
     existing_service: str | None = None,
+    missing_secrets_declaration: bool = False,
+    secrets_check_fetch_error: str | None = None,
 ) -> dict:
     """
     Shared tail end for both the normal happy path and a manual session
@@ -390,6 +455,15 @@ def _commit_and_open_pr(
             a "Related service: services/<existing_service>/" traceability
             line to both the PR body and the tracking-issue comment. Omitted
             entirely (no empty/placeholder line) on a Greenfield run.
+        missing_secrets_declaration: Item #1 Option 1 §2.2 -- True when
+            design_md was fetched successfully but has no "## Required
+            Secrets" section. Flag-only, never blocks. See
+            _detect_missing_secrets_declaration().
+        secrets_check_fetch_error: Item #1 Option 1 §2.2 -- set instead of
+            missing_secrets_declaration when design.md itself couldn't be
+            fetched for this check, so that case gets its own distinct
+            wording rather than being conflated with a confirmed-missing
+            section. See _build_secrets_declaration_flag().
 
     Returns:
         Dict with "pr_number" and "pr_url".
@@ -445,6 +519,10 @@ def _commit_and_open_pr(
         "finished normally on its own; nothing was lost or duplicated.\n\n"
         if recovered else ""
     )
+    secrets_flag_message = _build_secrets_declaration_flag(
+        missing_secrets_declaration, secrets_check_fetch_error
+    )
+    secrets_flag_section = f"{secrets_flag_message}\n\n" if secrets_flag_message else ""
     comment_body = (
         f"<!-- forge:agent-comment stage=implementation request_id={request_id} -->\n"
         f"## 🛠️ FORGE Implementation — Draft Ready for Review"
@@ -457,6 +535,7 @@ def _commit_and_open_pr(
         f"Per-subagent audit trail: {_CONSOLE_SESSION_URL_PREFIX}{session_id}\n\n"
         "---\n"
         f"{recovered_note_comment}"
+        f"{secrets_flag_section}"
         "QA and Security are already running in parallel -- both trigger "
         "automatically now that this PR is open, and will post their own results "
         "directly on it. Review the diff; mark it ready for review and merge when "
@@ -559,9 +638,32 @@ def recover_implementation_session(
             print(f"  {path} ({len(files_to_commit[path])} chars)")
         return {"outcome": "recovered", "pr_number": None, "pr_url": None}
 
+    # Item #1 Option 1 §2.2 -- unlike the happy path, this function never
+    # fetches design.md for any other purpose, so this check gets its own
+    # fetch. A failure here must not abort a recovery that's otherwise ready
+    # to commit real, already-finished work -- it's caught and turned into
+    # its own distinctly-worded flag (see _build_secrets_declaration_flag())
+    # rather than either crashing the recovery or being silently treated as
+    # "section confirmed missing."
+    missing_secrets_declaration = False
+    secrets_check_fetch_error: str | None = None
+    try:
+        design_md_for_secrets_check = get_file_contents(f"docs/{request_id}/design.md", branch="main")
+        missing_secrets_declaration = _detect_missing_secrets_declaration(design_md_for_secrets_check)
+    except Exception as exc:
+        logger.warning(
+            "Could not fetch design.md to check for a Required Secrets "
+            "declaration (request %s) during recovery: %s -- flagging this "
+            "distinctly rather than assuming the section is missing.",
+            request_id, exc,
+        )
+        secrets_check_fetch_error = str(exc)
+
     pr_result = _commit_and_open_pr(
         request_id, service_root, session_id, issue_number, files_to_commit,
         recovered=True, existing_service=existing_service,
+        missing_secrets_declaration=missing_secrets_declaration,
+        secrets_check_fetch_error=secrets_check_fetch_error,
     )
 
     archive_session(coordinator_id, environment_id, session_id, subagent_ids)
@@ -748,9 +850,17 @@ def run_implementation_coordinator(
         )
         return {"session_id": session_id, "files": list(files_to_commit)}
 
+    # Item #1 Option 1 §2.2 -- design_md was already fetched (uncaught) above,
+    # before this function's try/except even begins, so by construction its
+    # fetch has already succeeded by this point; no secrets_check_fetch_error
+    # case applies on this path (see recover_implementation_session() for the
+    # one path where the fetch is new and can fail independently).
+    missing_secrets_declaration = _detect_missing_secrets_declaration(design_md)
+
     pr_result = _commit_and_open_pr(
         resolved_request_id, service_root, session_id, issue_number, files_to_commit,
         existing_service=existing_service,
+        missing_secrets_declaration=missing_secrets_declaration,
     )
     return {"session_id": session_id, "pr_number": pr_result["pr_number"], "files": list(files_to_commit)}
 
