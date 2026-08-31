@@ -1473,7 +1473,7 @@ isn't already idle** (it calls `wait_for_all_threads_idle()` first and does not 
 archive a genuinely still-running Stage 3 session out from under itself. That means
 there is **no script in this repo** for force-stopping a session someone decides (e.g.
 mid-Console-review) needs to be killed right now. Live-verified end-to-end 2026-08-27
-against a real running session (`sesn_01AbaBvHhDkLpkRPHRFdrFLF`, REQ-2026-04, killed
+against a real running session (`sesn_01MwLQkRnUCb54aguyJLknvX`, REQ-2026-04, killed
 ~16 min in, coordinator+backend+frontend all mid-turn, test_writer not yet started).
 
 **Step 1 — interrupt the running turn(s):**
