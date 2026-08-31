@@ -60,7 +60,6 @@ the standard failure comment.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import sys
@@ -156,15 +155,28 @@ or task breakdown as if the folder were empty. In design.md, note explicitly \
 where each new component fits alongside what already exists, and flag anywhere \
 a requirement appears to conflict with the existing observed behavior.
 
-Output format — this is strict:
-Respond with ONLY a single JSON object, no markdown code fences, no prose before \
-or after it. It must have exactly this shape:
+Submit your three artifacts via the submit_structured_output tool — do not respond \
+with plain text."""
 
-{
-  "design_markdown": "<string - the full contents of design.md>",
-  "openapi_yaml": "<string - the full contents of openapi.yaml, valid YAML>",
-  "tasks_markdown": "<string - the full contents of tasks.md>"
-}"""
+_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "design_markdown": {
+            "type": "string",
+            "description": "The full contents of design.md.",
+        },
+        "openapi_yaml": {
+            "type": "string",
+            "description": "The full contents of openapi.yaml, valid YAML.",
+        },
+        "tasks_markdown": {
+            "type": "string",
+            "description": "The full contents of tasks.md.",
+        },
+    },
+    "required": ["design_markdown", "openapi_yaml", "tasks_markdown"],
+    "additionalProperties": False,
+}
 
 
 def _fetch_existing_architecture_summary(request_id: str) -> str | None:
@@ -210,18 +222,8 @@ def _build_user_prompt(
         f"{stack_prefs_text}\n"
         f"{existing_architecture_section}"
         "---\n"
-        "Produce your JSON response now."
+        "Produce your structured output now."
     )
-
-
-def _parse_model_json(output_text: str) -> dict:
-    text = output_text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    return json.loads(text)
 
 
 def run_design_agent(
@@ -257,13 +259,14 @@ def run_design_agent(
             max_tokens=_MAX_TOKENS,
             stage_name=_STAGE_NAME,
             request_id=resolved_request_id,
+            output_schema=_OUTPUT_SCHEMA,
         )
         if result.stop_reason == "max_tokens":
             raise ValueError(
                 f"Model response was truncated at max_tokens={_MAX_TOKENS} — "
                 "increase _MAX_TOKENS in design_agent.py and retry."
             )
-        parsed_output = _parse_model_json(result.output_text)
+        parsed_output = result.structured_output
         design_md = parsed_output["design_markdown"]
         openapi_yaml_text = parsed_output["openapi_yaml"]
         tasks_md = parsed_output["tasks_markdown"]
