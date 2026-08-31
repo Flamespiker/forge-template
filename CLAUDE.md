@@ -31,10 +31,13 @@ happened around 2026-08-31:**
 - **`CLAUDE.md`** — owned by Claude Code CLI. The live source of truth, tied to
   actual committed code. Claude.ai never edits this file directly; it may flag
   staleness and hand Claude Code CLI a prompt to fix it.
-- **`docs/FORGE-Open-Items-Backlog-v2.md`** — owned by Claude.ai. A forward-planning
-  index (one line per item, open or resolved-pointer). Claude Code CLI never edits
-  this file directly, even if asked to as part of a larger task — flag back to
-  Mike/Claude.ai instead of writing to it.
+- **`docs/FORGE-Open-Items-Backlog-v*.md`** (current: `v3`) — owned by Claude.ai. A
+  forward-planning index (one line per item, open or resolved-pointer). Claude Code
+  CLI never edits this file directly, even if asked to as part of a larger task —
+  flag back to Mike/Claude.ai instead of writing to it. Unlike
+  `docs/FORGE_Build_Plan_v*.md` (single current version, old ones removed when
+  superseded), every Backlog version stays in the repo — don't delete `v1`/`v2`
+  when a new one lands.
 - **`docs/FORGE-context_v*.md`** — owned by Claude.ai. Session-by-session diary.
   Claude Code CLI never touches these.
 
@@ -1648,7 +1651,12 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     narrative: `docs/CLAUDE-archive-2026-08-resolved-open-items.md`.
 24. ~~**Stage 3 (Implementation) never extended for Enhancement requests.**~~ —
     **RESOLVED AND LIVE-VERIFIED 2026-08-28**, per
-    `docs/FORGE-Item23-Stage3-Enhancement-Spec.md`. `implementation_coordinator.py`
+    `docs/FORGE-Item23-Stage3-Enhancement-Spec.md`. This is also the fix cycle that
+    used REQ-2026-04 (`forge-template#10`) as its real live test target — a
+    reconciliation pass on 2026-08-31 confirmed this was Build Plan Phase 7 step
+    7.2's actual chosen enhancement (a coverage-history view for REQ-2026-03),
+    never explicitly logged as such at the time; see Build Plan v10 and Backlog
+    Item #32/#33 for the full reconciliation. `implementation_coordinator.py`
     now resolves `service_root` to the real `services/<existing_service>/` for an
     Enhancement, with a Managed Agents mount-path rewrite fix
     (`/mnt/session/uploads/...`) discovered along the way. Real verification via
