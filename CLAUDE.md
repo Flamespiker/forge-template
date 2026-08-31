@@ -1913,8 +1913,26 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     only tallied the 8 HIGH-severity findings; the full "no 14.x backport" population is
     21 unique CVEs — the disposition itself (accepted risk) is unchanged, only the count
     was incomplete.
-12. **Cost log (`docs/FORGE-pipeline-cost-log.md`) needs REQ-2026-03 figures backfilled**,
-    including the Deploy Agent fix cycle.
+12. ~~**Cost log (`docs/FORGE-pipeline-cost-log.md`) needs REQ-2026-03 figures backfilled**,
+    including the Deploy Agent fix cycle.~~ — **RESOLVED 2026-08-31.** Pulled real
+    Anthropic API cost/tokens for every REQ-2026-03-related stage run and the full
+    Items #24–#28/#30 Enhancement fix-cycle (REQ-2026-04, existing service
+    REQ-2026-03) directly from GitHub Actions logs and the Managed Agents sessions
+    API — not estimated, not carried over from CLAUDE.md prose. Real total:
+    **$57.64** across all costed Anthropic API stages, all requests, to date
+    (REQ-2026-03 itself: ~$17.39 original build + ~$13.08 fix-cycle, the latter
+    including a Design run technically billed to REQ-2026-04 but included for
+    completeness since it targeted REQ-2026-03's existing service). Deploy stays
+    $0 by design; the fix cycle's briefly-live stray `req-2026-04-*` Container App
+    (Item #24) is a real Azure cost, out of scope for this Anthropic-API-focused
+    log. Two things surfaced worth flagging: (1) confirmed `forge-template` is a
+    public repo, so GitHub Actions minutes are $0 for every run, always — not an
+    unmeasured gap; (2) the Items #24–#28/#30 stale-code incident actually
+    recurred **twice** on PR #32 (QA/Security runs at both 03:55 and 22:27 on
+    2026-08-28), not once as this file's own Item #25 narrative describes.
+    Full breakdown: `docs/FORGE-pipeline-cost-log.md` §2 (new Ingestion table,
+    plus new rows across Intake/Requirements/Design/Implementation/QA/Security)
+    and §3 (updated cumulative totals). Commit `103c927`.
 13. ~~**A `forge-template`-level Dependency-Check suppression file** for confirmed
     dev-only npm findings~~ — **RESOLVED DIFFERENTLY, 2026-08-19.** Rather than build the
     suppression file (which was briefly built, then hit a real XSD gotcha — a

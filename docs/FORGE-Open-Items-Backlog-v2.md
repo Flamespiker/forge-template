@@ -87,13 +87,14 @@ revisited.
 
 ## Bookkeeping — no spec needed, just do directly
 
-### Item #12 — Cost log needs REQ-2026-03 figures backfilled
-`docs/FORGE-pipeline-cost-log.md` is missing REQ-2026-03's actual Stage 1/3/4/5/6
-cost figures, including the whole Deploy Agent fix cycle (#24–#28, #30), pulled
-from the Managed Agents session cost endpoint the same way REQ-2026-02's figures
-were captured. Low effort, no design decision needed. Good candidate to fold into
-whatever session picks up Phase 7 Enhancement Workflow validation next, rather
-than its own dedicated session.
+### Item #12 — Cost log needs REQ-2026-03 figures backfilled — **RESOLVED 2026-08-31**
+`docs/FORGE-pipeline-cost-log.md` was missing REQ-2026-03's actual Stage 1/3/4/5/6
+cost figures, including the whole Deploy Agent fix cycle (#24–#28, #30). Pulled
+directly from GitHub Actions logs (`agent_invocation` lines) and the Managed
+Agents sessions API (3 Stage 3 sessions tied to the fix cycle, not just the
+original build) — real total **$57.64** across all costed stages/requests to
+date. See CLAUDE.md's own Item #12 entry and `docs/FORGE-pipeline-cost-log.md`
+§2/§3 for the full breakdown. Commit `103c927` (forge-template).
 
 ### Item #29 — `README.md` describes a pipeline that doesn't match reality
 Found 2026-08-29 during a routine README/memory review; deliberately not fixed
