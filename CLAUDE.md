@@ -36,103 +36,22 @@ writing the actual enhancement request's intake spreadsheet) has not started —
 per `docs/FORGE-Phase7-Ingestion-Agent-Spec.md`, that's explicitly a separate,
 later session's work.
 
-**Stage 3 (Implementation) now correctly extends to Enhancement requests — built
-and live-verified 2026-08-28.** Previously `implementation_coordinator.py` always
-targeted `services/<request_id>/` unconditionally, so an Enhancement would have
-built a brand-new folder from scratch instead of editing the real existing service
-— this was Build Plan step 7.6's literal acceptance bar and the mechanism blocking
-it. See Open Item #24 below for the full fix narrative (mount-path rewrite
-discovery, the Layer-2 comment fix, the stale-code trigger incident, and live
-verification via `forge-demo-apps#32`). Build Plan v9's own step 7.6 checkbox
-still needs updating on the Claude.ai side — this session only touched
-`CLAUDE.md` per its own scope.
+**Stage 3 (Implementation), QA (Stage 4), Security (Stage 5), and Deploy (Stage 6) all
+now correctly resolve an Enhancement request's real existing-service target** — built
+and live-verified 2026-08-28/29. Previously each stage assumed a brand-new
+`services/<request_id>/` folder, which broke every Enhancement request past Stage 2.
+See Item #24 (Stage 3), Item #25 (QA/Security, plus the shared `resolve_service_root()`
+helper), and Item #28 (Deploy, plus the `naming_id` concept so an Enhancement updates
+the existing Container Apps in place rather than deploying under a new parallel set)
+for the full fix narratives. Item #27 (a related stale-label-clearing bug in
+`04-qa.yml`) was found and fixed during Item #25's own verification pass.
 
-**QA (Stage 4) and Security (Stage 5) now correctly resolve an Enhancement
-request's real target directory too — built and live-verified 2026-08-28.**
-Item #24 fixed Stage 3; QA and Security had never been updated to match, so
-an Enhancement request reaching those stages hit `services/<request_id>/`
-(nonexistent) instead of the real `services/<existing_service>/` — QA
-silently false-positive-passed with zero real test coverage, Security
-crashed. See Open Item #25 below for the full fix narrative (the shared
-`resolve_service_root()` helper, QA/Security fail-loud fixes, the Dependabot
-filter fix, a second stale-code incident, a real frontend-install CI gap the
-fix itself exposed, and full live re-verification against
-`forge-demo-apps#32`/`forge-template#10` ending in a genuine `qa-approved` +
-`security-approved` pass). Item #27 (a related, separately-discovered
-stale-label-clearing bug in `04-qa.yml`) was found and fixed during this same
-verification pass — see its own entry below.
-
-**Deploy (Stage 6) now correctly resolves and updates an Enhancement
-request's real existing-service Container Apps too — built and
-live-verified 2026-08-29.** Items #24/#25 fixed Stage 3/QA/Security; Deploy
-had never been updated to match, so an Enhancement reaching Deploy hit
-`services/<request_id>/` (nonexistent) and raised `ValueError: No
-deployable units detected`. Unlike the other three stages, Deploy also owns
-a live, named Azure resource — fixing directory resolution alone would have
-deployed the existing service's real code under a brand-new, never-touched
-Container App set. See Open Item #28 below for the full fix narrative (the
-`naming_id` concept, the `_finalize_unit_name()` byte-for-byte reproduction
-confirmation, and full live re-verification against
-`forge-demo-apps#32`/`forge-template#10` ending in a genuine update-in-place
-redeploy).
-
-**Deploy no longer fires until the feature PR is actually merged — built and
-fully live-verified 2026-08-29, including a real Deploy run triggered by a
-real merge.** Item #26 (`docs/Specs/FORGE-Item26-DeployTriggerGate-Spec.md`): `06-deploy.yml`
-previously deployed the instant `qa-approved`/`security-approved` both
-landed, regardless of whether the feature PR had been merged — confirmed
-live 2026-08-28 that nothing in the label-driven trigger chain checked merge
-state at all. §1 investigation (all six points) surfaced a finding beyond
-the spec's own anticipation: `resolve_feature_pr()`/`list_open_prs_by_head()`
-hardcode `state=open` against GitHub's list-PRs endpoint, so that function is
-structurally incapable of resolving an already-merged PR — not just
-untested for merge state, blind to it by construction. Also confirmed
-`forge-demo-apps`' `main` branch protection (`required_approving_review_
-count: 1`, `security-check` required, `enforce_admins: true`) already
-constitutes a real, enforced human gate, resolving §3.3 in favor of leaving
-branch protection unchanged. Mike decided Option A (§3.1): `forge-demo-apps`'
-`notify-forge.yml` gained a `pull_request: [closed]` trigger (filtered on
-`merged == true`) dispatching a new `pr-merged` `repository_dispatch` event;
-`06-deploy.yml` gained a matching trigger, and its guard clause now requires
-both labels **and** a confirmed merge (derived from which trigger fired,
-never `resolve-feature-pr`) before a real Deploy proceeds — on the
-`pr-merged` path, the tracking issue number is resolved via the existing
-`resolve-tracking-issue` (reads the PR body regardless of open/closed state)
-and exported to `$GITHUB_ENV` so every existing downstream step keeps
-working unchanged; the dispatch payload's own PR number/head SHA are used
-directly for the checkout and Deploy Agent invocation. Landing the
-`notify-forge.yml` change itself surfaced a real, separate gap — see new
-Open Item #30 below — now permanently closed via `ops-pr-security-noop.yml`.
-Commits: `92a20b7` (forge-template, `06-deploy.yml`); `forge-demo-apps#33`
-(`notify-forge.yml`, merge commit `9f3bc24c`) and `forge-demo-apps#34`
-(`ops-pr-security-noop.yml`, merge commit `34f40dd5`), both confirmed live
-on `origin/main` via the GitHub API.
-
-**§5 live verification — completed 2026-08-29, on Mike's explicit go-ahead,
-using `forge-demo-apps#32`/`forge-template#10` as the ready-made reproduction
-case.** Mike merged PR #32 for real (`merged_at: 18:44:13Z`). Confirmed live,
-in order: (1) `notify-forge.yml`'s `pr-merged` dispatch fired 13 seconds
-after the merge, and `06-deploy.yml` actually ran (not skipped) —
-`repository_dispatch`-triggered run
-[`33269070840`](https://github.com/Flamespiker/forge-template/actions/runs/33269070840),
-`conclusion: success`; (2) its job log shows `Resolved tracking issue #10 for
-merged PR #32`, `Enhancement request -- existing service: 'REQ-2026-03'`,
-`Detected 2 unit(s) for REQ-2026-04 (naming_id=REQ-2026-03): ...`, and both
-`docker build`/`push` running against real `services/REQ-2026-03/...` paths
-tagged with PR #32's actual head commit (`2febc2a34771248c3ed3cffc02da2d1ad9de8aa0`),
-ending in `Deploy Agent complete for request REQ-2026-04 -- 2 of 2 unit(s)
-deployed to staging` with no errors; (3) independently re-confirmed via `az
-containerapp show` (not the job log) that both `req-2026-03-on-call-rost-5bb949`
-and `req-2026-03-frontend` carry that exact image tag, `provisioningState:
-Succeeded`, and `az containerapp list` filtered to `req-2026-04-*` returns
-`[]` — update-in-place confirmed, zero parallel resources created; (4) both
-apps reachable and behaving normally (frontend `/` → `307` to
-`/api/auth/signin`; backend `/api/v1/shifts` → `401`, not a crash) — same
-caveat as Item #28: no authenticated browser session in this environment, so
-the coverage-history filter feature itself is confirmed deployed but not
-visually confirmed rendering. Item #26 is now fully resolved — both the
-trigger-gate mechanism and a real end-to-end merge-to-deploy cycle are
-live-verified.
+**Deploy no longer fires until the feature PR is actually merged** — built and fully
+live-verified 2026-08-29, including a real Deploy run triggered by a real merge. See
+Item #26 for the full fix narrative (the `pr-merged` dispatch trigger, the guard-clause
+change requiring both labels and a confirmed merge, and the real end-to-end
+merge-to-deploy verification). Landing this fix surfaced a related gap, now also
+closed — see Item #30.
 
 **FORGE has completed Phase 6 (Repeatability)** — App 2 (`REQ-2026-03`, On-Call Roster
 Tracker) ran through the full pipeline; its FORGE tracking issue (`forge-template#6`)
@@ -368,7 +287,7 @@ depends on the newer `mcp`.
 
 ---
 
-## Key Decisions Made This Session
+## Agent Invocation & Infrastructure Reference
 
 ### Agent invocation — anthropic Messages API (ADR-0011)
 
@@ -736,7 +655,7 @@ Copy `.env.example` to `.env` and fill in values before running. `.env` is gitig
 
 ---
 
-## Outstanding Before Phase 3 Continues
+## Pipeline Stage Reference (Agent-by-Agent)
 
 Phase 3 and Phase 4 are both complete. The original step-by-step checklist (Steps
 3.1-3.10, Build Plan 4.1-4.9) and every dated live-run verification live in
@@ -1778,4 +1697,7 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
 - `docs/CLAUDE-archive-2026-08-req2026-02.md` — REQ-2026-02 fix cycle, verbatim.
 - `docs/CLAUDE-archive-2026-08-req2026-03.md` — REQ-2026-03 build + PR #20/Deploy cycle,
   verbatim.
+- `docs/CLAUDE-archive-2026-08-resolved-open-items.md` — full verbatim narratives for
+  every resolved Open Item (all except #7/#11, which remain open in this file), moved
+  here 2026-08-31 to keep this file lean.
 - `docs/FORGE-pipeline-cost-log.md` — token/Managed Agents/ACR cost tracking.
