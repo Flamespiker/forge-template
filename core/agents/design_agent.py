@@ -108,6 +108,23 @@ as not yet set, propose a sensible, well-justified default and flag it clearly a
 a Design Agent recommendation for the Technical Approver to confirm or override \
 at this gate — never present an unset field as if it were an existing team \
 standard.
+   - A **Required Secrets** section, heading exactly `## Required Secrets`: a \
+markdown table listing every secret, API key, connection string, or credential \
+this service's code will need at runtime. Columns: Secret Name (the actual \
+environment variable or configuration key the app will read -- not a vague \
+description), Purpose, and Source (e.g. "Azure Key Vault", "external service \
+credential", or "framework-internal -- consumed by <library> directly, never \
+referenced in application code" for a case like NextAuth's own \
+NEXTAUTH_SECRET/NEXTAUTH_URL). Reason about this actively rather than only \
+restating secrets already named elsewhere in the document -- consider any \
+authentication library or pattern this design chooses (NextAuth, MSAL/Azure AD, \
+or similar), any named external service integration (message queues, email \
+providers, third-party APIs, D365/Dataverse-style systems), and any database \
+connection string. If, after this reasoning, no secrets are required, the \
+section must still be written, with the literal text "None identified" -- never \
+omit this section entirely, even when the answer is none. This section is a \
+**declaration of what secrets are required**, not a promise that they are \
+correctly wired -- do not include placeholder or real secret values here.
    - Do not invent requirements not present in requirements.md; if something is \
 ambiguous, state your assumption explicitly rather than silently picking one.
 
