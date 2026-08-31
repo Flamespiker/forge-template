@@ -24,6 +24,15 @@
 # failure in the still-earlier "Resolve request ID" glue step (create_ado_items
 # already self-reports its own failures) and is skipped entirely once ADO
 # item creation actually runs, to avoid ever posting a duplicate.
+#
+# "Determine Enhancement status and existing service" (Item #32) mirrors
+# 04-qa.yml's own Item #25 step exactly -- re-downloads the intake spreadsheet
+# to resolve --existing-service, passed into create_ado_items so an
+# Enhancement's Features/User Stories are created under the existing
+# service's real Epic instead of a brand-new, disconnected one. This was
+# previously the one remaining stage that never resolved Enhancement status
+# at all (03-implementation.yml/04-qa.yml/05-security.yml/06-deploy.yml all
+# already had this).
 
 name: FORGE Stage 2 — Spec and Design
 
@@ -81,13 +90,54 @@ jobs:
         run: |
           python -m core.agents.workflow_glue resolve-request-id --issue-number "$ISSUE_NUMBER"
 
+      - name: Determine Enhancement status and existing service (Item #32)
+        id: enhancement_decide
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.workflow_glue download-issue-attachment \
+            --issue-number "$ISSUE_NUMBER" \
+            --output intake.xlsx \
+            --extension .xlsx
+          python - <<'PY'
+          import os
+          from core.agents.utils import file_io
+
+          parsed = file_io.read_xlsx("intake.xlsx")
+          request_type_section = parsed["overview"].get("request_type") or {}
+          request_type_value = (request_type_section.get("Request Type") or "").strip()
+          is_enhancement = request_type_value.lower() == "enhancement"
+
+          existing_service = ""
+          if is_enhancement:
+              for key, value in request_type_section.items():
+                  if "existing service name" in key.lower():
+                      existing_service = (value or "").strip()
+                      break
+              if not existing_service:
+                  print(
+                      "Request Type is 'Enhancement' but 'Existing Service Name' is "
+                      "blank -- treating as Greenfield for ADO item creation (Ingestion "
+                      "Agent's own Stage 0a check should already have flagged this at "
+                      "Intake)."
+                  )
+
+          if not existing_service:
+              print(f"Request Type = '{request_type_value or '(blank)'}' -- Greenfield or unrecognized, no --existing-service flag.")
+          else:
+              print(f"Enhancement request -- existing service: '{existing_service}'")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"existing_service={existing_service}\n")
+          PY
+
       - name: Create ADO work items (Epic -> Features -> User Stories)
         id: create_ado
         if: steps.guard.outputs.proceed == 'true'
         run: |
           python -m core.agents.create_ado_items \
             --issue-number "$ISSUE_NUMBER" \
-            --request-id "${{ steps.request.outputs.request_id }}"
+            --request-id "${{ steps.request.outputs.request_id }}" \
+            --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}"
 
       - name: Run Design Agent
         if: steps.guard.outputs.proceed == 'true' && success()
