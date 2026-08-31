@@ -73,7 +73,6 @@ exception is re-raised.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 
@@ -147,13 +146,20 @@ you the folder shape, but only cite specifics (endpoint names, entity fields, et
 from files whose content you actually received. Never hallucinate an endpoint, \
 field, or convention that isn't visible in what you were given.
 
-Output format — this is strict:
-Respond with ONLY a single JSON object, no markdown code fences, no prose before or \
-after it. It must have exactly this shape:
+Submit the summary via the submit_structured_output tool — do not respond with plain \
+text."""
 
-{
-  "summary_markdown": "<string - the full contents of existing-architecture-summary.md>"
-}"""
+_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary_markdown": {
+            "type": "string",
+            "description": "The full contents of existing-architecture-summary.md.",
+        },
+    },
+    "required": ["summary_markdown"],
+    "additionalProperties": False,
+}
 
 
 class EnhancementServiceNotFoundError(RuntimeError):
@@ -228,20 +234,8 @@ def _build_user_prompt(existing_service: str, all_paths: list[str], content_file
         f"## File contents ({len(content_files)} of {len(all_paths)} files)\n\n"
         f"{content_text}\n"
         "---\n"
-        "Produce your JSON response now."
+        "Produce your structured output now."
     )
-
-
-def _parse_model_json(output_text: str) -> dict:
-    text = output_text.strip()
-    if text.startswith("```"):
-        # Defensive: strip a wrapping ```json ... ``` fence if the model added one
-        # despite instructions not to.
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    return json.loads(text)
 
 
 def run_ingestion_agent(
@@ -316,13 +310,14 @@ def run_ingestion_agent(
             max_tokens=_MAX_TOKENS,
             stage_name=_STAGE_NAME,
             request_id=resolved_request_id,
+            output_schema=_OUTPUT_SCHEMA,
         )
         if result.stop_reason == "max_tokens":
             raise ValueError(
                 f"Model response was truncated at max_tokens={_MAX_TOKENS} — "
                 "increase _MAX_TOKENS in ingestion_agent.py and retry."
             )
-        parsed_output = _parse_model_json(result.output_text)
+        parsed_output = result.structured_output
         summary_md = parsed_output["summary_markdown"]
     except Exception as exc:
         logger.exception("Ingestion Agent failed for request %s", resolved_request_id)
