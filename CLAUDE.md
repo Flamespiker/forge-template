@@ -1553,15 +1553,18 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
 ## Open Items / Known Gaps
 
 1. **Deploy Agent had no app-secrets wiring mechanism — the wiring *primitive* is now
-   built (2026-08-19), but the harder question is still open.** `_wire_keyvault_secret()`
-   (see deploy_agent.py above) solves "how do we wire an already-known secret into a
-   Container App" — Key Vault references via managed identity, generic, reusable. It does
-   **not** solve "how does Deploy Agent learn a given app needs a given secret in the
-   first place" — that's still pure tribal knowledge, confirmed zero machine-readable
-   declaration exists anywhere (checked `.env.example`, `design.md`, `tasks.md`,
-   `package.json`, all agent code). Every wiring so far (REQ-2026-03's
-   `NEXTAUTH_SECRET`/`NEXTAUTH_URL`) has been a manual, one-off `--wire-keyvault-secret`
-   invocation, not something Deploy Agent decides to do on its own.
+   built (2026-08-19), and a reactive post-deploy flag (Option 3) is now built and
+   live-verified (2026-08-31) — but the harder discovery/prevention question (Option 1)
+   remains OPEN by deliberate choice. Do not read this item as fully closed.**
+   `_wire_keyvault_secret()` (see deploy_agent.py above) solves "how do we wire an
+   already-known secret into a Container App" — Key Vault references via managed
+   identity, generic, reusable. It does **not** solve "how does Deploy Agent learn a
+   given app needs a given secret in the first place" — that's still pure tribal
+   knowledge, confirmed zero machine-readable declaration exists anywhere (checked
+   `.env.example`, `design.md`, `tasks.md`, `package.json`, all agent code). Every
+   wiring so far (REQ-2026-03's `NEXTAUTH_SECRET`/`NEXTAUTH_URL`) has been a manual,
+   one-off `--wire-keyvault-secret` invocation, not something Deploy Agent decides to
+   do on its own.
    **Concrete real-world instance, found 2026-08-26 (app-level, not fixed, not a
    forge-mechanism bug — out of scope for that session's "forge mechanism, not apps"
    filter):** `req-2026-01-email-worker` is crash-looping in staging — revision
@@ -1573,8 +1576,71 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
    (the crash is in `EmailWorker`'s own code/config, unrelated to that session's
    app-insights-fix image tag); the Service Bus connection string was apparently never
    given a valid value — exactly the kind of secret Deploy Agent has no mechanism to
-   discover it needs, per this item. Left as-is deliberately — not investigated, not
-   fixed, flagged here for whenever this item gets picked up for real.
+   discover it needs, per this item. Left as-is deliberately, still crash-looping today
+   — its ongoing broken state is precisely what made it a real, ready-made test target
+   for the Option 3 work below rather than needing a synthetic failure.
+
+   **PARTIALLY RESOLVED 2026-08-31 — Option 3 (lightweight, non-blocking post-deploy
+   crash-loop flag) built per `docs/Specs/FORGE-Item1-PostDeployCrashLoopFlag-Spec.md`
+   and live-verified end-to-end via two independent real paths, not simulated:**
+   - **Manual `workflow_dispatch` path, against the already-broken
+     `req-2026-01-email-worker`:** first run
+     ([`33352062790`](https://github.com/Flamespiker/forge-template/actions/runs/33352062790))
+     correctly detected the revision's `healthState: Unhealthy`/`provisioningState:
+     Failed` at the very first checkpoint (t=30s — no need to wait the full ~4-5min
+     ceiling), fetched a best-effort log tail, and posted a real, correctly-formatted
+     flag comment to `forge-template#2` (comment count 6→7, comment ID `5473112169`).
+     A second run against the same target
+     ([`33352175945`](https://github.com/Flamespiker/forge-template/actions/runs/33352175945))
+     correctly found the existing `<!-- forge:crash-loop-flag:req-2026-01-email-worker
+     -->` marker and deduped — no second comment posted (7→7, confirmed via a fresh API
+     fetch, not inferred from the log alone).
+   - **Real `workflow_run` path, via a genuine `repository_dispatch: pr-merged` replay
+     for the already-merged `forge-demo-apps#32`** (chosen over spinning up a brand-new
+     Enhancement request — `forge-template#10` already had both
+     `qa-approved`/`security-approved` and PR #32 was already merged, making this the
+     least-disruptive real path to exercise the automatic trigger): the deploy run
+     ([`33352876943`](https://github.com/Flamespiker/forge-template/actions/runs/33352876943))
+     ran the real guard clause for real (`merged == true`, not the stale pre-Item-#26
+     precedent), rebuilt/pushed/redeployed both REQ-2026-03 units, and — thanks to the
+     new artifact-upload step — produced a real `deploy-context` artifact (confirmed via
+     `gh api .../artifacts`, 278 bytes, downloaded and diffed against the log's own
+     printed content: `{"issue_number": 10, "request_id": "REQ-2026-04",
+     "existing_service": "REQ-2026-03", "commit_sha":
+     "2febc2a34771248c3ed3cffc02da2d1ad9de8aa0", "pr_number": 32}`). Its completion then
+     fired `07-post-deploy-health.yml`'s `workflow_run` trigger **automatically, for the
+     first time** — not via `workflow_dispatch`
+     ([`33353056085`](https://github.com/Flamespiker/forge-template/actions/runs/33353056085),
+     confirmed `event: "workflow_run"` via `gh run list`, started 8s after the deploy
+     run's artifact write). It correctly loaded the artifact, re-resolved the same 2
+     units via `existing_service=REQ-2026-03`, ran the full 4-checkpoint ceiling (30s
+     through 240s — neither unit was ever unhealthy, so it never short-circuited),
+     found both healthy, and posted nothing (`forge-template#10` comment count 17→17,
+     confirmed via a fresh API fetch).
+   - **Real, useful side-finding from the replay, not a test artifact worth burying:**
+     the redeploy was byte-identical (same commit already live on both apps) — Azure
+     Container Apps recognized this and did **not** provision a new revision for either
+     app; both `req-2026-03-on-call-rost-5bb949--0000005` and
+     `req-2026-03-frontend--0000008` kept their original 2026-08-29 revision names and
+     `createdTime`, confirmed via `az containerapp revision list` showing exactly one
+     revision each (not a second, inactive one). No restart/availability blip occurred
+     at all — a better outcome than the "brief restart" expected going in, and a real
+     data point about Container Apps' update behavior (an identical image+env-var
+     update is a genuine no-op, not merely a fast revision swap).
+   - Commits: `4a451a5` (`post_deploy_health_agent.py`), `bfd98e1` (06-deploy.yml
+     artifact-upload step — cherry-picked onto `main` as `23c0dca` after an initial
+     hold-back for review), `250b8ae` (`07-post-deploy-health.yml` — rebased onto `main`
+     as `eaa7fae`).
+   - **What remains genuinely OPEN, by deliberate scope decision, not oversight:** the
+     underlying discovery/prevention gap (Option 1 — a machine-readable
+     secrets-declaration convention Deploy Agent could enforce at Stage 6) was
+     explicitly not built this pass (per the spec's own §3 Out of Scope). Option 3 only
+     closes the "silent forever" half of this item — a crash-loop caused by a missing
+     secret now gets flagged after the fact, but Deploy Agent still has no way to know
+     in advance that a given app needs a given secret. `req-2026-01-email-worker`
+     itself is also still crash-looping today — Option 3 would flag it on its next real
+     redeploy, but no one has gone back to actually fix its Service Bus connection
+     string as part of this work.
 2. ~~**REQ-2026-03's backend unit name doesn't fit Azure's Container App name length
    limit**~~ — **RESOLVED 2026-08-18.** `deploy_agent.py`'s `_validate_unit_name()`
    (raise-only) replaced with `_finalize_unit_name()` (deterministic truncation + 6-char

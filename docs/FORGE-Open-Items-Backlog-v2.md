@@ -20,10 +20,23 @@ picked up this session alongside this reconciliation).
 ## Design / Policy Decisions — need Mike's call, not a spec
 
 ### Item #1 — Deploy Agent has no way to learn an app needs a given secret
-**Still open. No change since v1.** The wiring *primitive* (`_wire_keyvault_secret()`)
+**PARTIALLY RESOLVED 2026-08-31 — do not read as fully closed.** Option 3 (a
+lightweight, non-blocking post-deploy crash-loop flag) was built and live-verified
+end-to-end this session — see CLAUDE.md's Item #1 entry for the full writeup (two
+independent real paths: manual `workflow_dispatch` against the known-broken
+`req-2026-01-email-worker`, and a real automatic `workflow_run` trigger via a
+`repository_dispatch: pr-merged` replay against `forge-demo-apps#32`). That closes
+the "silent forever" half of this item: a crash-loop caused by a missing/invalid
+secret now gets flagged on the tracking issue shortly after deploy, without blocking
+the pipeline.
+
+**What's still open, unchanged from v1:** the underlying discovery/prevention
+question below (Option 1 territory) was explicitly out of scope for the Option 3
+work and still needs Mike's call. The wiring *primitive* (`_wire_keyvault_secret()`)
 exists and works — the missing piece is how Deploy Agent would ever know, on its
-own, that a given app needs a given secret in the first place. Every wiring so far
-has been a manual, one-off CLI invocation. Real options worth Mike weighing:
+own, that a given app needs a given secret *before* deploying it (Option 3 only
+tells you *after*). Every wiring so far has been a manual, one-off CLI invocation.
+Real options worth Mike weighing:
 - A machine-readable declaration convention (e.g. a `secrets.yaml` per service, or
   a section in `design.md` with a fixed schema Deploy Agent parses)
 - Accept this as permanently manual — the primitive exists, tribal knowledge
@@ -128,8 +141,9 @@ doc doesn't need re-deriving from scratch again next time.
 
 ## Suggested sequencing
 
-1. **Item #1** — send to Mike whenever there's a natural moment; no urgency, nothing
-   else is blocked on it.
+1. **Item #1 (remaining Option 1 discovery/prevention decision only — Option 3
+   shipped 2026-08-31)** — send to Mike whenever there's a natural moment; no
+   urgency, nothing else is blocked on it.
 2. **Item #12** — fold into whichever session next picks up Phase 7 Enhancement
    Workflow validation; low effort, no separate session needed.
 3. **Items #7, #11** — leave as-is; revisit only if either recurs or the underlying
