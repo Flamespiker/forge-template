@@ -11,9 +11,10 @@ Known Gaps list and context v76, verified line-by-line rather than assumed.
 "Real Bug — well-scoped, good spec-and-fix candidate" (#6, #8, #20) has since been
 resolved, along with #24–#28 and #30 discovered afterward. **The "Real Bugs"
 category is currently empty.** What's left open is small: one genuine design
-decision (#1), two deliberate accepted-risk/leave-as-is items (#7, #11), one
-bookkeeping task (#12), and one already-scoped-but-deferred doc fix (#29, being
-picked up this session alongside this reconciliation).
+decision (#1), two deliberate accepted-risk/leave-as-is items (#7, #11), and one
+already-scoped-but-deferred doc fix (#29, being picked up this session
+alongside this reconciliation). Item #12 (bookkeeping) closed 2026-08-31,
+including a follow-up narrative correction it surfaced — see its own entry.
 
 ---
 
@@ -87,7 +88,7 @@ revisited.
 
 ## Bookkeeping — no spec needed, just do directly
 
-### Item #12 — Cost log needs REQ-2026-03 figures backfilled — **RESOLVED 2026-08-31**
+### Item #12 — Cost log needs REQ-2026-03 figures backfilled — **CLOSED, FULLY VERIFIED 2026-08-31**
 `docs/FORGE-pipeline-cost-log.md` was missing REQ-2026-03's actual Stage 1/3/4/5/6
 cost figures, including the whole Deploy Agent fix cycle (#24–#28, #30). Pulled
 directly from GitHub Actions logs (`agent_invocation` lines) and the Managed
@@ -95,6 +96,19 @@ Agents sessions API (3 Stage 3 sessions tied to the fix cycle, not just the
 original build) — real total **$57.64** across all costed stages/requests to
 date. See CLAUDE.md's own Item #12 entry and `docs/FORGE-pipeline-cost-log.md`
 §2/§3 for the full breakdown. Commit `103c927` (forge-template).
+
+**Follow-up correction, also closed 2026-08-31:** the backfill's own raw log pull
+surfaced a real discrepancy — CLAUDE.md's Item #25 narrative described the
+2026-08-28 stale-code re-dispatch (QA false-pass, Security `FileNotFoundError`)
+as a single occurrence, but the Managed Agents session logs showed it happened
+twice (03:55:27Z and 22:27:57Z). Both occurrences were independently
+re-confirmed via the GitHub Actions API (run IDs `33140302933`/`33140302917`
+for the first, `33216902141`/`33216902143` for the second — byte-identical
+failure signatures both times) before CLAUDE.md's Item #25 narrative was
+corrected to describe both, and the cost-log notes that had originally flagged
+the discrepancy were reworded to point at the now-fixed CLAUDE.md instead of
+describing it as open. Commit `8d97bfc` (forge-template). This item is now
+closed with no remaining loose ends.
 
 ### Item #29 — `README.md` describes a pipeline that doesn't match reality
 Found 2026-08-29 during a routine README/memory review; deliberately not fixed
@@ -145,8 +159,9 @@ doc doesn't need re-deriving from scratch again next time.
 1. **Item #1 (remaining Option 1 discovery/prevention decision only — Option 3
    shipped 2026-08-31)** — send to Mike whenever there's a natural moment; no
    urgency, nothing else is blocked on it.
-2. **Item #12** — fold into whichever session next picks up Phase 7 Enhancement
-   Workflow validation; low effort, no separate session needed.
+2. ~~**Item #12** — fold into whichever session next picks up Phase 7 Enhancement
+   Workflow validation; low effort, no separate session needed.~~ — **closed
+   2026-08-31**, no longer needs sequencing.
 3. **Items #7, #11** — leave as-is; revisit only if either recurs or the underlying
    decision (staying on Next.js 14.x) changes.
 4. **Phase 7 Enhancement Workflow validation** — not a backlog "item" in the
