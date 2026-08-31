@@ -31,7 +31,7 @@ happened around 2026-08-31:**
 - **`CLAUDE.md`** — owned by Claude Code CLI. The live source of truth, tied to
   actual committed code. Claude.ai never edits this file directly; it may flag
   staleness and hand Claude Code CLI a prompt to fix it.
-- **`docs/FORGE-Open-Items-Backlog-v*.md`** (current: `v3`) — owned by Claude.ai. A
+- **`docs/FORGE-Open-Items-Backlog-v*.md`** (current: `v5`) — owned by Claude.ai. A
   forward-planning index (one line per item, open or resolved-pointer). Claude Code
   CLI never edits this file directly, even if asked to as part of a larger task —
   flag back to Mike/Claude.ai instead of writing to it. Unlike
