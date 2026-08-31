@@ -48,6 +48,8 @@ import json
 import logging
 import sys
 
+import requests
+
 from core.agents.utils import ado_helper
 from core.agents.utils.github_helper import get_file_contents, commit_files, post_comment
 
@@ -56,6 +58,45 @@ logger = logging.getLogger(__name__)
 
 def _ado_items_path(request_id: str) -> str:
     return f"docs/{request_id}/ado-work-items.json"
+
+
+def _resolve_existing_epic_id(existing_service: str) -> int:
+    """
+    Item #32: for an Enhancement request, look up the existing service's own
+    real Epic ID instead of creating a brand-new, disconnected one.
+
+    Fetches docs/<existing_service>/ado-work-items.json from pipeline-state and
+    returns its epic.ado_id. Raises ValueError (caught by the same
+    failure-comment path run_create_ado_items() already has) if the file is
+    missing, malformed, or epic.ado_id isn't a populated int -- an Enhancement
+    whose existing service has no discoverable Epic ID is a real problem worth
+    surfacing loudly, not a case to silently fall back from. The three failure
+    shapes (file not found / not valid JSON / epic.ado_id not populated) get
+    distinct messages, since a human diagnosing this will want to know which.
+    """
+    path = _ado_items_path(existing_service)
+    try:
+        content = get_file_contents(path, branch="pipeline-state")
+    except requests.HTTPError as exc:
+        raise ValueError(
+            f"Could not find {path} on pipeline-state for existing service "
+            f"'{existing_service}' -- has that service's own ADO items ever "
+            f"been created? ({exc})"
+        ) from exc
+
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path} is not valid JSON: {exc}") from exc
+
+    epic_id = payload.get("epic", {}).get("ado_id")
+    if not isinstance(epic_id, int):
+        raise ValueError(
+            f"{path} was found but its epic.ado_id is not a populated int "
+            f"(got {epic_id!r}) -- the existing service's own Epic may never "
+            "have been created, or this file predates ADO item creation."
+        )
+    return epic_id
 
 
 def run_create_ado_items(
