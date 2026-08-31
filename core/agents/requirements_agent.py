@@ -115,30 +115,70 @@ is the full acceptance criteria text.
 - Include source_req_number on every User Story (e.g. "R-001") so it can be traced \
 back to the original spreadsheet row.
 
-Output format — this is strict:
-Respond with ONLY a single JSON object, no markdown code fences, no prose before or \
-after it. It must have exactly this shape:
+Submit both artifacts via the submit_structured_output tool — do not respond with \
+plain text."""
 
-{
-  "requirements_markdown": "<string - the full contents of requirements.md>",
-  "ado_payload": {
-    "epic": {"title": "<string>", "description": "<string>"},
-    "features": [
-      {
-        "title": "<string>",
-        "description": "<string>",
-        "user_stories": [
-          {
-            "title": "<string>",
-            "description": "<string>",
-            "acceptance_criteria": "<string>",
-            "source_req_number": "<string, e.g. 'R-001'>"
-          }
-        ]
-      }
-    ]
-  }
-}"""
+_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "requirements_markdown": {
+            "type": "string",
+            "description": "The full contents of requirements.md.",
+        },
+        "ado_payload": {
+            "type": "object",
+            "properties": {
+                "epic": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                    },
+                    "required": ["title", "description"],
+                    "additionalProperties": False,
+                },
+                "features": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "description": {"type": "string"},
+                            "user_stories": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "title": {"type": "string"},
+                                        "description": {"type": "string"},
+                                        "acceptance_criteria": {"type": "string"},
+                                        "source_req_number": {
+                                            "type": "string",
+                                            "description": "e.g. 'R-001', traces back to the original spreadsheet row.",
+                                        },
+                                    },
+                                    "required": [
+                                        "title",
+                                        "description",
+                                        "acceptance_criteria",
+                                        "source_req_number",
+                                    ],
+                                    "additionalProperties": False,
+                                },
+                            },
+                        },
+                        "required": ["title", "description", "user_stories"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["epic", "features"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["requirements_markdown", "ado_payload"],
+    "additionalProperties": False,
+}
 
 
 def _is_agent_comment(body: str) -> bool:
@@ -215,20 +255,8 @@ def _build_user_prompt(
         "## BA's Clarification Answers (from the tracking issue thread)\n\n"
         f"{clarification_answers}\n"
         "---\n"
-        "Produce your JSON response now."
+        "Produce your structured output now."
     )
-
-
-def _parse_model_json(output_text: str) -> dict:
-    text = output_text.strip()
-    if text.startswith("```"):
-        # Defensive: strip a wrapping ```json ... ``` fence if the model added one
-        # despite instructions not to.
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    return json.loads(text)
 
 
 def _render_ado_summary(ado_payload: dict) -> str:
@@ -275,17 +303,16 @@ def run_requirements_agent(
             max_tokens=_MAX_TOKENS,
             stage_name=_STAGE_NAME,
             request_id=resolved_request_id,
+            output_schema=_OUTPUT_SCHEMA,
         )
         if result.stop_reason == "max_tokens":
             raise ValueError(
                 f"Model response was truncated at max_tokens={_MAX_TOKENS} — "
                 "increase _MAX_TOKENS in requirements_agent.py and retry."
             )
-        parsed_output = _parse_model_json(result.output_text)
+        parsed_output = result.structured_output
         requirements_md = parsed_output["requirements_markdown"]
         ado_payload = parsed_output["ado_payload"]
-        if "epic" not in ado_payload or "features" not in ado_payload:
-            raise ValueError("Model's ado_payload is missing required 'epic' or 'features' keys")
     except Exception as exc:
         logger.exception("Requirements Agent failed for request %s", resolved_request_id)
         if not dry_run:
