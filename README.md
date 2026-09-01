@@ -110,30 +110,40 @@ In your FORGE repository, go to **Settings → Secrets and variables → Actions
 | Variable | Value |
 |---|---|
 | `FORGE_APP_CLIENT_ID` | Your GitHub App's Client ID — used by the `actions/create-github-app-token` Action; not a secret, this value is publicly visible on the App's settings page |
+| `FORGE_TARGET_REPO` | The name of your target monorepo (e.g. `your-monorepo`) — read by every stage workflow and by `github_helper.py` to know which repo to open branches/PRs/issues against |
+| `FORGE_GITHUB_OWNER` | The owner (user or org) of both your FORGE repo and target monorepo |
+| `FORGE_ADO_ORG_URL` | Your Azure DevOps organization URL (e.g. `https://dev.azure.com/your-org`) — used only by `verify-setup.yml`'s connectivity check; the pipeline agents themselves read the org URL from `team/config.yaml`'s `ado.org_url` instead |
 
 **Container Apps deployment credentials:** in addition to the registry secrets above, the Deploy Agent needs its own service principal (`AZURE_STAGING_CREDENTIALS`, in the table above) to authenticate against your Container Apps environment and push new revisions — Contributor on the resource group is sufficient. This principal cannot register new Azure resource providers or create RBAC role assignments; any one-time bootstrap work of that kind (e.g. provisioning a Key Vault, granting a managed identity a role) needs a human with elevated access instead.
 
 ### 4. Edit `team/config.yaml` (5 min)
 
-Open `team/config.yaml` and fill in your team's values:
+Open `team/config.yaml` and fill in your team's values. This is the exact schema the
+code reads — no other keys are consumed at runtime:
 
 ```yaml
-# Target repository (where agents will open branches and PRs)
-target_repo: your-org/your-monorepo
-
 # Azure DevOps
-ado_org: https://dev.azure.com/your-org
-ado_project: YourProject
-ado_area_path: YourProject\\YourTeam
+ado:
+  org_url: "https://dev.azure.com/your-org"
+  project: "YourProject"
+  area_path: "YourProject\\YourTeam"
+  default_tags:
+    - "forge-managed"
 
-# Azure Container Apps
-registry: yourregistry.azurecr.io
-staging_env: forge-staging
-resource_group: your-rg
-
-# Intake
-intake_method: issue_attachment   # or: repo_path
+# Azure Container Apps (staging only — there is no production deploy stage yet)
+container_apps:
+  staging:
+    environment: forge-staging
+    resource_group: your-rg
+    max_replicas: 2
+    min_replicas: 0
+    cpu: 0.25
+    memory: 0.5Gi
 ```
+
+The target monorepo's owner/name are **not** set here — they're read from the
+`FORGE_TARGET_REPO` / `FORGE_GITHUB_OWNER` repository variables (Settings → Secrets and
+variables → Actions → Variables tab), set in the next step.
 
 ### 5. Provision your Azure Container Apps environment (5 min)
 

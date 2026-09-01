@@ -18,6 +18,17 @@ this writing" caution about Container Apps deployment credentials — both
 corrected to match README.md and the live Deploy Agent; the Step 6
 checklist now lists this secret too.
 
+**Post-review fix (Items #35/#36/#37):** Step 3's `team/config.yaml` example used a
+schema that matched neither the real shipped file nor README's own example — replaced
+with the exact schema the code actually reads (`ado.*` + `container_apps.staging`
+only; no `monorepo`/`notifications` keys, no `container_apps.production` block, none
+of which any code consumes). Step 2's variable table and Step 6's checklist now list
+the new `FORGE_TARGET_REPO`/`FORGE_GITHUB_OWNER`/`FORGE_ADO_ORG_URL` repository
+variables that replace what used to be hardcoded literals in every stage workflow.
+The Intake section's "Option B — Repository path" was removed from the two-options
+framing — a codebase check found no such logic implemented anywhere; only issue
+attachment exists in code today.
+
 ---
 
 ## Purpose
@@ -106,6 +117,9 @@ Also store the App's **Client ID** (a separate value from the App ID, shown on t
 | Variable name | Value |
 |---|---|
 | `FORGE_APP_CLIENT_ID` | The Client ID shown on the app's settings page |
+| `FORGE_TARGET_REPO` | The name of your target monorepo — read by every stage workflow and by `github_helper.py` |
+| `FORGE_GITHUB_OWNER` | The owner (user or org) of both your FORGE repo and target monorepo |
+| `FORGE_ADO_ORG_URL` | Your Azure DevOps organization URL — used only by `verify-setup.yml`'s connectivity check (the pipeline agents themselves read `team/config.yaml`'s `ado.org_url` instead) |
 
 **Note on `actions/create-github-app-token`:** as of mid-2026, the current major version of this action is `@v3`, which uses the `client-id` input above rather than the older `app-id` input (older major versions relied on a Node.js runtime GitHub has since deprecated). Confirm any workflow using this action pins `@v3` or later and reads `client-id` from `vars.FORGE_APP_CLIENT_ID` — using an older version with only `app-id`/`FORGE_APP_ID` set will fail once GitHub fully retires the deprecated runtime.
 
@@ -113,46 +127,40 @@ These secrets/variables are used by every workflow job to generate a short-lived
 
 ### Step 3 — Configure the Team Layer
 
-Open `team/config.yaml` in your FORGE repo. This file is yours to edit. Set the following:
+Open `team/config.yaml` in your FORGE repo. This file is yours to edit. This is the exact
+schema the code reads — confirmed by a full codebase grep, not just a suggested shape —
+so use these key names and this nesting exactly:
 
 ```yaml
-# ADO connection
 ado:
-  organization: "https://dev.azure.com/your-org"
+  org_url: "https://dev.azure.com/your-org"
   project: "YourProjectName"
   area_path: "YourProjectName\\YourTeamArea"   # default area path for work items
+  default_tags:
+    - "forge-managed"
 
-# Target repository
-monorepo:
-  owner: "your-github-org"
-  repo: "custom-apps"
-
-# Azure Container Apps
 container_apps:
   staging:
     environment: "forge-staging"
     resource_group: "rg-forge-staging"
-    subscription_id: "your-subscription-id"
     min_replicas: 0
     max_replicas: 2
     cpu: 0.25
     memory: "0.5Gi"
-  production:
-    environment: "forge-production"
-    resource_group: "rg-forge-production"
-    subscription_id: "your-subscription-id"
-    min_replicas: 1
-    max_replicas: 5
-    cpu: 0.5
-    memory: "1.0Gi"
-
-# Notifications (optional)
-notifications:
-  teams_webhook: ""    # leave blank to disable
-  email: ""            # leave blank to disable
 ```
 
-The values above are the platform defaults. Change them to match your team's Azure setup. The floor and ceiling values for vCPU and memory are defined in `core/` — stay within them.
+The values above are the platform defaults for the fields that exist. Change them to
+match your team's Azure setup. The floor and ceiling values for vCPU and memory are
+defined in `core/` — stay within them.
+
+There is no `container_apps.production` block — FORGE currently deploys to staging
+only (see README's Production deploys note); a production block would be read by no
+code and would silently do nothing. There is also no `monorepo`/target-repo section
+here — the target monorepo's owner/name are read from the `FORGE_TARGET_REPO` /
+`FORGE_GITHUB_OWNER` repository variables instead (Step 4), not from this file. And
+there are no `notifications` keys — no code in `core/` reads a Teams webhook or email
+address; if you want gate-completion notifications, wire them yourself (e.g. a
+GitHub Actions step) rather than expecting this file to drive them.
 
 ### Step 4 — Set Remaining Secrets
 
@@ -193,8 +201,8 @@ Confirm everything is wired up before your first pipeline run:
 
 - [ ] FORGE repo created from template, visibility set to private
 - [ ] `forge-pipeline` GitHub App installed on the monorepo only
-- [ ] `FORGE_APP_ID` and `FORGE_APP_PRIVATE_KEY` secrets, and `FORGE_APP_CLIENT_ID` variable, set in FORGE repo
-- [ ] `team/config.yaml` updated with your ADO org, project, area path, monorepo details, and Azure environment names
+- [ ] `FORGE_APP_ID` and `FORGE_APP_PRIVATE_KEY` secrets, and `FORGE_APP_CLIENT_ID` / `FORGE_TARGET_REPO` / `FORGE_GITHUB_OWNER` / `FORGE_ADO_ORG_URL` variables, set in FORGE repo
+- [ ] `team/config.yaml` updated with your ADO org, project, area path, and staging Azure environment/resource-group names
 - [ ] `ANTHROPIC_API_KEY`, `ADO_PAT`, `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`, and `AZURE_STAGING_CREDENTIALS` secrets set
 - [ ] `forge-staging` and `forge-production` Container Apps environments created in Azure
 - [ ] `staging` and `production` GitHub Environments created in the FORGE repo, with `production` configured with a required reviewer
@@ -207,15 +215,16 @@ Consider also running the setup verification workflow described in Build Plan st
 
 ### Intake — Starting a Request
 
-The BA's job is to complete the Excel intake spreadsheet and upload it to trigger the pipeline. There are two ways to do this:
+The BA's job is to complete the Excel intake spreadsheet and upload it to trigger the pipeline:
 
-**Option A — Issue attachment (recommended for build phase):**
+**Issue attachment:**
 The BA opens a new issue in the FORGE repo, attaches the completed spreadsheet to the issue body, and applies the label `intake-ready`. The Intake Agent is triggered by this label event.
 
-**Option B — Repository path:**
-The BA places the completed spreadsheet in `intake/` in the FORGE repo at a path matching the naming convention (`intake/<request-id>.xlsx`) and opens a PR. The Intake Agent runs as a PR check.
-
-Both options work. Option A is simpler for BAs who are not comfortable with Git. Option B creates a cleaner audit trail. The choice is team layer — document it in your Orchestration Manager notes so BAs know what to do.
+**Not yet implemented — repository path:** an earlier version of this guide described a
+second option (dropping the spreadsheet at `intake/<request-id>.xlsx` and opening a PR,
+with `intake_agent.py` running as a PR check). A codebase check (backlog Item #36) found
+no such branching logic anywhere in `intake_agent.py` — only the issue-attachment path
+exists in code today. Treat this as a possible future option, not a currently-real choice.
 
 ### The "Clarification Complete" Signal
 
