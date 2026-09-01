@@ -206,7 +206,7 @@ What you can change in `team/config.yaml` and `team/stack-preferences.yaml` with
 - Container Apps resource sizing (within approved ranges)
 - Linting ruleset
 
-See `docs/07_Customization_Ref_v3.md` for a full list of what is locked, flexible, and fully open.
+See `docs/07_Customization_Ref_v4.md` for a full list of what is locked, flexible, and fully open.
 
 ---
 
@@ -245,7 +245,7 @@ Your application code lives in your **target monorepo** — not here. FORGE open
 | [Governance Model](docs/04_FORGE_Governance-v2.md) | RFC process, ADRs, decision authority, core vs team layer boundaries |
 | [AI Foundations Guide](docs/05_FORGE_AI_Foundation_v2.md) | How LLMs and agents work — required reading for all developers using FORGE |
 | [Orchestration Manager Guide](docs/06_Orchestration_v7.md) | Full setup, gate-by-gate operations, failure handling |
-| [Customization Reference](docs/07_Customization_Ref_v3.md) | ~65 items explicitly marked Locked / Flexible / Fully Open |
+| [Customization Reference](docs/07_Customization_Ref_v4.md) | ~65 items explicitly marked Locked / Flexible / Fully Open |
 
 ---
 
@@ -270,4 +270,4 @@ No net-new SaaS contracts are required with the default tool choices.
 - **Setup issues:** Check the `verify-setup` workflow output first — it identifies the failing component
 - **Pipeline failures:** See the [Orchestration Manager Guide](docs/06_Orchestration_v7.md) failure handling section
 - **Proposing a core layer change:** Open a GitHub Discussion in this repository under the RFC category
-- **Questions about what you can customize:** See the [Customization Reference](docs/07_Customization_Ref_v3.md)
+- **Questions about what you can customize:** See the [Customization Reference](docs/07_Customization_Ref_v4.md)

@@ -7,6 +7,8 @@
 
 **v3 changelog (2026-08-19):** Security Tooling table — default dependency vulnerability scanner updated from OWASP Dependency-Check to GitHub Dependabot alerts, reflecting Document 3 §3.5's swap.
 
+**v4 changelog (Phase 8, 8.2 review):** corrected two stale "Claude Agent SDK" references — six of the seven stages use the base `anthropic` client directly (ADR-0011), Managed Agents only for Stage 3 (ADR-0010); added the Cost Estimator's `cost-approved` two-label AND-gate (Item #34); added the Enhancement-target-resolution behavior (Items #24/#25/#28/#32) as a locked Pipeline & Orchestration item; added the post-deploy crash-loop health check (Item #1) and the confirmed-merge requirement on the Deploy trigger (Item #26) to the Containerization & Deployment table.
+
 ---
 
 ## How to Read This Document
@@ -27,8 +29,10 @@ If a row has a note, read it — the note defines the boundary exactly.
 |------|----------|-------|
 | Orchestration engine (GitHub Actions) | **Locked** | No alternative orchestrators permitted. |
 | State storage mechanism (native GitHub: labels, PR review state, Environments) | **Locked** | No bespoke state database or external state service. |
-| Agent invocation model (stateless per-stage Claude Agent SDK calls) | **Locked** | Agents do not persist memory across stages. Context passes forward as committed files only. Exception: Stage 3 uses a Managed Agents coordinator session (see ADR-0010) — the coordinator maintains state across its subagents *within* the stage window, which clarifies rather than violates this rule. All other stages are unaffected. |
+| Agent invocation model (stateless per-stage agent calls) | **Locked** | Agents do not persist memory across stages. Context passes forward as committed files only. Six of the seven stages call the base `anthropic` client directly, single-turn, no tool-use loop (see ADR-0011). Exception: Stage 3 uses a Managed Agents coordinator session (see ADR-0010) — the coordinator maintains state across its subagents *within* the stage window, which clarifies rather than violates this rule. |
 | Pipeline stage sequence and names | **Locked** | Stages 0a–6 execute in order. No stages may be reordered, skipped (except Stage 0a, which is only triggered for enhancements), or merged. |
+| Stage 3 cost-approval gate (`cost-approved` label) | **Locked** | Required alongside `design-approved` before the Implementation Coordinator's Managed Agents session starts — same two-label AND-gate shape as the Deploy trigger. No threshold exists; a coarse pre-flight estimate is posted for the Technical Approver to read, and the decision is purely human judgment (Item #34). |
+| Enhancement-target resolution (Implementation, QA, Security, Deploy, ADO item creation) | **Locked** | For an Enhancement request, every downstream stage resolves the real existing `services/<existing-service>/` folder and existing ADO Epic, rather than assuming a new `services/<request-id>/` folder or a new Epic. Not team-configurable — this is core pipeline behavior, not a team preference. |
 | Human gate at every stage | **Locked** | Every stage transition requires a human approval action. Gates cannot be bypassed or automated away. |
 | No-self-merge rule (agents open PRs; humans merge) | **Locked** | An agent may never merge its own PR. Enforced by branch protection. |
 | Guard clause on every workflow (precondition label check) | **Locked** | Prevents stray events from re-triggering a stage out of order. |
@@ -102,9 +106,11 @@ If a row has a note, read it — the note defines the boundary exactly.
 | Image tagging convention (`<request-id>-<commit-sha>`) | **Locked** | Used for rollback identification. Agents tag images this way; do not override. |
 | Target hosting platform (Azure Container Apps) | **Locked** | The Deploy Agent targets Azure Container Apps. Migration to other platforms is out of scope for FORGE v1. |
 | Two-environment model (`forge-staging` → `forge-production`) | **Locked** | Staging and production are separate environments. No single-environment deployments. |
-| Staging auto-deploy (no gate) | **Locked** | Staging deploys automatically. Humans do not approve staging deployments. |
+| Staging auto-deploy (no human gate, but requires a confirmed merge) | **Locked** | Staging deploys automatically once `qa-approved` + `security-approved` are both present **and** the feature PR has actually been merged to `main` — the labels alone do not fire it (Item #26). Humans do not separately approve staging deployments beyond merging the PR. |
 | Production gate (GitHub Environment with required-reviewer approval) | **Locked** | One-click production approval is the final irreversible action. This gate cannot be bypassed. |
 | Rollback mechanism (redeploy prior image tag) | **Locked** | No other rollback mechanism is defined. Previous revision retained 48 hours post-deploy. |
+| Post-deploy health check (crash-loop detection) | **Locked** | Runs automatically after every Deploy stage, detecting crash loops at the Container Apps revision level and posting a deduped tracking-issue comment. Currently detection-only — it does not yet proactively discover missing app secrets in advance (Item #1's Option 1, deliberately deferred). |
+| Enhancement deploy target (in-place update vs. new resources) | **Locked** | For an Enhancement request, Deploy updates the existing live Container App for that service in place, rather than provisioning a new, parallel set of resources (Item #28). |
 | Staging replica count (min 0, max 2) | **Flexible** | Defaults set in `team/config.yaml`. Configurable per service within the environment. |
 | Production replica count (min 1, max 5) | **Flexible** | Defaults set in `team/config.yaml`. Min 1 (always on) is the default; teams may raise the minimum. |
 | Container resource allocation (staging: 0.25 vCPU / 0.5 Gi; production: 0.5 vCPU / 1.0 Gi) | **Flexible** | Defaults set in `team/config.yaml`. Configurable per service. |
@@ -137,7 +143,7 @@ If a row has a note, read it — the note defines the boundary exactly.
 | Item | Category | Notes |
 |------|----------|-------|
 | Agent roster (eleven agents, defined roles) | **Locked** | The eleven agents (Codebase Ingestion, Intake, Requirements, Design, Implementation Coordinator, Backend, Frontend, Test Writer, QA, Security, Deploy) are fixed. Adding or removing agents requires an RFC. |
-| Agent execution model (stateless Claude Agent SDK calls in GitHub Actions jobs) | **Locked** | No persistent agent memory across stages. No alternative SDK — except Stage 3, which uses Anthropic Managed Agents (see ADR-0010). This is a core-layer exception, not a team choice. |
+| Agent execution model (stateless base-client calls in GitHub Actions jobs) | **Locked** | No persistent agent memory across stages. Six of the seven stages use the base `anthropic` client directly, not the Agent SDK (see ADR-0011) — except Stage 3, which uses Anthropic Managed Agents (see ADR-0010). This is a core-layer exception, not a team choice. |
 | Parallel execution of Backend / Frontend / Test Writer subagents | **Locked** | These three always run in parallel on a shared sandbox filesystem, orchestrated by the Implementation Coordinator (a Managed Agents session — see ADR-0010). Sequential execution is not supported. |
 | Integration handling in Stage 3 | **Locked** | There is no separate integration-check job — this was eliminated under ADR-0010. Integration is handled natively by the Managed Agents coordinator session as it synthesizes subagent output before committing. This mechanism cannot be bypassed or replaced with a standalone check. |
 | Agent model tier (Claude model tiers — Opus for the Implementation Coordinator, Sonnet for all other agents) | **Locked** | Set at the core layer per ADR-0010. Changing any agent's model tier requires an RFC (cost and capability implications). |
@@ -176,7 +182,7 @@ If a row has a note, read it — the note defines the boundary exactly.
 
 | Category | Count | Key Examples |
 |----------|-------|-------------|
-| **Locked** | ~40 items | Pipeline stages, human gates, agent roster, TypeScript mandate, GitHub App permissions, security gate, production approval gate, no-self-merge rule |
+| **Locked** | ~44 items | Pipeline stages, human gates, agent roster, TypeScript mandate, GitHub App permissions, security gate, production approval gate, no-self-merge rule, cost-approval gate, Enhancement-target resolution, post-deploy health check |
 | **Flexible** | ~15 items | Intake upload mechanism, default area path, security tool choices, container resource sizing, linting ruleset, agent personas |
 | **Fully Open** | ~10 items | CSS approach, component library, ORM, state management, logging library, notification channels, team-layer governance |
 
