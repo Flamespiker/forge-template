@@ -1003,17 +1003,32 @@ def _fetch_cost_estimate(issue_number: int, request_id: str) -> dict | None:
 def _extract_actual_cost_usd(final_status: dict) -> float | None:
     """
     Item #34 §2.3: GET /sessions/{id}'s usage.list_cost.amount is in CENTS,
-    not dollars (confirmed live, docs/FORGE-pipeline-cost-log.md §3). Returns
-    None if the session's status dict has no usage/list_cost data at all
-    (should not happen post-completion, but this must never crash the
-    post-run comment over a missing cost figure).
+    not dollars (confirmed live, docs/FORGE-pipeline-cost-log.md §3), AND is
+    returned as a STRING (e.g. "51"), not a number -- confirmed live during
+    this feature's own end-to-end test (TEST-ITEM34-GF, session
+    sesn_01L5BAj9c2sD6pnEiV35WuYB): an un-cast `amount / 100` raised
+    `TypeError: unsupported operand type(s) for /: 'str' and 'int'` AFTER the
+    session had already been archived, silently killing the entire
+    commit/PR/comment step with no traceback logged (main()'s outer bare
+    `except Exception: sys.exit(1)` swallows it) -- a real, live-caught bug,
+    not a hypothetical. Returns None if the session's status dict has no
+    usage/list_cost data at all, or if amount is present but not parseable as
+    a number -- this must never crash the post-run comment over a missing or
+    malformed cost figure.
     """
     usage = final_status.get("usage") or {}
     list_cost = usage.get("list_cost") or {}
     amount = list_cost.get("amount")
     if amount is None:
         return None
-    return amount / 100
+    try:
+        return float(amount) / 100
+    except (TypeError, ValueError):
+        logger.warning(
+            "usage.list_cost.amount was present but not parseable as a number: %r",
+            amount,
+        )
+        return None
 
 
 def run_implementation_coordinator(
