@@ -1,9 +1,22 @@
 # FORGE Stage 3 — Implementation
 #
-# Trigger label: design-approved (human applies after merging the design PR).
-# Label lifecycle: removes design-approved on success (once the feature PR is
-# confirmed open -- QA/Security pick up from there via the feature PR event,
-# not a label on this issue).
+# Trigger labels: design-approved AND cost-approved, both required for a real
+# coordinator run (Item #34) -- same two-label AND-gate shape as Item #26's
+# Deploy fix (qa-approved + security-approved in 06-deploy.yml). Job-level
+# `if` fires on either label landing; the "Guard clause" step re-checks BOTH
+# labels' live presence before the real run proceeds, same as every other
+# label-driven stage's re-check-at-run-time pattern.
+#
+# Sequence: design-approved lands first (human, after merging the design PR)
+# -> a new estimate-only step (Item #34 §2.2.A) posts a pre-flight cost
+# estimate comment and exits -- no session, no label applied. A human reviews
+# it and applies cost-approved manually (same action model as design-approved
+# itself; no stored threshold anywhere). Once BOTH labels are present, the
+# real coordinator run proceeds.
+#
+# Label lifecycle: removes BOTH design-approved and cost-approved on a
+# successful real run (once the feature PR is confirmed open -- QA/Security
+# pick up from there via the feature PR event, not a label on this issue).
 #
 # Runs the real Managed Agents coordinator session (ADR-0010) via
 # implementation_coordinator.py -- Backend/Frontend/Test Writer subagents on a
@@ -55,7 +68,7 @@ permissions:
 
 jobs:
   implementation:
-    if: github.event.label.name == 'design-approved'
+    if: github.event.label.name == 'design-approved' || github.event.label.name == 'cost-approved'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -77,7 +90,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Guard clause — confirm design-approved is still present
+      - name: Guard clause — confirm design-approved / cost-approved state
         id: guard
         run: |
           python - <<'PY'
@@ -86,22 +99,32 @@ jobs:
 
           issue = get_issue(int(os.environ["ISSUE_NUMBER"]))
           labels = [l["name"] for l in issue["labels"]]
-          proceed = "design-approved" in labels
-          if not proceed:
-              print("design-approved is no longer present on this issue -- skipping run.")
+          design_present = "design-approved" in labels
+          cost_present = "cost-approved" in labels
+          proceed = design_present and cost_present
+          if not design_present:
+              print("design-approved is no longer present on this issue -- skipping run entirely.")
+          elif not proceed:
+              print(
+                  "design-approved is present but cost-approved is not yet -- "
+                  "this run is either posting/updating the cost estimate, or "
+                  "just waiting for a human to apply cost-approved. No real "
+                  "coordinator run this time."
+              )
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"design_present={'true' if design_present else 'false'}\n")
               f.write(f"proceed={'true' if proceed else 'false'}\n")
           PY
 
       - name: Resolve request ID
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.design_present == 'true'
         id: request
         run: |
           python -m core.agents.workflow_glue resolve-request-id --issue-number "$ISSUE_NUMBER"
 
       - name: Determine Enhancement status and existing service (Item #23)
         id: enhancement_decide
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.design_present == 'true'
         run: |
           python -m core.agents.workflow_glue download-issue-attachment \
             --issue-number "$ISSUE_NUMBER" \
@@ -138,6 +161,19 @@ jobs:
               f.write(f"existing_service={existing_service}\n")
           PY
 
+      - name: Post pre-flight cost estimate (Item #34)
+        # Fires only on the design-approved labeling event itself (not on a
+        # later cost-approved event re-triggering this job) -- posts the
+        # estimate comment a human bases their cost-approved call on. Does
+        # not apply any label itself.
+        if: github.event.label.name == 'design-approved' && steps.guard.outputs.design_present == 'true'
+        run: |
+          python -m core.agents.implementation_coordinator \
+            --estimate-only \
+            --issue-number "$ISSUE_NUMBER" \
+            --request-id "${{ steps.request.outputs.request_id }}" \
+            --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}"
+
       - name: Run Implementation Coordinator
         id: run_agent
         if: steps.guard.outputs.proceed == 'true'
@@ -147,13 +183,14 @@ jobs:
             --request-id "${{ steps.request.outputs.request_id }}" \
             --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}"
 
-      - name: Clear design-approved label
+      - name: Clear design-approved and cost-approved labels
         if: steps.guard.outputs.proceed == 'true'
         run: |
           python - <<'PY'
           import os
           from core.agents.utils.github_helper import remove_label
           remove_label(int(os.environ["ISSUE_NUMBER"]), "design-approved")
+          remove_label(int(os.environ["ISSUE_NUMBER"]), "cost-approved")
           PY
 
       - name: Post failure comment for a pre-agent step failure
