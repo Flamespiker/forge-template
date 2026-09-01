@@ -108,6 +108,33 @@ def _select_blobs(filtered_blobs: list[dict]) -> list[dict]:
     return selected
 
 
+def select_seed_blobs(blobs: list[dict]) -> list[dict]:
+    """
+    Filter noise and apply the count-based budget, WITHOUT fetching any file
+    content -- shared by select_existing_service_files() (the real resolve
+    path, which then fetches content for each selected blob) and Item #34's
+    cost-estimate step (which only needs len(selected) to size the
+    enhancement-seed-file cost signal, and must not do the wasted work of
+    fetching content for an estimate that might lead to a "no").
+
+    Args:
+        blobs: Non-empty list of {"path": str, "size": int} dicts, as returned
+            by get_repo_tree(). Callers are responsible for the "empty tree ->
+            existing service not found" check (Item #23 §2.1's Layer 2
+            backstop) -- this function assumes a real, non-empty tree.
+
+    Returns:
+        List of the selected blob dicts (same shape as the input).
+    """
+    filtered = _filter_noise(blobs)
+    selected = _select_blobs(filtered)
+    logger.info(
+        "Selected %d of %d file(s) (after noise filtering) to seed into the "
+        "sandbox.", len(selected), len(filtered),
+    )
+    return selected
+
+
 def select_existing_service_files(blobs: list[dict]) -> dict[str, str]:
     """
     Given the full blob list for a services/<existing-service>/ prefix (from
@@ -125,10 +152,5 @@ def select_existing_service_files(blobs: list[dict]) -> dict[str, str]:
         "services/REQ-2026-03/backend/Controllers/ShiftsController.cs") to its
         UTF-8 text content, for every selected file.
     """
-    filtered = _filter_noise(blobs)
-    selected = _select_blobs(filtered)
-    logger.info(
-        "Selected %d of %d file(s) (after noise filtering) to seed into the "
-        "sandbox.", len(selected), len(filtered),
-    )
+    selected = select_seed_blobs(blobs)
     return {blob["path"]: get_file_contents(blob["path"], branch="main") for blob in selected}
