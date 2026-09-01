@@ -244,7 +244,7 @@ Your application code lives in your **target monorepo** — not here. FORGE open
 | [Tool & Licensing Inventory](docs/03_FORGE_Tooling_v8.md) | Every tool, license, cost — including security tooling defaults |
 | [Governance Model](docs/04_FORGE_Governance-v2.md) | RFC process, ADRs, decision authority, core vs team layer boundaries |
 | [AI Foundations Guide](docs/05_FORGE_AI_Foundation_v2.md) | How LLMs and agents work — required reading for all developers using FORGE |
-| [Orchestration Manager Guide](docs/06_Orchestration_v6.md) | Full setup, gate-by-gate operations, failure handling |
+| [Orchestration Manager Guide](docs/06_Orchestration_v7.md) | Full setup, gate-by-gate operations, failure handling |
 | [Customization Reference](docs/07_Customization_Ref_v3.md) | ~65 items explicitly marked Locked / Flexible / Fully Open |
 
 ---
@@ -268,6 +268,6 @@ No net-new SaaS contracts are required with the default tool choices.
 ## Getting help
 
 - **Setup issues:** Check the `verify-setup` workflow output first — it identifies the failing component
-- **Pipeline failures:** See the [Orchestration Manager Guide](docs/06_Orchestration_v6.md) failure handling section
+- **Pipeline failures:** See the [Orchestration Manager Guide](docs/06_Orchestration_v7.md) failure handling section
 - **Proposing a core layer change:** Open a GitHub Discussion in this repository under the RFC category
 - **Questions about what you can customize:** See the [Customization Reference](docs/07_Customization_Ref_v3.md)

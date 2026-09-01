@@ -2,6 +2,18 @@
 
 **Full-SDLC Orchestration with Review Gates for Engineers**
 
+**v7 changelog (Phase 8, 8.1 review):** added the "Enhancement vs.
+Greenfield Requests" section and Enhancement-specific notes at Gate 6 and
+in the File Reference table (Stage 0a, `existing_service` targeting,
+in-place Deploy, ADO Epic linkage — Items #24/#25/#28/#32); added Gate 2.5
+(Cost Estimator / `cost-approved`, Item #34) and its Label Reference
+entries; corrected Gate 6 and the Label Reference table to reflect that
+Deploy requires a confirmed feature-PR merge, not just labels (Item #26);
+added the post-deploy crash-loop health check to Failure Handling
+(Item #1); corrected two stale "Claude Agent SDK" references — six of the
+seven stages use the base `anthropic` client directly (ADR-0011), not the
+Agent SDK.
+
 ---
 
 ## Purpose
@@ -208,6 +220,17 @@ Do not rely on a keyword reply. The label is unambiguous, cannot be accidentally
 
 If the agent asks a follow-up question (a second round of clarification), the BA removes the label, answers, and re-applies it when done. The workflow guard clause checks for the label's presence at the moment the job runs — it will not re-trigger on label re-application if the Requirements stage has already started.
 
+### Enhancement vs. Greenfield Requests
+
+The Excel intake spreadsheet's Overview tab has a Request Type field: **Greenfield** (a brand-new application) or **Enhancement** (a change to an existing FORGE-built service). This choice affects several stages, not just intake:
+
+- **Stage 0a (Codebase Ingestion)** runs automatically, and only, for an Enhancement request — it reads the target service's existing code and produces an architecture summary (`docs/<request-id>/existing-architecture-summary.md`) that Requirements and Design read alongside the intake spreadsheet. It does not run, and cannot be manually triggered, for a Greenfield request.
+- **Implementation, QA, Security, and Deploy** all resolve an Enhancement's real target folder (`services/<existing-service>/`) rather than assuming a brand-new `services/<request-id>/` — an Enhancement's changes land on the existing service, not a new parallel one.
+- **Deploy** updates the existing live Container App for that service in place (see Gate 6) rather than standing up a new, parallel set of resources.
+- **ADO work items** for an Enhancement are created as Features/User Stories under the *existing* service's real Epic, not a new disconnected one — keeping the backlog attached to the application actually being changed.
+
+For a BA filling out the intake spreadsheet, the only difference is one field (Request Type, plus naming the existing service being enhanced). Everything downstream of that field is handled automatically — there is nothing extra for you to configure per-request, but it's worth knowing this distinction exists so an Enhancement's PRs landing under an existing `services/` folder (rather than a new one) doesn't look like a mistake when you're reviewing a gate.
+
 ### What Happens at Each Gate
 
 Once the pipeline is running, your job at each gate is to read what the agent produced and decide whether to approve it.
@@ -217,6 +240,9 @@ The Requirements Agent has produced `requirements.md` (and `ado-work-items.json`
 
 **Gate 2 — Design approval:**
 The Design Agent reads `requirements.md` from `pipeline-state` and has opened a **draft** PR against `design/<request-id>` containing `design.md`, `openapi.yaml`, and `tasks.md`. Review the PR. The Technical Approver reviews the architecture and API contracts. Click **Ready for review** (draft PRs cannot be merged directly), then merge the PR. After merging, apply the label `design-approved` to the tracking issue — this is the actual trigger for Stage 3 (Implementation); merging the PR alone does not start it.
+
+**Gate 2.5 — Cost approval:**
+Before the Implementation Coordinator's real Managed Agents session starts, a coarse, shape-bucketed cost estimate is posted as a tracking-issue comment (based on unit count from `tasks.md`, plus seed-file count for an Enhancement, scaled against historical baselines). There is no hard threshold — this is purely informative. Read the estimate, then apply `cost-approved` to the tracking issue. Stage 3 requires **both** `design-approved` and `cost-approved` before it starts, the same two-label AND-gate shape as the Deploy trigger in Gate 6. Once Stage 3 completes, the same comment is updated with the actual cost for comparison against the estimate.
 
 **Gate 3 — Implementation review:**
 The Implementation Coordinator (a Managed Agents session) has run the Backend, Frontend, and Test Writer subagents in parallel on a shared sandbox filesystem, synthesized their output, committed the complete implementation to `feature/<request-id>`, and opened a **draft** PR. Review the diff. The coordinator has flagged any issues encountered in the PR description, and a per-subagent audit trail is available in the Claude Console alongside the GitHub Actions log. Click **Ready for review** before GitHub will allow the PR to be approved and merged — the coordinator opens it as draft, the same as the Design Agent's PR in Gate 2. Approve or request changes — the coordinator does not merge its own PR, and does not click Ready for review on your behalf.
@@ -228,7 +254,9 @@ The QA Agent has posted a test report as a PR comment. If all tests pass, the ag
 The Security Agent has posted severity-tagged findings as inline PR comments. A Critical finding has already set a failing check that blocks merge. If there are no Criticals, the agent applies `security-approved` automatically — the Security Reviewer's role is to review the findings and confirm the pass, not to apply the label. After Criticals are resolved and a clean re-scan runs, the label is applied the same way.
 
 **Gate 6 — Production deployment:**
-Staging deploys automatically once all prior gates pass. To approve production, open the **`production`** GitHub Environment approval request and click **Approve**. The Deploy Agent runs the production deployment.
+Staging deploys automatically once all prior gates pass **and the feature PR has actually been merged to `main`** — `qa-approved` + `security-approved` being present is necessary but not sufficient; a real merge event is what fires the deploy trigger (`notify-forge.yml` dispatches on merge, and `06-deploy.yml`'s guard clause checks for both the labels and a confirmed merge). Applying both labels before the PR is merged will not deploy anything by itself. To approve production, open the **`production`** GitHub Environment approval request and click **Approve**. The Deploy Agent runs the production deployment.
+
+**For an Enhancement request** (see "Enhancement vs. Greenfield Requests" below), Deploy updates the existing live Container App for that service in place — you will not see a new, parallel set of Container Apps resources spin up.
 
 ---
 
@@ -281,7 +309,10 @@ This is the most common case. Read the tracking issue and PR comments — the ag
 The QA Agent retries implementation failures up to three times before stopping and escalating. If this happens, the pipeline halts with a `qc-retry-limit-reached` label on the tracking issue. Review the QA report and the open bug tickets in ADO. Determine whether the bug is in the agent's code (common) or in the test assertions (less common but possible). Manually triage: either close incorrect test tickets or mark the code direction as incorrect and open a new request with corrected design guidance.
 
 **The agent silently failed — no output, no error comment.**
-This applies to all stages except Stage 3 (see the Managed Agents entry below for implementation-stage failures). Check the GitHub Actions job log for the failed run. Look for a non-zero exit code in the Claude Agent SDK call step. Common causes: API timeout (the Anthropic API call exceeded the job timeout), context overflow (the agent's input was too large), or a malformed tool call. The job log will distinguish these. For API timeouts and context overflow, reduce the scope of the request. For malformed tool calls, this is a bug — file an issue in the FORGE template repo.
+This applies to all stages except Stage 3 (see the Managed Agents entry below for implementation-stage failures). Check the GitHub Actions job log for the failed run. Look for a non-zero exit code in the agent invocation step — six of the seven stages call the base `anthropic` Python client directly (ADR-0011), not the Claude Agent SDK; only Stage 3 uses Managed Agents. Common causes: API timeout (the Anthropic API call exceeded the job timeout), context overflow (the agent's input was too large), or a malformed structured-output response. The job log will distinguish these. For API timeouts and context overflow, reduce the scope of the request. For a malformed response, this is a bug — file an issue in the FORGE template repo.
+
+**A deployed service is crash-looping after Deploy.**
+A post-deploy health check runs automatically after every Deploy stage completes, detecting crash loops at the Container Apps revision level and posting a deduped comment on the tracking issue if one is found — you do not need to watch Azure directly to catch this. This mechanism currently only detects and flags a crash loop; it does not yet proactively discover *why* a service needed a secret it wasn't given (a related, still-open gap — see the FORGE template repo's open items list). If you see this comment, check the flagged Container App's revision logs in Azure directly; a common cause is a missing or invalid app secret the Deploy Agent didn't wire (e.g. a connection string), which needs manual correction in Key Vault or `team/config.yaml` followed by a re-deploy.
 
 **The Implementation Coordinator session failed (Stage 3).**
 Stage 3 runs as a Managed Agents session rather than a standalone SDK call, so failures here look different. Start with the Claude Console — it provides a per-subagent audit trail (Backend, Frontend, Test Writer) in addition to the GitHub Actions log, and will usually show which subagent failed or where the coordinator's synthesis step broke down. Common causes: a session-level error (the coordinator agent session itself failed to start or was terminated — check for a beta-header or quota issue), a single subagent failure that the coordinator could not work around (check that subagent's portion of the Console trail), a sandbox filesystem conflict during synthesis, or — confirmed as the most common real-world cause so far — the coordinator and its subagents were still genuinely working when the job's completion-detection window ran out (see the entry immediately below; this is not a session failure in the usual sense).
@@ -379,12 +410,13 @@ The following labels are used in the FORGE tracking issue to drive pipeline stat
 | `clarification-pending` | Intake Agent | Status marker only, applied after clarifying questions are posted — nothing listens for it, and it does not need to be removed before `clarification-complete` is applied |
 | `clarification-complete` | BA | Triggers Requirements Agent |
 | `requirements-approved` | Technical Approver | Writes `requirements.md`/`ado-work-items.json` to the monorepo's `pipeline-state` branch; creates ADO work items; triggers Design Agent |
-| `design-approved` | Technical Approver, after merging the design PR | Triggers the Implementation Coordinator (Stage 3) — merging the design PR alone does not start Stage 3, this label does |
-| `qa-approved` | QA Agent (applied automatically on a clean pass) | Clears QA gate; combined with `security-approved` to enable production deploy |
-| `security-approved` | Security Agent (applied automatically on a clean pass, no Critical findings) | Clears security gate; combined with `qa-approved` to enable production deploy |
+| `design-approved` | Technical Approver, after merging the design PR | Combined with `cost-approved` to trigger the Implementation Coordinator (Stage 3) — merging the design PR alone does not start Stage 3, and neither label alone is sufficient |
+| `cost-approved` | Technical Approver, after reviewing the posted cost estimate | Combined with `design-approved` to trigger Stage 3 — same two-label AND-gate shape as the Deploy trigger below. No hard threshold; purely informative |
+| `qa-approved` | QA Agent (applied automatically on a clean pass) | Clears QA gate; combined with `security-approved` **and a confirmed merge of the feature PR** to enable deploy |
+| `security-approved` | Security Agent (applied automatically on a clean pass, no Critical findings) | Clears security gate; combined with `qa-approved` **and a confirmed merge of the feature PR** to enable deploy |
 | `qc-retry-limit-reached` | QA Agent | Halts pipeline; requires Orchestration Manager triage |
 
-PR events (open, merge) and GitHub Environment approvals handle the remaining state transitions — these are not label-driven.
+PR events (open, merge) and GitHub Environment approvals handle the remaining state transitions — these are not label-driven. Note that `qa-approved` and `security-approved` alone do not fire Deploy — a real merge of the feature PR to `main` is also required (see Gate 6).
 
 **On `pipeline-state`:** several of the labels above interact with a branch, not just each other. `requirements-approved` causes writes to `pipeline-state`; `design-approved`'s Design Agent reads from it. This branch exists because `main` is protected (required reviewers) to gate real application-code merges, while Requirements-stage writes are orchestration state committed directly, without a PR — protecting `main` meant giving those direct commits a home outside it. See Document 2 §9 for the full traceability-chain diagram reflecting this.
 
@@ -402,6 +434,7 @@ PR events (open, merge) and GitHub Environment approvals handle the remaining st
 
 | Path (monorepo) | Purpose | Created by |
 |---|---|---|
+| `docs/<request-id>/existing-architecture-summary.md` | Existing-service architecture summary (Enhancement requests only) | Codebase Ingestion Agent (Stage 0a) |
 | `docs/<request-id>/requirements.md` | Approved requirements | Requirements Agent |
 | `docs/<request-id>/design.md` | Architecture and API design | Design Agent |
 | `docs/<request-id>/openapi.yaml` | API contract | Design Agent |
@@ -414,4 +447,4 @@ For questions about the core layer or the FORGE platform, open a GitHub Discussi
 
 For questions about this guide or the Orchestration Manager role, contact the Core Platform Owner.
 
-For Anthropic API and Claude Agent SDK documentation, refer to the annotated resource list in the AI Foundations Guide (Document 5, Section 9).
+For Anthropic API, Managed Agents, and base client documentation, refer to the annotated resource list in the AI Foundations Guide (Document 5, Section 9).
