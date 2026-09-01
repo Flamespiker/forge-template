@@ -1008,6 +1008,22 @@ def run_implementation_stage(
     # matching the original working order).
     audit_trail = get_subagent_audit_trail(session_id)
     final_status = _get(f"sessions/{session_id}")
+
+    # Item #34 §2.4: closes the cost-log automation gap flagged in
+    # docs/FORGE-pipeline-cost-log.md §4.2 ("no automatic equivalent yet...
+    # queued but not yet built") -- same grep-a-JSON-line pattern as every
+    # Messages-API stage's "agent_invocation" line (claude_agent_wrapper.py),
+    # so future cost-log updates no longer require a manual Claude Console
+    # visit to find this session's usage data. Does not itself update the
+    # cost log file -- that stays a separate, periodic bookkeeping pass.
+    log_entry_cost = {
+        "forge_event": "managed_agents_cost",
+        "stage": "implementation",
+        "session_id": session_id,
+        "usage": final_status.get("usage"),
+    }
+    print(json.dumps(log_entry_cost), flush=True)
+
     output_files = list_session_output_files(session_id)
 
     # Item #6 Bug 6b: validate real output BEFORE archiving, not after -- an
