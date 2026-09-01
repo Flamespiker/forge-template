@@ -132,21 +132,21 @@ jobs:
               f.write(f"existing_service={existing_service}\n")
           PY
 
-      - name: Generate GitHub App installation token (scoped to forge-demo-apps)
+      - name: Generate GitHub App installation token (scoped to the target repo)
         if: steps.guard.outputs.proceed == 'true'
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.FORGE_APP_CLIENT_ID }}
           private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
-          owner: Flamespiker
-          repositories: forge-demo-apps
+          owner: ${{ vars.FORGE_GITHUB_OWNER }}
+          repositories: ${{ vars.FORGE_TARGET_REPO }}
 
-      - name: Checkout forge-demo-apps at the PR head commit
+      - name: Checkout target repo at the PR head commit
         if: steps.guard.outputs.proceed == 'true'
         uses: actions/checkout@v4
         with:
-          repository: Flamespiker/forge-demo-apps
+          repository: ${{ vars.FORGE_GITHUB_OWNER }}/${{ vars.FORGE_TARGET_REPO }}
           ref: ${{ env.HEAD_SHA }}
           token: ${{ steps.app-token.outputs.token }}
           path: monorepo-checkout

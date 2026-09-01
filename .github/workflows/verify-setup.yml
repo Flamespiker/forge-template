@@ -16,15 +16,18 @@ jobs:
         with:
           client-id: ${{ vars.FORGE_APP_CLIENT_ID }}
           private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
-          repositories: forge-demo-apps
+          owner: ${{ vars.FORGE_GITHUB_OWNER }}
+          repositories: ${{ vars.FORGE_TARGET_REPO }}
 
-      - name: Confirm GitHub App can read forge-demo-apps
+      - name: Confirm GitHub App can read the target repo
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TARGET_OWNER: ${{ vars.FORGE_GITHUB_OWNER }}
+          TARGET_REPO: ${{ vars.FORGE_TARGET_REPO }}
         run: |
           response=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/Flamespiker/forge-demo-apps)
+            "https://api.github.com/repos/$TARGET_OWNER/$TARGET_REPO")
           full_name=$(echo "$response" | jq -r '.full_name')
           echo "SUCCESS: GitHub App token is valid — repo visible: $full_name"
 
@@ -32,13 +35,14 @@ jobs:
       - name: Confirm ADO connectivity
         env:
           ADO_PAT: ${{ secrets.ADO_PAT }}
+          ADO_ORG_URL: ${{ vars.FORGE_ADO_ORG_URL }}
         run: |
           response=$(curl -sf \
             -u ":$ADO_PAT" \
             -H "Accept: application/json" \
-            "https://dev.azure.com/spike99/_apis/projects?api-version=7.1")
+            "$ADO_ORG_URL/_apis/projects?api-version=7.1")
           count=$(echo "$response" | jq '.count')
-          echo "SUCCESS: ADO connection verified — $count project(s) visible in spike99 org"
+          echo "SUCCESS: ADO connection verified — $count project(s) visible in $ADO_ORG_URL"
 
       # ── 3. Anthropic API connectivity ─────────────────────────────────────
       - name: Confirm Anthropic API connectivity

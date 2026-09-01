@@ -152,21 +152,21 @@ jobs:
               f.write(f"unit_name_flag={'--unit-name ' + unit_name if unit_name else ''}\n")
           PY
 
-      - name: Generate GitHub App installation token (scoped to forge-demo-apps)
+      - name: Generate GitHub App installation token (scoped to the target repo)
         if: steps.context.outputs.should_run == 'true'
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.FORGE_APP_CLIENT_ID }}
           private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
-          owner: Flamespiker
-          repositories: forge-demo-apps
+          owner: ${{ vars.FORGE_GITHUB_OWNER }}
+          repositories: ${{ vars.FORGE_TARGET_REPO }}
 
-      - name: Checkout forge-demo-apps
+      - name: Checkout target repo
         if: steps.context.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
-          repository: Flamespiker/forge-demo-apps
+          repository: ${{ vars.FORGE_GITHUB_OWNER }}/${{ vars.FORGE_TARGET_REPO }}
           ref: ${{ steps.context.outputs.commit_sha || 'main' }}
           token: ${{ steps.app-token.outputs.token }}
           path: monorepo-checkout
