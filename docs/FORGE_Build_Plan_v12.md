@@ -119,7 +119,7 @@ Phase 7 is fully complete, all steps checked.
     - **Hard requirement (ADR-0011 / Document 6):** every stage-agent script built in 3.2 onward (except Stage 3) MUST wrap its `invoke_agent()` call in try/except at the call site — the wrapper never sets `is_error=True` itself, so an uncaught API failure aborts the script silently with no `forge_event` log line and no chance to post a failure comment on the tracking issue.
   - **Managed Agents API wrapper** *(ADR-0010)* — standard invocation pattern for starting a coordinator agent session, declaring subagents, polling/streaming the session event stream to completion, and retrieving the per-subagent audit trail. Used only by Stage 3. Build in the correct events-endpoint request shape and archive retry behavior noted in step 2.9 above.
 - [x] 3.1a **Commit ADR-0011 to `core/decisions/`** *(new — organic ADR, decided chat 21, verified chat 22)*
-  - Write the full ADR-0011 text (see `ADR-0011.md`) into `core/decisions/0011-base-anthropic-client.md`, alongside the ten seed ADR stubs from Phase 1.8
+  - Write the full ADR-0011 text into `core/decisions/0011-base-anthropic-client.md`, alongside the ten seed ADR stubs from Phase 1.8
   - Unlike ADR-0010 (folded into the seed list before Phase 1 ran), ADR-0011 was decided mid-build — it's the first ADR added organically after the initial seed set, exercising Document 4's ADR/RFC process as intended for ongoing decisions rather than just the initial ten
 - [x] 3.2 **Intake Agent** (`core/agents/intake_agent.py`)
   - Reads the BA's Excel spreadsheet (Overview + Requirements tabs)
