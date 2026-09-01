@@ -31,13 +31,14 @@ happened around 2026-08-31:**
 - **`CLAUDE.md`** — owned by Claude Code CLI. The live source of truth, tied to
   actual committed code. Claude.ai never edits this file directly; it may flag
   staleness and hand Claude Code CLI a prompt to fix it.
-- **`docs/FORGE-Open-Items-Backlog-v*.md`** (current: `v5`) — owned by Claude.ai. A
-  forward-planning index (one line per item, open or resolved-pointer). Claude Code
-  CLI never edits this file directly, even if asked to as part of a larger task —
-  flag back to Mike/Claude.ai instead of writing to it. Unlike
-  `docs/FORGE_Build_Plan_v*.md` (single current version, old ones removed when
-  superseded), every Backlog version stays in the repo — don't delete `v1`/`v2`
-  when a new one lands.
+- **`docs/FORGE-Open-Items-Backlog-v*.md`** (current: `v6`, lives at `docs/` root —
+  prior versions live in `docs/Archives/`) — owned by Claude.ai. A forward-planning
+  index (one line per item, open or resolved-pointer). Claude Code CLI never edits
+  this file directly, even if asked to as part of a larger task — flag back to
+  Mike/Claude.ai instead of writing to it. Unlike `docs/FORGE_Build_Plan_v*.md`
+  (single current version, old ones removed when superseded), every Backlog
+  version is retained — just relocated to `docs/Archives/` once superseded, not
+  deleted.
 - **`docs/FORGE-context_v*.md`** — owned by Claude.ai. Session-by-session diary.
   Claude Code CLI never touches these.
 
