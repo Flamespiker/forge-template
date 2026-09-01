@@ -1718,7 +1718,7 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     pipeline** (fictional slash-command approvals, a never-built production-deploy
     stage).~~ — **RESOLVED 2026-08-29.** README rewritten to match the real,
     label-driven pipeline; intake template path and `tracking/` directory description
-    both corrected. Landed alongside `docs/FORGE-Open-Items-Backlog-v2.md` (supersedes
+    both corrected. Landed alongside `docs/Archives/FORGE-Open-Items-Backlog-v2.md` (supersedes
     v1). Full narrative: `docs/CLAUDE-archive-2026-08-resolved-open-items.md`.
 30. ~~**No `security-check` mechanism existed for a non-`feature/*`/non-`design/*`
     branch PR** (e.g. an ops/infra change to `.github/workflows/*` itself).~~ —
