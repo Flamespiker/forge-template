@@ -12,7 +12,11 @@ Deploy requires a confirmed feature-PR merge, not just labels (Item #26);
 added the post-deploy crash-loop health check to Failure Handling
 (Item #1); corrected two stale "Claude Agent SDK" references — six of the
 seven stages use the base `anthropic` client directly (ADR-0011), not the
-Agent SDK.
+Agent SDK. **Post-review fix:** Step 4's secrets table was missing
+`AZURE_STAGING_CREDENTIALS` and still carried a stale "not finalized as of
+this writing" caution about Container Apps deployment credentials — both
+corrected to match README.md and the live Deploy Agent; the Step 6
+checklist now lists this secret too.
 
 ---
 
@@ -161,10 +165,11 @@ In your FORGE repo's settings under **Secrets and variables → Actions**, add:
 | `ACR_LOGIN_SERVER` | Your Azure Container Registry's login server (e.g., `yourregistry.azurecr.io`) |
 | `ACR_USERNAME` | Registry admin username (Azure Portal → your ACR → Settings → Access keys) |
 | `ACR_PASSWORD` | Registry admin password (same location) |
+| `AZURE_STAGING_CREDENTIALS` | One JSON blob — `{"clientId":"...","clientSecret":"...","subscriptionId":"...","tenantId":"..."}` — for a service principal with Contributor on the resource group containing your staging Container Apps environment. Used by the Deploy Agent to authenticate `az login --service-principal` before pushing revisions. |
 
 For build phase, a PAT is acceptable for ADO, and ACR admin-user credentials are acceptable for registry push access. Before going to production, evaluate replacing the ADO PAT with a service principal, and the ACR admin user with a scoped service principal holding the `AcrPush` role — see the moving-to-production checklist.
 
-**Note on Container Apps deployment credentials:** the secrets above cover pushing images to the registry. Authenticating the Deploy Agent to actually push new revisions into the Container Apps environments themselves is a separate, later concern (Phase 3 of the Build Plan) and isn't finalized as of this writing — it will likely need its own service principal or managed identity with Contributor access on the Container Apps resource group. Don't assume a secret named `AZURE_CREDENTIALS` (or similar) exists until that work defines it; check the Build Plan and this guide's Step 4 for the current, authoritative list.
+**Note on Container Apps deployment credentials:** the secrets above cover both pushing images to the registry and authenticating the Deploy Agent to push new revisions into the Container Apps environments themselves (`AZURE_STAGING_CREDENTIALS`). This principal cannot register new Azure resource providers or create RBAC role assignments — any one-time bootstrap work of that kind (e.g. provisioning a Key Vault, granting a managed identity a role) needs a human with elevated access instead.
 
 ### Step 5 — Create the Azure Container Apps Environments
 
@@ -190,7 +195,7 @@ Confirm everything is wired up before your first pipeline run:
 - [ ] `forge-pipeline` GitHub App installed on the monorepo only
 - [ ] `FORGE_APP_ID` and `FORGE_APP_PRIVATE_KEY` secrets, and `FORGE_APP_CLIENT_ID` variable, set in FORGE repo
 - [ ] `team/config.yaml` updated with your ADO org, project, area path, monorepo details, and Azure environment names
-- [ ] `ANTHROPIC_API_KEY`, `ADO_PAT`, `ACR_LOGIN_SERVER`, `ACR_USERNAME`, and `ACR_PASSWORD` secrets set
+- [ ] `ANTHROPIC_API_KEY`, `ADO_PAT`, `ACR_LOGIN_SERVER`, `ACR_USERNAME`, `ACR_PASSWORD`, and `AZURE_STAGING_CREDENTIALS` secrets set
 - [ ] `forge-staging` and `forge-production` Container Apps environments created in Azure
 - [ ] `staging` and `production` GitHub Environments created in the FORGE repo, with `production` configured with a required reviewer
 
