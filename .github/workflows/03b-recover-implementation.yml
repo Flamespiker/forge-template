@@ -53,8 +53,8 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       FORGE_APP_ID: ${{ secrets.FORGE_APP_ID }}
       FORGE_APP_PRIVATE_KEY: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
-      FORGE_GITHUB_OWNER: Flamespiker
-      FORGE_TARGET_REPO: forge-demo-apps
+      FORGE_GITHUB_OWNER: ${{ vars.FORGE_GITHUB_OWNER }}
+      FORGE_TARGET_REPO: ${{ vars.FORGE_TARGET_REPO }}
       FORGE_SOURCE_REPO: forge-template
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
