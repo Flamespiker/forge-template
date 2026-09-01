@@ -7,6 +7,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
+      # NOTE: this job's checks never call the Managed Agents API — see the
+      # managed-agents-check job below for Phase 2.9's separate, billed check.
       # ── 1. GitHub App token ───────────────────────────────────────────────
       - name: Generate GitHub App installation token
         id: app-token
@@ -49,3 +51,92 @@ jobs:
             https://api.anthropic.com/v1/models)
           count=$(echo "$response" | jq '.data | length')
           echo "SUCCESS: Anthropic API key is valid — $count model(s) returned"
+
+  # Build Plan step 2.9 — Managed Agents access check. Runs independently of the
+  # `verify` job above (same workflow_dispatch trigger, no job dependency) so a
+  # slow/flaky Managed Agents session never blocks the fast connectivity checks.
+  #
+  # NOTE: unlike every step in the `verify` job, this job creates a real, small,
+  # billed Managed Agents session (one coordinator, zero subagents, one short
+  # turn) every time it runs, then archives it. A future OM re-running this
+  # workflow should expect a small real charge, not just API pings.
+  managed-agents-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests python-dotenv
+
+      - name: Create, verify, and archive a throwaway Managed Agents session
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          cat > _managed_agents_check.py <<'PYEOF'
+          import sys
+
+          import core.agents.utils.managed_agents_wrapper as maw
+
+          print("=== Managed Agents Access Check (Build Plan step 2.9) ===")
+          print("Creating a throwaway single-coordinator, zero-subagent session...")
+
+          try:
+              ids = maw.create_agent_session(
+                  coordinator_system_prompt=(
+                      "You are a throwaway test agent used only to verify Managed "
+                      "Agents API access from the FORGE verify-setup workflow. Reply "
+                      "with a short confirmation that you received this message."
+                  ),
+                  subagent_configs=[],
+                  coordinator_model="claude-sonnet-4-6",
+              )
+          except Exception as exc:
+              body = getattr(getattr(exc, "response", None), "text", "")
+              print(f"FAIL: could not create a Managed Agents session: {exc}")
+              if body:
+                  print(f"       response body: {body}")
+              print(
+                  "       This usually means ANTHROPIC_API_KEY lacks Managed Agents "
+                  "beta access (managed-agents-2026-04-01 header) -- confirm beta "
+                  "access is enabled on this key before assuming a code bug."
+              )
+              sys.exit(1)
+
+          coordinator_id = ids["coordinator_id"]
+          environment_id = ids["environment_id"]
+          session_id = ids["session_id"]
+          print(f"SUCCESS: session created -- session_id={session_id}")
+          print(f"  coordinator_id={coordinator_id}  environment_id={environment_id}")
+          print(
+              f"  (if this job fails after this point, session {session_id} may need "
+              "manual cleanup -- see CLAUDE.md 'Manually killing a runaway Managed "
+              "Agents session')"
+          )
+
+          try:
+              maw.send_message(session_id, "Please confirm you received this test message.")
+              status = maw.poll_until_idle(session_id, timeout_seconds=180, poll_interval=5)
+              print(f"SUCCESS: session reached a working idle state (status={status.get('status')})")
+          except Exception as exc:
+              print(f"FAIL: session {session_id} did not reach a working idle state: {exc}")
+              sys.exit(1)
+
+          try:
+              # archive_session() already retries around the transient idle->running
+              # 400 documented in the Phase 2.9 build notes -- see
+              # managed_agents_wrapper.py's archive_session()/_ARCHIVE_RETRY_ATTEMPTS.
+              maw.archive_session(coordinator_id, environment_id, session_id, subagent_ids=[])
+              print(f"SUCCESS: session {session_id} archived/terminated")
+          except Exception as exc:
+              print(f"FAIL: could not archive session {session_id}: {exc}")
+              sys.exit(1)
+
+          print(f"\nSESSION_ID={session_id}")
+          PYEOF
+          python _managed_agents_check.py
