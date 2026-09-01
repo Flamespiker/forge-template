@@ -1744,6 +1744,20 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     deliberate-failure case (a bogus `--existing-service`) correctly raised
     before any ADO call and posted a real, readable failure comment. Commits:
     `bbbe3d0`, `759cc58`, `c4b3d0c`.
+34. ~~**Stage 3 had no pre-flight cost estimate or human cost gate before a
+    real Managed Agents session started.**~~ — **RESOLVED AND LIVE-VERIFIED
+    2026-08-31/09-01**, per `docs/Specs/FORGE-Item34-CostEstimator-Spec.md`.
+    New `cost-approved` label (required alongside `design-approved`, same
+    two-label AND-gate shape as Item #26) gates the real coordinator run; a
+    new estimate-only step posts a coarse, shape-bucketed cost estimate first.
+    Live testing surfaced and fixed a real P0 bug found via this feature's own
+    verification, not pre-existing: `usage.list_cost.amount` from the Managed
+    Agents API is a string, not a number — an un-cast divide would have
+    crashed the commit/PR/comment step on every real completed Stage 3 run.
+    Both Greenfield (the first-ever real `(1, False)` single-unit data point)
+    and Enhancement (`(2, True)` bucket, live existing-service seed-file
+    scaling against the real REQ-2026-03) verified live end to end. Full
+    narrative: `docs/CLAUDE-archive-2026-08-resolved-open-items.md`.
 
 ## Further reading
 

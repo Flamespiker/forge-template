@@ -1685,3 +1685,134 @@ unverified live — #21 and #23 in particular did get real, live confirmation.
 
 ---
 
+## Item #34 — Stage 3 had no pre-flight cost estimate or human cost gate before a real Managed Agents session started
+
+**RESOLVED AND LIVE-VERIFIED 2026-08-31/09-01**, per
+`docs/Specs/FORGE-Item34-CostEstimator-Spec.md`. Real Stage 3 actuals range
+$3.04–$12.31 with no clean pre-flight signal, so a coarse, shape-bucketed
+heuristic (`_estimate_implementation_cost()`, `implementation_coordinator.py`)
+combines `tasks.md`'s backend/frontend unit count with (for Enhancement
+requests) the existing-service seed-file count against hardcoded historical
+baselines. No stored threshold anywhere (Mike's explicit call) — purely
+informative.
+
+**Investigation before coding surfaced a real contradiction with the spec's
+own assumption:** every logged Stage 3 actual to date (REQ-2026-01/02/03/04)
+is 2-unit — zero real precedent existed for *either* 1-unit bucket, not just
+`(1, True)` as the spec assumed. Tested whether a continuous doc-size proxy
+(combined `design.md`+`openapi.yaml`+`tasks.md` character count) predicted
+cost better than the discrete bucket split — it didn't: the four real
+requests cluster within a ~28% size range while cost varies 2.7x. Mike's
+resolution: keep the bucket split, scale the two empty 1-unit buckets by a
+fixed 0.5x off their same-enhancement-status 2-unit sibling, flagged
+low-confidence in the posted comment.
+
+**Mechanism (§2 of the spec):**
+- `_COST_BASELINES_USD`: `(2, False)`=$8.96 (mean of 3 real runs), `(2, True)`
+  =$4.57 (1 real run, REQ-2026-04/PR#32), `(1, False)`/`(1, True)` = 0.5x
+  scale-downs of the above, no real precedent.
+- Enhancement adjustment scales the baseline by
+  `1 + (seed_file_count / 87)` — 87 is the confirmed real seed count from the
+  corrected REQ-2026-04/PR#32 run (session `sesn_01GBkGBfEYEBLJLcc9Ftyqhv`).
+- New `cost-approved` label, required alongside `design-approved` — same
+  two-label AND-gate shape as Item #26's Deploy fix. `03-implementation.yml`'s
+  guard clause now splits into `design_present` (gates the glue steps + new
+  estimate-only step) and `proceed` (both labels, gates the real coordinator
+  run), so the estimate can post on the `design-approved` event itself before
+  `cost-approved` exists.
+- New `--estimate-only` CLI mode (`run_cost_estimate()`) posts the estimate as
+  a tracking-issue comment carrying a hidden marker
+  (`<!-- forge:agent-comment stage=implementation-estimate ... -->`) encoding
+  low/high/bucket as key=value pairs — the first place in the codebase parsing
+  structured data out of a marker, not just checking presence/counting
+  occurrences.
+- Post-run comment (`_commit_and_open_pr()`) re-fetches and parses that
+  marker (`_fetch_cost_estimate()`) and reads the real cost from
+  `GET /sessions/{id}`'s `usage.list_cost.amount` (`_extract_actual_cost_usd()`,
+  cents not dollars) to show estimate vs. actual side by side.
+- New `managed_agents_cost` structured log line in
+  `managed_agents_wrapper.py`'s `run_implementation_stage()`, closing the
+  cost-log automation gap `FORGE-pipeline-cost-log.md` §4.2 flagged.
+- `select_seed_blobs()` factored out of `select_existing_service_files()`
+  (`existing_service_files.py`) so the estimate step can size the
+  Enhancement seed-file signal without paying for a per-file
+  `get_file_contents()` fetch just to get a count.
+
+**A real, live-caught P0 bug, found and fixed during this feature's own live
+test, not a pre-existing one:** `GET /sessions/{id}`'s `usage.list_cost.amount`
+is returned as a **string** (e.g. `"51"`), not a number — confirmed live via
+the first-ever completed `(1, False)` run (`TEST-ITEM34-GF`, session
+`sesn_01L5BAj9c2sD6pnEiV35WuYB`, real cost $0.51/277s active). An un-cast
+`amount / 100` raised `TypeError: unsupported operand type(s) for /: 'str'
+and 'int'` — this would have crashed the commit/PR/comment step on **every
+single real completed Stage 3 run** once merged, always AFTER the session had
+already been archived (so no orphaned Anthropic resources, but no PR and no
+comment either — a silent, confusing failure with zero user-visible signal).
+Compounding it: `main()`'s outer `except Exception: sys.exit(1)` had no
+`logger.exception()` call, so the traceback never reached the Actions job
+log at all — diagnosed only by reproducing locally against the real logged
+`usage` dict. Both fixed: `_extract_actual_cost_usd()` now casts explicitly
+and returns `None` (logged) on anything unparseable rather than crashing;
+`main()`'s final except now logs before exiting, matching what
+`--recover-session`'s own except clause already did. Commits `1aee048`,
+`363067b`.
+
+**Live verification (both Greenfield and Enhancement, per §6 step 7):**
+- **Greenfield** (`TEST-ITEM34-GF`, scratch tracking issue `forge-template#12`,
+  scratch design PR `forge-demo-apps#36`): deliberately backend-only to
+  exercise the never-before-tested `(1, False)` bucket. First attempt's
+  `tasks.md` accidentally said "no Frontend" in its own disclaimer prose,
+  tripping the same case-insensitive substring check
+  `_sanity_check_extracted_files()` already uses (reused deliberately, per the
+  spec) — a real illustration of that check's fragility, not a new Item #34
+  bug; fixed by rewording (PR `forge-demo-apps#38`) rather than changing the
+  shared substring-check semantics. Confirmed live: estimate `(1, False)`,
+  $3.50–$5.50, low-confidence caveat shown; two-label gate correctly held off
+  the real run until `cost-approved` landed; the P0 bug above hit and was
+  fixed here; a confirmation re-run (after pushing the fix) completed
+  cleanly end to end — real session `sesn_01Ho2S38j8uo6u2bfM395rwq` ($0.56,
+  246.9s active), draft PR `forge-demo-apps#39` opened (not merged), both
+  labels correctly cleared, session cleanly `terminated`, final comment
+  showed `Estimated: $3.50–$5.50 (bucket: 1-unit Greenfield)` /
+  `Actual: $0.56` side by side exactly as designed.
+- **Enhancement** (`TEST-ITEM34-ENH`, scratch tracking issue
+  `forge-template#13`, scratch design PR `forge-demo-apps#37`, existing
+  service `REQ-2026-03`): confirmed `(2, True)` bucket with LIVE seed-file
+  scaling — 94 files (not the historical 87-file reference; REQ-2026-03's
+  tree has genuinely grown since that 2026-08-28 run, confirmed independently
+  via a direct `get_repo_tree()`/`select_seed_blobs()` call — not a bug).
+  Estimate `$7.00–$12.00` posted correctly. The real coordinator run was
+  deliberately interrupted mid-flight (per the documented manual-kill
+  procedure) once the gate/estimate mechanism was confirmed and the cheaper
+  Greenfield run had already surfaced the P0 bug — no need to also spend
+  ~15-40 min/several dollars re-confirming the same shared code path twice.
+  Correctly triggered the existing Item #6 no-`implementation.tar.gz`
+  `RuntimeError` path (not a new bug): posted its own failure comment, left
+  the session alive rather than archiving prematurely, per that fix's design.
+  Manually archived after (session `sesn_01F5AUhVXyACRhzpEAyXEoSe`,
+  environment `env_011C9QANXfj6j6GHcHm2h1oQ`) — no orphaned resources, no PR
+  ever opened (crashed before packaging).
+- Both scratch tracking issues closed after verification. Scratch docs
+  (`docs/TEST-ITEM34-GF/`, `docs/TEST-ITEM34-ENH/`) and the `feature/
+  TEST-ITEM34-GF` branch/PR `forge-demo-apps#39` deliberately left in place
+  (harmless, low-value to clean up further) — flagged, not silently deleted.
+
+**Not done, deliberately out of scope (§5):** mid-session cost breach
+checking/killing (no threshold exists at all); any `team/config.yaml`
+changes; automating the cost-log file's own row transcription (the new log
+line only closes the *finding* gap); retroactively estimating past runs;
+extending this pattern to any other stage (Messages-API stages already have
+predictable, already-logged costs).
+
+Commits: `5907ded` (spec doc), `69934f6` (`select_seed_blobs` refactor),
+`12cfd2d` (estimator core), `9483d28` (workflow two-label gate), `df7c5b9`
+(cost log line), `1aee048`/`363067b` (the two live-caught bugfixes) — all
+confirmed live on `origin/main` via the GitHub API.
+
+**Flagged, not yet done:** `docs/FORGE-Open-Items-Backlog-v5.md` (Claude.ai-
+owned) doesn't yet have a corresponding entry for this item — per the
+Documentation Ownership convention, Claude Code CLI doesn't write to that
+file directly; needs a Claude.ai-side pass to add it.
+
+---
+
