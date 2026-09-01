@@ -890,7 +890,12 @@ def run_qa_agent(
             label_to_apply = "qc-retry-limit-reached"
 
         owner = os.environ.get("FORGE_GITHUB_OWNER", "")
-        target_repo = os.environ.get("FORGE_TARGET_REPO", "forge-demo-apps")
+        if owner and not os.environ.get("FORGE_TARGET_REPO"):
+            raise ValueError(
+                "FORGE_GITHUB_OWNER is set but FORGE_TARGET_REPO is not -- refusing "
+                "to silently assume 'forge-demo-apps' when constructing the PR URL."
+            )
+        target_repo = os.environ.get("FORGE_TARGET_REPO", "")
         pr_url = (
             f"https://github.com/{owner}/{target_repo}/pull/{pr_number}"
             if owner and pr_number else "(PR URL unavailable — dry run)"

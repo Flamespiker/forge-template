@@ -561,7 +561,7 @@ def run_security_agent(
 
     resolved_target = resolve_service_root(request_id, existing_service)
     service_dir = str(Path(repo_path) / resolved_target)
-    repo_full_name = f"{os.environ['FORGE_GITHUB_OWNER']}/{os.environ.get('FORGE_TARGET_REPO', 'forge-demo-apps')}"
+    repo_full_name = f"{os.environ['FORGE_GITHUB_OWNER']}/{os.environ['FORGE_TARGET_REPO']}"
 
     # Item #25 §2.3: same directory-existence check as QA's §2.2 fix, before
     # any scanner runs. Previously a missing target directory crashed
