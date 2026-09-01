@@ -46,6 +46,7 @@ import argparse
 import io
 import logging
 import os
+import re
 import sys
 import tarfile
 
@@ -56,9 +57,13 @@ from core.agents.subagents import (
     frontend_agent,
     test_writer_agent,
 )
-from core.agents.utils.existing_service_files import select_existing_service_files
+from core.agents.utils.existing_service_files import (
+    select_existing_service_files,
+    select_seed_blobs,
+)
 from core.agents.utils.github_helper import (
     get_file_contents,
+    get_issue_comments,
     get_repo_tree,
     post_comment,
     create_branch,
@@ -79,6 +84,33 @@ from core.agents.utils.managed_agents_wrapper import (
 logger = logging.getLogger(__name__)
 
 _STAGE_NAME = "implementation"
+
+# Item #34 (docs/Specs/FORGE-Item34-CostEstimator-Spec.md §2.1): coarse,
+# shape-bucketed pre-flight cost heuristic for Stage 3 -- NOT a trained
+# model, NOT a hard limit (no threshold is stored anywhere, per Mike's
+# explicit 2026-08-31 decision -- this is purely informative). Bucketed by
+# (unit_count, is_enhancement). Confirmed live 2026-08-31: every logged
+# Stage 3 actual to date is 2-unit (REQ-2026-01/02/03/04 all have both
+# "## Backend" and "## Frontend" in tasks.md) -- zero real precedent exists
+# for either 1-unit bucket. Those two use a fixed 0.5x scale-down of their
+# same-enhancement-status 2-unit sibling (Mike's explicit call), not a real
+# historical average -- flagged as low-confidence wherever surfaced.
+# Revisit ALL FOUR constants once more real runs land, especially
+# (2, True)'s single-data-point mean.
+_COST_BASELINES_USD: dict[tuple[int, bool], float] = {
+    (2, False): 8.96,   # mean of REQ-2026-01 ($12.31), REQ-2026-02 ($6.63), REQ-2026-03 recovered ($7.95)
+    (2, True): 4.57,    # REQ-2026-04/PR#32 only real data point (session sesn_01GBkGBfEYEBLJLcc9Ftyqhv)
+    (1, False): 8.96 * 0.5,
+    (1, True): 4.57 * 0.5,
+}
+
+# The confirmed real seed file count from the corrected REQ-2026-04/PR#32
+# run (verified via live tool-use events, same count as the earlier
+# interrupted attempt since the mount-path bug only affected file
+# resolution, not the selection list). A single data point -- the same
+# low-confidence caveat as the (2, True) baseline above applies here too.
+_ENHANCEMENT_REFERENCE_SEED_SIZE = 87
+
 _ARCHIVE_FILENAME = "implementation.tar.gz"
 _ARCHIVE_SANDBOX_PATH = f"/mnt/session/outputs/{_ARCHIVE_FILENAME}"
 _CONSOLE_SESSION_URL_PREFIX = "https://platform.claude.com/sessions/"
@@ -182,27 +214,143 @@ def _build_initial_message(
     )
 
 
-def _resolve_enhancement_target(existing_service: str) -> tuple[str, list[dict]]:
+def _count_tasks_md_units(tasks_md: str) -> int:
     """
-    Item #23 (§2.1/§2.2): resolves the real service_root for an Enhancement
-    request and builds the session `resources[]` list that seeds the existing
-    service's files read-only at EXISTING_SERVICE_MOUNT_DIR.
+    Reuses the exact same case-insensitive "backend"/"frontend" substring
+    check as _sanity_check_extracted_files() (tasks.md's own section headers
+    per _COORDINATOR_SYSTEM_PROMPT's delegation) to derive unit_count for
+    Item #34's cost estimate: 1 if only one of backend/frontend appears, 2 if
+    both. Test Writer is not counted separately -- it never runs without at
+    least one of the other two.
 
-    Reuses the Layer 2 "strict rejection over silent auto-remap" precedent
-    from Ingestion Agent / Open Item #8: an empty tree under
+    Clamped to [1, 2] defensively: every real request logged so far mentions
+    at least one of the two, but _COST_BASELINES_USD has no (0, *) bucket, so
+    a tasks.md that somehow mentions neither must not KeyError here.
+    """
+    lowered = tasks_md.lower()
+    raw_count = sum(1 for unit in ("backend", "frontend") if unit in lowered)
+    return max(1, min(2, raw_count))
+
+
+def _round_to_nearest_half(amount: float) -> float:
+    return round(amount * 2) / 2
+
+
+def _estimate_implementation_cost(
+    tasks_md: str,
+    is_enhancement: bool,
+    enhancement_seed_file_count: int = 0,
+) -> dict:
+    """
+    Item #34 §2.1: combines two pre-flight-knowable signals that correlate
+    with cache-read/cache-creation token volume (the dominant real Stage 3
+    cost driver, per docs/FORGE-pipeline-cost-log.md) with a hardcoded
+    historical baseline for the closest-matching shape -- how many of
+    backend/frontend tasks.md calls for, and (for Enhancement requests) how
+    many existing-service files must be seeded into the sandbox. See
+    _COST_BASELINES_USD above for the real data behind each bucket, and
+    docs/Specs/FORGE-Item34-CostEstimator-Spec.md §2.1 for the full narrative.
+
+    This is deliberately a coarse, shape-bucketed heuristic, not a trained
+    model -- it will get better as more real runs land (especially any
+    single-unit or additional Enhancement data), not by adding more inputs to
+    this formula. A live check during this feature's own build (correlating
+    combined design.md+openapi.yaml+tasks.md character count against the 4
+    real logged actuals) found NO usable correlation there either -- the
+    four requests cluster within a ~28% size range while cost varies by
+    2.7x -- so this intentionally does not chase a fancier per-character
+    formula that would just be overfitting 4 noisy points into false
+    precision.
+
+    Returns a dict with "unit_count", "is_enhancement",
+    "enhancement_seed_file_count", "bucket", "baseline", "low", "high"
+    (rounded to nearest $0.50, presented as baseline +/- 25%), and
+    "low_confidence" (True for a 1-unit bucket, since neither has any real
+    precedent -- see _COST_BASELINES_USD).
+    """
+    unit_count = _count_tasks_md_units(tasks_md)
+    bucket = (unit_count, is_enhancement)
+    baseline = _COST_BASELINES_USD[bucket]
+
+    if is_enhancement:
+        baseline *= 1 + (enhancement_seed_file_count / _ENHANCEMENT_REFERENCE_SEED_SIZE)
+
+    return {
+        "unit_count": unit_count,
+        "is_enhancement": is_enhancement,
+        "enhancement_seed_file_count": enhancement_seed_file_count,
+        "bucket": bucket,
+        "baseline": baseline,
+        "low": _round_to_nearest_half(baseline * 0.75),
+        "high": _round_to_nearest_half(baseline * 1.25),
+        "low_confidence": unit_count == 1,
+    }
+
+
+def _build_cost_estimate_comment(request_id: str, estimate: dict) -> str:
+    """
+    Item #34 §2.2.A.4/§2.4: the tracking-issue comment posted when
+    design-approved lands, before the real coordinator session is created.
+    This is the human's basis for the yes/no `cost-approved` call -- says so
+    explicitly (no stored threshold anywhere, per Mike's 2026-08-31
+    decision).
+
+    Carries a hidden marker (same `<!-- forge:agent-comment ... -->`
+    convention every other agent comment uses) encoding the estimate's low/
+    high/bucket values as key=value pairs on the marker line itself, so
+    _fetch_cost_estimate() can re-parse them later without needing a new
+    CLI arg/env var threaded across two separate workflow steps that don't
+    share state today (see that function's docstring for why this is the
+    first place in the codebase parsing structured data out of a marker,
+    not just checking presence/counting occurrences).
+    """
+    bucket_label = (
+        f"{estimate['unit_count']}-unit "
+        f"{'Enhancement' if estimate['is_enhancement'] else 'Greenfield'}"
+    )
+    enhancement_note = (
+        f"\n\nThis is an Enhancement — **{estimate['enhancement_seed_file_count']}** "
+        "existing-service file(s) will be seeded read-only into the sandbox, which "
+        "increases the baseline (more real code for the coordinator/subagents to "
+        "read before editing)."
+        if estimate["is_enhancement"] else ""
+    )
+    low_confidence_note = (
+        "\n\n⚠️ **No real cost history exists yet for a single-unit build.** This "
+        "range is a rough 0.5x scale-down of the two-unit baseline, not a real "
+        "historical average — treat it with extra skepticism."
+        if estimate["low_confidence"] else ""
+    )
+    marker = (
+        f"<!-- forge:agent-comment stage=implementation-estimate request_id={request_id} "
+        f"low={estimate['low']} high={estimate['high']} "
+        f"bucket_unit_count={estimate['unit_count']} "
+        f"bucket_is_enhancement={estimate['is_enhancement']} -->"
+    )
+    return (
+        f"{marker}\n"
+        "## 💰 FORGE Implementation Cost Estimate\n\n"
+        f"Estimated Stage 3 (Implementation) cost for `{request_id}`: "
+        f"**${estimate['low']:.2f}–${estimate['high']:.2f}** (bucket: {bucket_label})."
+        f"{enhancement_note}"
+        f"{low_confidence_note}\n\n"
+        "This is a coarse, shape-bucketed estimate based on historical Stage 3 "
+        "runs — not a hard limit and not a precise prediction. Review and apply "
+        "`cost-approved` to proceed, or investigate further if this looks high "
+        "for the scope."
+    )
+
+
+def _get_enhancement_service_blobs(existing_service: str) -> list[dict]:
+    """
+    Item #23's Layer 2 "strict rejection over silent auto-remap" backstop
+    (shared by _resolve_enhancement_target() and Item #34's
+    _count_enhancement_seed_files()): an empty tree under
     services/<existing_service>/ is a real, human-actionable mismatch (a
     wrong/mistyped "Existing Service Name" on the intake spreadsheet), not a
     benign no-op -- raises rather than silently falling back to the request
-    ID. The caller's existing ADR-0011 try/except wraps this call and posts a
-    failure comment before re-raising -- the same generic contract every
-    other agent follows, so no separate mismatch-specific comment (unlike
-    Ingestion Agent's own dedicated one) is needed here.
-
-    Returns:
-        Tuple of (service_root, resources) -- service_root is the real
-        existing services/<existing_service> path (no trailing slash, same
-        shape as the Greenfield f"services/{request_id}"); resources is the
-        session resources[] list ready to pass to run_implementation_stage().
+    ID or to Greenfield bucketing. Callers' own ADR-0011 try/except wraps this
+    and posts a failure comment before re-raising.
     """
     service_prefix = f"services/{existing_service}/"
     blobs = get_repo_tree(service_prefix)
@@ -213,7 +361,35 @@ def _resolve_enhancement_target(existing_service: str) -> tuple[str, list[dict]]
             f"('{existing_service}') does not match any real services/ folder. "
             "Refusing to guess or silently fall back to the request ID."
         )
+    return blobs
 
+
+def _count_enhancement_seed_files(existing_service: str) -> int:
+    """
+    Item #34 §2.2.A.2: cost-estimate-only counterpart to
+    _resolve_enhancement_target() -- resolves the same blob list via
+    get_repo_tree()/select_seed_blobs() but never fetches file content or
+    calls upload_input_file(), since the estimate step only needs a count and
+    must not do real work that's wasted if the estimate leads to a "no".
+    """
+    blobs = _get_enhancement_service_blobs(existing_service)
+    return len(select_seed_blobs(blobs))
+
+
+def _resolve_enhancement_target(existing_service: str) -> tuple[str, list[dict]]:
+    """
+    Item #23 (§2.1/§2.2): resolves the real service_root for an Enhancement
+    request and builds the session `resources[]` list that seeds the existing
+    service's files read-only at EXISTING_SERVICE_MOUNT_DIR.
+
+    Returns:
+        Tuple of (service_root, resources) -- service_root is the real
+        existing services/<existing_service> path (no trailing slash, same
+        shape as the Greenfield f"services/{request_id}"); resources is the
+        session resources[] list ready to pass to run_implementation_stage().
+    """
+    service_prefix = f"services/{existing_service}/"
+    blobs = _get_enhancement_service_blobs(existing_service)
     files_to_seed = select_existing_service_files(blobs)
     resources: list[dict] = []
     for repo_path, content in files_to_seed.items():
@@ -443,6 +619,8 @@ def _commit_and_open_pr(
     existing_service: str | None = None,
     missing_secrets_declaration: bool = False,
     secrets_check_fetch_error: str | None = None,
+    cost_estimate: dict | None = None,
+    actual_cost_usd: float | None = None,
 ) -> dict:
     """
     Shared tail end for both the normal happy path and a manual session
@@ -464,6 +642,16 @@ def _commit_and_open_pr(
             fetched for this check, so that case gets its own distinct
             wording rather than being conflated with a confirmed-missing
             section. See _build_secrets_declaration_flag().
+        cost_estimate: Item #34 §2.3 -- the dict returned by
+            _fetch_cost_estimate(), or None if no prior estimate comment was
+            found for this request. Only used together with
+            actual_cost_usd -- see below.
+        actual_cost_usd: Item #34 §2.3 -- this session's real cost from
+            _extract_actual_cost_usd(), or None if the session's usage data
+            didn't carry a cost figure. The "estimate vs. actual" section is
+            only appended when BOTH this and cost_estimate are present --
+            not called at all from recover_implementation_session(), which
+            doesn't fetch either, so that path's comment is unaffected.
 
     Returns:
         Dict with "pr_number" and "pr_url".
@@ -523,6 +711,18 @@ def _commit_and_open_pr(
         missing_secrets_declaration, secrets_check_fetch_error
     )
     secrets_flag_section = f"{secrets_flag_message}\n\n" if secrets_flag_message else ""
+    cost_section = ""
+    if cost_estimate is not None and actual_cost_usd is not None:
+        cost_bucket_label = (
+            f"{cost_estimate['unit_count']}-unit "
+            f"{'Enhancement' if cost_estimate['is_enhancement'] else 'Greenfield'}"
+        )
+        cost_section = (
+            "### 💰 Cost estimate vs. actual\n"
+            f"Estimated: ${cost_estimate['low']:.2f}–${cost_estimate['high']:.2f} "
+            f"(bucket: {cost_bucket_label})\n"
+            f"Actual: ${actual_cost_usd:.2f} (from this session's usage)\n\n"
+        )
     comment_body = (
         f"<!-- forge:agent-comment stage=implementation request_id={request_id} -->\n"
         f"## 🛠️ FORGE Implementation — Draft Ready for Review"
@@ -536,6 +736,7 @@ def _commit_and_open_pr(
         "---\n"
         f"{recovered_note_comment}"
         f"{secrets_flag_section}"
+        f"{cost_section}"
         "QA and Security are already running in parallel -- both trigger "
         "automatically now that this PR is open, and will post their own results "
         "directly on it. Review the diff; mark it ready for review and merge when "
@@ -670,6 +871,149 @@ def recover_implementation_session(
     logger.info("Session %s and all associated resources archived.", session_id)
 
     return {"outcome": "recovered", **pr_result}
+
+
+_COST_ESTIMATE_MARKER_STAGE = "implementation-estimate"
+_COST_ESTIMATE_MARKER_RE = re.compile(
+    r"<!-- forge:agent-comment stage=implementation-estimate request_id=(?P<request_id>\S+) "
+    r"low=(?P<low>[\d.]+) high=(?P<high>[\d.]+) "
+    r"bucket_unit_count=(?P<unit_count>\d+) "
+    r"bucket_is_enhancement=(?P<is_enhancement>True|False) -->"
+)
+
+
+def run_cost_estimate(
+    issue_number: int,
+    request_id: str,
+    existing_service: str | None = None,
+) -> dict:
+    """
+    Item #34 §2.2.A: posts a pre-flight cost-estimate comment to the tracking
+    issue when design-approved lands, before the real coordinator session is
+    created. Never uploads files or creates a Managed Agents session -- only
+    reads tasks.md and (for Enhancement) the existing service's file tree,
+    the same read-only, side-effect-free operations the real run performs
+    before session creation, minus the actual upload_input_file() calls
+    (uploading costs nothing but is wasted work if the estimate leads to a
+    "no" -- see _count_enhancement_seed_files()).
+
+    Follows the same ADR-0011 comment-then-reraise contract as every other
+    agent entry point: on failure, posts a best-effort failure comment before
+    re-raising. In particular, a wrong/mistyped existing-service name
+    surfaces here too (via _count_enhancement_seed_files()'s Layer 2 backstop)
+    rather than silently falling back to Greenfield bucketing (§3).
+
+    Returns the estimate dict from _estimate_implementation_cost() (for
+    dry-run/testing convenience) -- the real output that matters is the
+    posted comment.
+    """
+    try:
+        tasks_md = get_file_contents(f"docs/{request_id}/tasks.md", branch="main")
+        enhancement_seed_file_count = 0
+        if existing_service:
+            enhancement_seed_file_count = _count_enhancement_seed_files(existing_service)
+        estimate = _estimate_implementation_cost(
+            tasks_md,
+            is_enhancement=bool(existing_service),
+            enhancement_seed_file_count=enhancement_seed_file_count,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Failed to compute cost estimate for request %s (existing_service=%s)",
+            request_id, existing_service,
+        )
+        failure_body = (
+            "⚠️ **FORGE could not compute a pre-flight cost estimate for "
+            "Implementation.**\n\n"
+            f"Error: `{exc}`\n\n"
+            "No cost-estimate comment was posted. This is most likely a wrong/"
+            "mistyped 'Existing Service Name' on the intake spreadsheet, or a "
+            "problem fetching tasks.md. An Orchestration Manager needs to "
+            "investigate before applying `cost-approved`."
+        )
+        try:
+            post_comment(issue_number, failure_body)
+        except Exception:
+            logger.exception(
+                "Also failed to post cost-estimate failure comment to issue #%s", issue_number
+            )
+        raise
+
+    comment_body = _build_cost_estimate_comment(request_id, estimate)
+    post_comment(issue_number, comment_body)
+    logger.info(
+        "Cost estimate posted for request %s: $%.2f-$%.2f (bucket=%s)",
+        request_id, estimate["low"], estimate["high"], estimate["bucket"],
+    )
+    return estimate
+
+
+def _fetch_cost_estimate(issue_number: int, request_id: str) -> dict | None:
+    """
+    Item #34 §2.3: re-fetch-and-parse the hidden marker from the
+    cost-estimate comment run_cost_estimate() posted (if any) before the real
+    coordinator run, so the post-run comment can show estimate vs. actual.
+
+    This is the first place in the codebase that parses structured key=value
+    data out of a forge:agent-comment marker, rather than just checking
+    presence or counting occurrences (see _is_agent_comment() in
+    requirements_agent.py, qa_agent.py's attempt counter) -- flagged per
+    Item #34 spec §4 investigation item #4.
+
+    Returns None if no matching comment is found (e.g. a manual invocation
+    that skipped the estimate step, or a request predating this feature) --
+    this must never block or fail the real run.
+    """
+    try:
+        comments = get_issue_comments(issue_number)
+    except Exception:
+        logger.warning(
+            "Could not fetch issue comments to look for a prior cost estimate "
+            "(issue #%s) -- proceeding without estimate-vs-actual reporting.",
+            issue_number, exc_info=True,
+        )
+        return None
+
+    prefix = (
+        f"<!-- forge:agent-comment stage={_COST_ESTIMATE_MARKER_STAGE} "
+        f"request_id={request_id} "
+    )
+    for comment in reversed(comments):  # most recent matching estimate wins
+        body = comment.get("body", "")
+        if not body.startswith(prefix):
+            continue
+        match = _COST_ESTIMATE_MARKER_RE.match(body.splitlines()[0])
+        if not match:
+            logger.warning(
+                "Found a cost-estimate comment for request %s but its marker "
+                "line didn't match the expected pattern -- skipping. Body "
+                "prefix: %r",
+                request_id, body.splitlines()[0],
+            )
+            continue
+        return {
+            "low": float(match["low"]),
+            "high": float(match["high"]),
+            "unit_count": int(match["unit_count"]),
+            "is_enhancement": match["is_enhancement"] == "True",
+        }
+    return None
+
+
+def _extract_actual_cost_usd(final_status: dict) -> float | None:
+    """
+    Item #34 §2.3: GET /sessions/{id}'s usage.list_cost.amount is in CENTS,
+    not dollars (confirmed live, docs/FORGE-pipeline-cost-log.md §3). Returns
+    None if the session's status dict has no usage/list_cost data at all
+    (should not happen post-completion, but this must never crash the
+    post-run comment over a missing cost figure).
+    """
+    usage = final_status.get("usage") or {}
+    list_cost = usage.get("list_cost") or {}
+    amount = list_cost.get("amount")
+    if amount is None:
+        return None
+    return amount / 100
 
 
 def run_implementation_coordinator(
@@ -857,10 +1201,20 @@ def run_implementation_coordinator(
     # one path where the fetch is new and can fail independently).
     missing_secrets_declaration = _detect_missing_secrets_declaration(design_md)
 
+    # Item #34 §2.3 -- best-effort only: neither call must ever block a real,
+    # already-successful implementation from being committed and PR'd. A
+    # missing/unparseable estimate comment or a session usage object with no
+    # cost figure both just mean the "estimate vs. actual" section is omitted
+    # (see _commit_and_open_pr()'s cost_estimate/actual_cost_usd handling).
+    cost_estimate = _fetch_cost_estimate(issue_number, resolved_request_id)
+    actual_cost_usd = _extract_actual_cost_usd(result["final_status"])
+
     pr_result = _commit_and_open_pr(
         resolved_request_id, service_root, session_id, issue_number, files_to_commit,
         existing_service=existing_service,
         missing_secrets_declaration=missing_secrets_declaration,
+        cost_estimate=cost_estimate,
+        actual_cost_usd=actual_cost_usd,
     )
     return {"session_id": session_id, "pr_number": pr_result["pr_number"], "files": list(files_to_commit)}
 
@@ -895,7 +1249,30 @@ def main() -> None:
             "Requires --request-id. Never re-invokes the coordinator."
         ),
     )
+    parser.add_argument(
+        "--estimate-only",
+        action="store_true",
+        help=(
+            "Item #34: post a pre-flight cost estimate comment to the tracking "
+            "issue and exit -- does not create a Managed Agents session, upload "
+            "any files, commit, or open a PR. Requires --request-id."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.estimate_only:
+        if not args.request_id:
+            parser.error("--request-id is required with --estimate-only")
+        try:
+            run_cost_estimate(
+                issue_number=args.issue_number,
+                request_id=args.request_id,
+                existing_service=args.existing_service,
+            )
+        except Exception:
+            logger.exception("Cost estimate failed for request %s", args.request_id)
+            sys.exit(1)
+        return
 
     if args.recover_session:
         if not args.request_id:
