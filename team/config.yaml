@@ -1,27 +1,26 @@
 # FORGE Team-Layer Configuration
 # This file defines team-specific settings for the FORGE automation harness.
 # Replace all placeholder values with your project's actual configuration.
+#
+# Only two things are read from this file at runtime (confirmed by a full
+# codebase grep, 2026-09-01 — see backlog Items #36/#37): the `ado:` block
+# below (core/agents/utils/ado_helper.py) and `container_apps.staging`
+# (core/agents/deploy_agent.py). There is no `container_apps.production`
+# block — no production deploy stage exists in code yet (README's own
+# stated scope). Every other key this file used to carry (ado_org,
+# ado_project, monorepo_name, a top-level area_path/tags, intake_method,
+# notification_channel) was dead — read by zero code — and has been
+# removed rather than left as a misleading no-op.
 
-# The base URL of your Azure DevOps organization
-ado_org: https://dev.azure.com/your-org
+ado:
+  org_url: "https://dev.azure.com/spike99"
+  project: "FORGE-Build"
+  area_path: "FORGE-Build"          # default area path — using project root for now, refine later if you add team areas
+  default_tags:
+    - "forge-managed"
 
-# The name of the ADO project that contains your boards and pipelines
-ado_project: your-project-name
-
-# The name of the application monorepo repository in ADO
-monorepo_name: your-monorepo-name
-
-# The ADO area path used to scope work items to the correct team/product area
-area_path: your-project-name\your-area-path
-
-# Default tags applied to every ADO work item created by FORGE.
-# "forge-managed" must remain as a fixed entry for traceability and filtering.
-tags:
-  - forge-managed
-
-# Azure Container Apps environment configuration for each deployment stage.
+# Azure Container Apps environment configuration for staging deploys.
 container_apps:
-
   staging:
     # The name of the Azure Container Apps environment for staging
     environment: forge-staging
@@ -35,30 +34,3 @@ container_apps:
     cpu: 0.25
     # Memory allocated per replica
     memory: 0.5Gi
-
-  production:
-    # The name of the Azure Container Apps environment for production
-    environment: your-production-environment-name
-    # Maximum number of replicas to handle peak load
-    max_replicas: 5
-    # Minimum replicas kept warm to avoid cold-start latency in production
-    min_replicas: 1
-    # vCPU allocated per replica
-    cpu: 0.5
-    # Memory allocated per replica
-    memory: 1.0Gi
-
-# How FORGE receives intake documents from stakeholders.
-# "issue-attachment" — document is attached to a GitHub Issue
-# "repo-path"        — document is committed to a known path in the repo
-intake_method: issue-attachment
-
-# The Slack channel or email address where FORGE pipeline alerts are sent
-notification_channel: your-channel-or-email
-
-ado:
-  org_url: "https://dev.azure.com/spike99"
-  project: "FORGE-Build"
-  area_path: "FORGE-Build"          # default area path — using project root for now, refine later if you add team areas
-  default_tags:
-    - "forge-managed"
