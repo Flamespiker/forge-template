@@ -50,6 +50,19 @@ genuinely short resolutions stay inline from the start.
 
 ## Current Build Phase
 
+**Phase 8 (Handoff Readiness) steps 8.1-8.3 complete (2026-08-31).** Landed
+Claude.ai's finished drafts after verifying no drift against the live repo:
+nine core ADR stubs filled in (`core/decisions/0001-0007, 0009, 0010` — 0008
+and 0011 were already real and untouched); `docs/06_Orchestration_v7.md`
+(Enhancement vs. Greenfield section, Gate 2.5/`cost-approved`, confirmed-merge
+Deploy requirement, post-deploy crash-loop check, stale SDK-reference fixes)
+replaces v6; `docs/07_Customization_Ref_v4.md` (same corrections plus two new
+Locked-item rows) replaces v3. Old v6/v3 removed per this doc series'
+existing single-current-version convention; README links updated to match.
+`forge-template`'s `main` confirmed unprotected, so all of this — plus a
+separate housekeeping commit for Mike's `docs/ADRs`/`Archives`/`Specs`/
+`Templates` reorg — landed as direct commits, not PRs.
+
 **Phase 7 (Enhancement Workflow) is underway — Build Plan step 7.1 (Codebase
 Ingestion Agent, Stage 0a) is complete and live-verified (2026-08-27).** New
 `core/agents/ingestion_agent.py`, a new `github_helper.get_repo_tree()`, Stage 0a
