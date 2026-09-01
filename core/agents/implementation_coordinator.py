@@ -1324,6 +1324,14 @@ def main() -> None:
         # real human-facing signal; this exit code is for tooling.
         sys.exit(75)
     except Exception:
+        # Was a bare `sys.exit(1)` with no logging -- confirmed live during
+        # Item #34's own end-to-end test that this silently swallows any
+        # traceback for an exception raised in run_implementation_coordinator()
+        # outside its own internal run_implementation_stage() try/except (e.g.
+        # the cost-estimate-vs-actual / _commit_and_open_pr() tail end), with
+        # zero CI-log diagnostic trace. Matches what --recover-session's own
+        # except clause already does two blocks above.
+        logger.exception("Implementation Coordinator failed for request %s", args.request_id)
         sys.exit(1)
 
 
