@@ -51,7 +51,27 @@ genuinely short resolutions stay inline from the start.
 
 ## Current Build Phase
 
-**Phase 8 (Handoff Readiness) steps 8.1-8.3 complete (2026-08-31).** Landed
+**Phase 8 (Handoff Readiness) steps 8.1-8.4 complete; 8.5 pending.**
+
+**8.4 complete (2026-09-01).** Fresh-clone setup verification — but not a clean pass on
+the first try. `verify-setup.yml` (and 8 other stage workflows, two layers deep)
+hardcoded `forge-demo-apps`/`spike99`/`Flamespiker` instead of reading config, so a
+genuinely new OM's App/target repo hit a real 404 (Item #35). `team/config.yaml` itself
+turned out to have three mutually incompatible schemas across README, the OM Guide, and
+the real shipped file (Item #36) — neither doc's example keys existed in the real file
+at all. Fixed via new repo Variables (`FORGE_TARGET_REPO`, `FORGE_GITHUB_OWNER`,
+`FORGE_ADO_ORG_URL`) replacing two layers of hardcoding, plus a config-file trim to its
+two actually-read blocks (Item #37 separately confirmed the file's live `spike99`/
+`FORGE-Build` values are intentional, not a placeholder bug). Verified twice: a live run
+against the real setup went from a real 404 to fully green, then a genuine fresh-clone
+retest against a *different* target (a scratch repo, since torn down) confirmed the
+connectivity check resolved that scratch target specifically — proving the fix reads
+`${{ vars.* }}` for real, not coincidentally matching the old hardcoded values. Full
+detail, all commit SHAs, and the newly-surfaced Items #38-#42: `docs/FORGE-Open-Items-Backlog-v9.md`
+and this file's own Open Items section below. 8.5 (tag `v1.0.0`) is unblocked but
+deliberately not yet done — separate decision.
+
+**Phase 8 steps 8.1-8.3, historical (2026-08-31).** Landed
 Claude.ai's finished drafts after verifying no drift against the live repo:
 nine core ADR stubs filled in (`core/decisions/0001-0007, 0009, 0010` — 0008
 and 0011 were already real and untouched); `docs/06_Orchestration_v7.md`
