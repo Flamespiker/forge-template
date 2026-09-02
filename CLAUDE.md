@@ -1792,6 +1792,68 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     and Enhancement (`(2, True)` bucket, live existing-service seed-file
     scaling against the real REQ-2026-03) verified live end to end. Full
     narrative: `docs/CLAUDE-archive-2026-08-resolved-open-items.md`.
+35. ~~**`verify-setup.yml` (and 8 other stage workflows, two layers deep) hardcoded
+    `forge-demo-apps`/`spike99`/`Flamespiker` instead of reading config** — a genuinely
+    new OM's App/target repo hit a real 404 on a fresh clone.~~ — **RESOLVED
+    2026-09-01.** New repo Variables (`FORGE_TARGET_REPO`, `FORGE_GITHUB_OWNER`,
+    `FORGE_ADO_ORG_URL`) replace two separate layers of hardcoding: Layer 1 (job-level
+    `env:` blocks, all 9 stage workflows) and Layer 2 (the `create-github-app-token`/
+    `checkout` steps' own `repositories:`/`owner:`/`repository:` inputs, which didn't
+    even reference Layer 1's env vars — the exact bug pattern, fixed so it can't recur
+    the same way). `qa_agent.py`/`security_agent.py`'s silent
+    `os.environ.get(..., 'forge-demo-apps')` fallbacks now fail loud instead. Verified
+    twice: against the real setup (a live run went from a real 404 to fully green), and
+    via a genuine fresh-clone/different-target scratch retest confirming the fix reads
+    `${{ vars.* }}` for real rather than coincidentally matching the old hardcoded
+    values. Commits: `d40b761`, `5b8ace6`, `71424df`.
+36. ~~**`team/config.yaml` had three mutually incompatible schemas** — README's example,
+    the OM Guide's example, and the real shipped file each used different key names/
+    nesting; neither doc's example keys existed in the real file at all.~~ —
+    **RESOLVED 2026-09-01.** A full codebase grep found only two real consumers
+    (`ado_helper.py` reads the nested `ado:` block; `deploy_agent.py` reads
+    `container_apps.staging`) — every other key (`ado_org`, `ado_project`,
+    `monorepo_name`, a top-level `area_path`/`tags`, `intake_method`,
+    `notification_channel`, the entire `container_apps.production` block) was read by
+    zero code. Trimmed the file to its two live blocks; fixed both docs' examples to
+    match exactly; corrected the OM Guide's "repo path" intake alternative, which
+    doesn't exist in code (only issue-attachment does). Commits: `53b3fd5`, `baddc8c`.
+37. **`team/config.yaml`'s `ado:` block ships real live values (`spike99`/
+    `FORGE-Build`), not placeholders** — investigated, not a bug. These are the correct,
+    intentional values for the live deployment; trimming the dead keys around them
+    (Item #36) was the right action, not a placeholder-ization. The real, still-open
+    question this surfaced is architectural, not a code fix — see Item #41. Commit:
+    `53b3fd5`.
+38. **Single-repo model unsupported, undocumented** — all three governing docs
+    (README, OM Guide, Customization Ref) assume a two-repo model throughout; none say
+    what a team should do with only one repo available. Confirmed real during the 8.4
+    walkthrough (a scratch repo had to play both roles as a judgment call, not a
+    documented path). Not urgent — no team has hit this for real yet.
+39. **GitHub "required reviewers" environment protection needs a paid plan on private
+    repos** — neither the OM Guide nor the Customization Ref mention this; hit a real
+    422 during the 8.4 walkthrough creating a protected `production` GitHub Environment
+    on a private scratch repo. Two parts still open: a doc fix, and the real-stakes
+    follow-up check of whether `forge-demo-apps`'s actual `production` environment has
+    this protection genuinely active today (never independently confirmed).
+40. **Doc-completeness batch — five small gaps from the 8.4 walkthrough, clubbable.**
+    "Build Plan" referenced but undefined anywhere in README's reference table; ACR
+    creation steps (SKU choice, admin-user enablement) undocumented; no documented way
+    to confirm the Anthropic key is active; README Step 5 places Container App sizing
+    directly after `az containerapp env create`, implying flags that don't exist on
+    that command; ADO PAT creation UI mechanics undocumented. Also open: deciding where
+    the verbatim gap log (`phase8-4-gaps.md`) should permanently live.
+41. **`forge-template` conflates "Mike's live instance" and "public template source"**
+    — confirmed live: the repo is `is_template: true`, and a real
+    `gh repo create --template ...` test proved `team/config.yaml`'s live `ado:` block
+    values (`spike99`/`FORGE-Build`) get copied verbatim into every new instantiation,
+    not just this one. Design decision needed, no urgency: is this acceptable (a new OM
+    overwrites `config.yaml` as their first setup step anyway), or does the dual role
+    need untangling (e.g. a separate `config.yaml.example`)?
+42. **Node.js 20 deprecation warning on `actions/checkout@v4`/`actions/setup-python@v5`**
+    — surfaced as an unrelated annotation during Item #35's verification run. Low
+    priority, not yet a functional break, but worth bumping action versions before
+    GitHub makes it a hard failure.
+
+Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 
 ## Further reading
 
