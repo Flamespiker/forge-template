@@ -51,7 +51,11 @@ genuinely short resolutions stay inline from the start.
 
 ## Current Build Phase
 
-**Phase 8 (Handoff Readiness) steps 8.1-8.4 complete; 8.5 pending.**
+**Phase 8 (Handoff Readiness) is fully complete (8.1-8.5, 2026-09-01).** Tagged
+`v1.0.0` — annotated tag on commit `97aa752` (`main` HEAD at the time), pushed to
+origin and verified via the GitHub API (`git/ref/tags/v1.0.0` → `object.type: "tag"`,
+confirming a genuine annotated tag; `git/tags/{sha}` → correct message and commit
+target). FORGE's first stable release.
 
 **8.4 complete (2026-09-01).** Fresh-clone setup verification — but not a clean pass on
 the first try. `verify-setup.yml` (and 8 other stage workflows, two layers deep)
@@ -68,8 +72,8 @@ retest against a *different* target (a scratch repo, since torn down) confirmed 
 connectivity check resolved that scratch target specifically — proving the fix reads
 `${{ vars.* }}` for real, not coincidentally matching the old hardcoded values. Full
 detail, all commit SHAs, and the newly-surfaced Items #38-#42: `docs/FORGE-Open-Items-Backlog-v9.md`
-and this file's own Open Items section below. 8.5 (tag `v1.0.0`) is unblocked but
-deliberately not yet done — separate decision.
+and this file's own Open Items section below. 8.5 (tag `v1.0.0`) followed in a
+same-day follow-up session — see the paragraph above.
 
 **Phase 8 steps 8.1-8.3, historical (2026-08-31).** Landed
 Claude.ai's finished drafts after verifying no drift against the live repo:
