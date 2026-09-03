@@ -1856,6 +1856,59 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     — surfaced as an unrelated annotation during Item #35's verification run. Low
     priority, not yet a functional break, but worth bumping action versions before
     GitHub makes it a hard failure.
+43. ~~**No way for a requester to declare, at intake, how far the pipeline should
+    go** — every run went all the way to Deploy once a human kept applying gate
+    labels, with nothing but discipline stopping a request from rolling further
+    (and spending more real Anthropic/Managed Agents/Azure cost) than
+    intended.~~ — **RESOLVED AND LIVE-VERIFIED 2026-09-03**, per
+    `docs/Specs/FORGE-Item43-PipelineDepth-Spec-v3.md` (Claude.ai, 3 revisions —
+    v1 investigation-only, v2/v3 resolving Mike's design forks down to tier
+    structure/parsing-location). New Intake Template Section B field, **Pipeline
+    Depth** (`Just Requirements` / `Up to Design` / `Up to Implementation` /
+    `Up to Deployment`, blank defaults to full pipeline) — a contiguous prefix
+    selector, not a stage picker. Built across 6 commits: `4ab81a0` (Intake
+    Template.xlsx field + Instructions tab + v1.1 bump), `ab5d8fb`
+    (`requirements_agent.py` — parses the field, writes
+    `docs/<request-id>/pipeline-config.json` to `pipeline-state`), `875b8d1`
+    (`workflow_glue.py` — new `check-pipeline-depth` subcommand: tier
+    comparison, terminal-stop comment + `pipeline-complete-at-depth` label,
+    idempotent against a repeat trigger), `cd7431c`
+    (`implementation_coordinator.py` — configured-depth note on the Item #34
+    cost estimate), `fb8581a` (depth-check guard wired into
+    `02-design.yml`/`03-implementation.yml`/`04-qa.yml`/`05-security.yml`/
+    `06-deploy.yml`, Stage 3/4/5 sharing one "implementation" tier since QA/
+    Security have no separate human gate to split on), `df557fc`
+    (`06_Orchestration_v7.md` + `07_Customization_Ref_v4.md` documentation).
+    One correction made during build, not in the original spec: the
+    guard-clause insertion point is after each workflow's `Resolve request ID`
+    step, not immediately after the label guard clause as v3's table assumed
+    — `request_id` isn't resolved that early in Design/Implementation/QA/
+    Security. **Live-verified via 3 real throwaway-issue tests, all passed**
+    (`forge-template#14`/`#15`/`#16`, all closed, zero orphaned branches/PRs,
+    **zero Azure infrastructure ever created**): Test 1 (Greenfield, `Up to
+    Design`) confirmed Stage 2 ran normally and Stage 3 stayed blocked even
+    with both `design-approved` and `cost-approved` present (isolating the
+    depth gate from the ordinary two-label gate); Test 2 (Enhancement,
+    `Up to Implementation`, existing service `REQ-2026-03`) confirmed Stage 0a/
+    3/QA/Security all ran for real (real cost **$0.66**, PR
+    `forge-demo-apps#44` merged) while Deploy stayed blocked even after a real
+    confirmed merge with both `qa-approved`/`security-approved` present,
+    verified independently via `az containerapp list` (nothing created); Test
+    3 (blank depth) confirmed byte-for-byte pre-feature behavior — no
+    depth-related comment anywhere, full backward compatibility. Surfaced two
+    unrelated findings during verification, not Item #43 regressions: a
+    transient `anthropic.OverloadedError: 529` (resolved via a routine
+    label-reapply retry) and Item #44 below.
+44. **`implementation_coordinator.py`'s `run_cost_estimate()` reads `tasks.md`
+    from `main`, not the not-yet-merged `design/<request-id>` branch** — found
+    live during Item #43's Test 1 verification (2026-09-03). If `design-approved`
+    is applied before the design PR is merged, the pre-flight cost-estimate
+    step 404s and fails the job outright, even though this is exactly the
+    label-application order Document 6/the Orchestration Guide's own Gate 2
+    text describes as *correct* (approve → merge → apply `design-approved`) —
+    it only bites when that order is skipped, which is why it had never
+    surfaced in any real request before. Worked around live via merge-then-
+    retry, not fixed at the code level. Open.
 
 Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 
