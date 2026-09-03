@@ -184,6 +184,12 @@ Each gate is a GitHub label applied to the tracking issue or a required PR revie
 
 > **Intake template:** a copy of the intake template is at `docs/Intake Template.xlsx`. Instructions and examples are on the first tab.
 
+> **Pipeline depth:** the intake template also has an optional "Pipeline
+> Depth" field — leave it blank for a normal full run, or set it to stop
+> the pipeline early (e.g. "Up to Design") if you only need to review
+> architecture without paying for implementation, QA, security, and
+> deploy. See the Orchestration Manager Guide for the full tier list.
+
 ---
 
 ## Approving a gate
@@ -196,6 +202,12 @@ Each gate is a GitHub label applied to the tracking issue or a required PR revie
 | QA sign-off | Automatic — the QA Agent applies `qa-approved` (or sends it back with a retry label) based on real test results; review its posted report on the PR |
 | Security sign-off | Automatic — the Security Agent applies `security-approved` based on real scan results; review its posted report on the PR |
 | Deploy (staging) | Automatic — fires once both labels above are present **and** the feature PR has actually been merged to `main` |
+
+> If the intake spreadsheet's Pipeline Depth field was set to something
+> short of "Up to Deployment," the pipeline stops on its own once that
+> tier completes — applying a later `*-approved` label won't push it
+> further. A comment and a `pipeline-complete-at-depth` label appear on
+> the tracking issue when this happens.
 
 There is no slash-command interface (`/approve-*`, `/reject-*`) anywhere in the pipeline — every gate above is either a GitHub label or a native PR review/merge. If a stage needs to be sent back, the agent's own retry/loop-back label handles it automatically (QA); Requirements and Design currently rely on you not applying the `*-approved` label (or not merging the PR) until you're satisfied — there's no separate reject action to take.
 
