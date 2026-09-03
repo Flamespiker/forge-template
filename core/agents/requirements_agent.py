@@ -47,6 +47,13 @@ clarification answers alone, same as every request took before Stage 0a existed.
 Any OTHER fetch error (not a 404) is treated as a real failure, same as any other
 exception here -- it propagates into the existing try/except below and produces
 the standard failure comment, rather than being silently swallowed.
+
+Pipeline Depth (Item #43): this is the earliest point with a durable, downstream-
+readable location (pipeline-state), so this agent also normalizes the intake
+spreadsheet's Pipeline Depth field (_normalize_pipeline_depth()) and writes it to
+docs/<request-id>/pipeline-config.json alongside requirements.md/ado-work-items.json.
+Every later stage's guard clause reads this file (via get_file_contents()) to decide
+whether it's still within the configured depth before invoking its real agent.
 """
 
 from __future__ import annotations
@@ -208,6 +215,26 @@ def _is_enhancement(parsed: dict) -> bool:
     return (request_type_section.get("Request Type") or "").strip().lower() == "enhancement"
 
 
+# Maps the Intake Template's Pipeline Depth field (Section B, Item #43) to the
+# canonical tier value every stage's depth-check guard clause compares against.
+# Blank, missing, or unrecognized values default to "full" -- same graceful-
+# degradation posture as every other optional intake field (see file_io.py's
+# bracket-placeholder stripping) -- so a request submitted before this field
+# existed, or with the field left blank, behaves exactly as before.
+_PIPELINE_DEPTH_VALUE_MAP = {
+    "just requirements": "requirements",
+    "up to design": "design",
+    "up to implementation": "implementation",
+    "up to deployment": "full",
+}
+
+
+def _normalize_pipeline_depth(parsed: dict) -> str:
+    request_type_section = parsed["overview"].get("request_type") or {}
+    raw_value = (request_type_section.get("Pipeline Depth") or "").strip().lower()
+    return _PIPELINE_DEPTH_VALUE_MAP.get(raw_value, "full")
+
+
 def _fetch_existing_architecture_summary(parsed: dict, request_id: str) -> str | None:
     """
     For an Enhancement request, fetch existing-architecture-summary.md (committed
@@ -291,6 +318,7 @@ def run_requirements_agent(
     resolved_request_id = request_id or "unknown"
 
     parsed = file_io.read_xlsx(spreadsheet_path)
+    pipeline_depth = _normalize_pipeline_depth(parsed)
     comments = get_issue_comments(issue_number)
     clarification_answers = _format_clarification_answers(comments)
 
@@ -333,6 +361,8 @@ def run_requirements_agent(
         print(requirements_md)
         print("=" * 20, "ado-work-items.json", "=" * 20)
         print(json.dumps(ado_payload, indent=2))
+        print("=" * 20, "pipeline-config.json", "=" * 20)
+        print(json.dumps({"pipeline_depth": pipeline_depth}, indent=2))
         logger.info(
             "Dry run complete for request %s — nothing committed, nothing posted.",
             resolved_request_id,
@@ -344,15 +374,26 @@ def run_requirements_agent(
         files={
             f"docs/{resolved_request_id}/requirements.md": requirements_md,
             f"docs/{resolved_request_id}/ado-work-items.json": json.dumps(ado_payload, indent=2),
+            f"docs/{resolved_request_id}/pipeline-config.json": json.dumps(
+                {"pipeline_depth": pipeline_depth}, indent=2
+            ),
         },
         commit_message=f"FORGE Requirements Agent: draft requirements for {resolved_request_id}",
     )
 
+    depth_note = (
+        f"\n**Pipeline Depth:** `{pipeline_depth}` — this request will stop after the "
+        "corresponding stage regardless of which gate labels are applied later "
+        "(Item #43).\n"
+        if pipeline_depth != "full"
+        else ""
+    )
     comment_body = (
         f"<!-- forge:agent-comment stage=requirements request_id={resolved_request_id} -->\n"
         "## 📋 FORGE Requirements — Draft Ready for Review\n\n"
         f"`requirements.md` and the draft ADO work-item hierarchy have been committed "
-        f"to `docs/{resolved_request_id}/` in the monorepo.\n\n"
+        f"to `docs/{resolved_request_id}/` in the monorepo.\n"
+        f"{depth_note}\n"
         "**Draft ADO hierarchy:**\n\n"
         f"{_render_ado_summary(ado_payload)}\n\n"
         "---\n"
