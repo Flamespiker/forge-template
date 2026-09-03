@@ -93,9 +93,20 @@ jobs:
         run: |
           python -m core.agents.workflow_glue resolve-request-id --issue-number "${{ steps.issue.outputs.issue_number }}"
 
+      - name: Depth check — confirm Pipeline Depth permits QA (Item #43)
+        # Shares the "implementation" tier with 03-implementation.yml/
+        # 05-security.yml -- see FORGE-Item43-PipelineDepth-Spec-v3.md §3.
+        id: depth
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.workflow_glue check-pipeline-depth \
+            --issue-number "${{ steps.issue.outputs.issue_number }}" \
+            --request-id "${{ steps.request_id.outputs.request_id }}" \
+            --stage implementation
+
       - name: Determine Enhancement status and existing service (Item #25)
         id: enhancement_decide
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         run: |
           python -m core.agents.workflow_glue download-issue-attachment \
             --issue-number "${{ steps.issue.outputs.issue_number }}" \
@@ -133,7 +144,7 @@ jobs:
           PY
 
       - name: Generate GitHub App installation token (scoped to the target repo)
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
@@ -143,7 +154,7 @@ jobs:
           repositories: ${{ vars.FORGE_TARGET_REPO }}
 
       - name: Checkout target repo at the PR head commit
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.FORGE_GITHUB_OWNER }}/${{ vars.FORGE_TARGET_REPO }}
@@ -152,17 +163,17 @@ jobs:
           path: monorepo-checkout
 
       - uses: actions/setup-dotnet@v4
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         with:
           dotnet-version: '8.0.x'
 
       - uses: actions/setup-node@v4
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         with:
           node-version: '20'
 
       - name: Install frontend dependencies (if a frontend unit exists)
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         working-directory: ${{ github.workspace }}/monorepo-checkout
         run: |
           request_id="${{ steps.request_id.outputs.request_id }}"
@@ -188,7 +199,7 @@ jobs:
 
       - name: Run QA Agent
         id: run_agent
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         run: |
           request_id="${{ steps.request_id.outputs.request_id }}"
           python -m core.agents.qa_agent \
@@ -224,6 +235,7 @@ jobs:
       - name: Post failure comment for a pre-agent step failure
         if: >
           always() && steps.guard.outputs.proceed == 'true' &&
+          steps.depth.outputs.proceed == 'true' &&
           steps.issue.outcome == 'success' && steps.run_agent.outcome == 'skipped'
         run: |
           python - <<'PY'

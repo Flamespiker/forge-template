@@ -158,9 +158,18 @@ jobs:
         run: |
           python -m core.agents.workflow_glue resolve-request-id --issue-number "$ISSUE_NUMBER"
 
+      - name: Depth check — confirm Pipeline Depth permits Deploy (Item #43)
+        id: depth
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.workflow_glue check-pipeline-depth \
+            --issue-number "$ISSUE_NUMBER" \
+            --request-id "${{ steps.request.outputs.request_id }}" \
+            --stage full
+
       - name: Determine Enhancement status and existing service (Item #28)
         id: enhancement_decide
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         run: |
           python -m core.agents.workflow_glue download-issue-attachment \
             --issue-number "$ISSUE_NUMBER" \
@@ -198,7 +207,7 @@ jobs:
           PY
 
       - name: Generate GitHub App installation token (scoped to the target repo)
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
@@ -208,7 +217,7 @@ jobs:
           repositories: ${{ vars.FORGE_TARGET_REPO }}
 
       - name: Checkout target repo at the feature PR head commit
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.FORGE_GITHUB_OWNER }}/${{ vars.FORGE_TARGET_REPO }}
@@ -218,7 +227,7 @@ jobs:
 
       - name: Run Deploy Agent
         id: run_agent
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         run: |
           python -m core.agents.deploy_agent \
             --issue-number "$ISSUE_NUMBER" \
@@ -242,7 +251,7 @@ jobs:
         # real run (see deploy_agent.py's own run_deploy_agent -- printed
         # only under --dry-run) -- re-deriving the handful of fields this
         # needs here avoids changing Deploy Agent's own return contract.
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         run: |
           python - <<'PY'
           import json
@@ -261,14 +270,16 @@ jobs:
           PY
 
       - uses: actions/upload-artifact@v4
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         with:
           name: deploy-context
           path: deploy-context.json
           retention-days: 7
 
       - name: Post failure comment for a pre-agent step failure
-        if: always() && steps.guard.outputs.proceed == 'true' && steps.run_agent.outcome == 'skipped'
+        if: >
+          always() && steps.guard.outputs.proceed == 'true' &&
+          steps.depth.outputs.proceed == 'true' && steps.run_agent.outcome == 'skipped'
         run: |
           python - <<'PY'
           import os

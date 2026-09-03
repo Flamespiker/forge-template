@@ -33,6 +33,11 @@
 # previously the one remaining stage that never resolved Enhancement status
 # at all (03-implementation.yml/04-qa.yml/05-security.yml/06-deploy.yml all
 # already had this).
+#
+# "Depth check" (Item #43, Configurable Pipeline Depth) gates only the Design
+# Agent invocation, not ADO item creation above it (see that step's own
+# comment) -- if the configured depth is 'requirements', ADO items still get
+# created but design.md/openapi.yaml/tasks.md are never generated.
 
 name: FORGE Stage 2 — Spec and Design
 
@@ -139,8 +144,21 @@ jobs:
             --request-id "${{ steps.request.outputs.request_id }}" \
             --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}"
 
-      - name: Run Design Agent
+      - name: Depth check — confirm Pipeline Depth permits Design (Item #43)
+        # ADO Epic/Feature/User Story creation above is associated with the
+        # requirements-approved action itself (Document 02 §4.3), not the
+        # Design stage -- it always runs regardless of configured depth. Only
+        # the Design Agent invocation below is gated.
+        id: depth
         if: steps.guard.outputs.proceed == 'true' && success()
+        run: |
+          python -m core.agents.workflow_glue check-pipeline-depth \
+            --issue-number "$ISSUE_NUMBER" \
+            --request-id "${{ steps.request.outputs.request_id }}" \
+            --stage design
+
+      - name: Run Design Agent
+        if: steps.guard.outputs.proceed == 'true' && success() && steps.depth.outputs.proceed == 'true'
         run: |
           python -m core.agents.design_agent \
             --issue-number "$ISSUE_NUMBER" \

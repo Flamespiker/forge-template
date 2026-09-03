@@ -93,9 +93,20 @@ jobs:
         run: |
           python -m core.agents.workflow_glue resolve-request-id --issue-number "${{ steps.issue.outputs.issue_number }}"
 
+      - name: Depth check — confirm Pipeline Depth permits Security (Item #43)
+        # Shares the "implementation" tier with 03-implementation.yml/
+        # 04-qa.yml -- see FORGE-Item43-PipelineDepth-Spec-v3.md §3.
+        id: depth
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          python -m core.agents.workflow_glue check-pipeline-depth \
+            --issue-number "${{ steps.issue.outputs.issue_number }}" \
+            --request-id "${{ steps.request_id.outputs.request_id }}" \
+            --stage implementation
+
       - name: Determine Enhancement status and existing service (Item #25)
         id: enhancement_decide
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         run: |
           python -m core.agents.workflow_glue download-issue-attachment \
             --issue-number "${{ steps.issue.outputs.issue_number }}" \
@@ -133,7 +144,7 @@ jobs:
           PY
 
       - name: Generate GitHub App installation token (scoped to the target repo)
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
@@ -143,7 +154,7 @@ jobs:
           repositories: ${{ vars.FORGE_TARGET_REPO }}
 
       - name: Checkout target repo at the PR head commit
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         uses: actions/checkout@v4
         with:
           repository: ${{ vars.FORGE_GITHUB_OWNER }}/${{ vars.FORGE_TARGET_REPO }}
@@ -152,20 +163,20 @@ jobs:
           path: monorepo-checkout
 
       - uses: actions/setup-java@v4
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Install Gitleaks
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz \
             | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
 
       - name: Install OWASP Dependency-Check
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         run: |
           curl -sSfL -o dependency-check.zip \
             https://github.com/jeremylong/DependencyCheck/releases/download/v12.1.0/dependency-check-12.1.0-release.zip
@@ -175,7 +186,7 @@ jobs:
 
       - name: Run Security Agent
         id: run_agent
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         run: |
           request_id="${{ steps.request_id.outputs.request_id }}"
           python -m core.agents.security_agent \
@@ -188,6 +199,7 @@ jobs:
       - name: Post failure comment for a pre-agent step failure
         if: >
           always() && steps.guard.outputs.proceed == 'true' &&
+          steps.depth.outputs.proceed == 'true' &&
           steps.issue.outcome == 'success' && steps.run_agent.outcome == 'skipped'
         run: |
           python - <<'PY'

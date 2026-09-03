@@ -55,6 +55,15 @@
 # below covers a failure in the still-earlier "Resolve request ID" glue step
 # and is skipped entirely once the coordinator actually runs, to avoid ever
 # posting a duplicate.
+#
+# "Depth check" (Item #43, Configurable Pipeline Depth) covers Stage 3 AND
+# QA/Security (04-qa.yml/05-security.yml) under one shared "implementation"
+# tier -- see FORGE-Item43-PipelineDepth-Spec-v3.md §3 for why those three
+# stages can't be split into separate depth tiers. The pre-flight cost
+# estimate step still always posts on design-approved (so a Technical
+# Approver sees the estimate regardless), but notes the configured depth in
+# its own comment; only the real coordinator run and the label-clearing step
+# are gated on steps.depth.outputs.proceed.
 
 name: FORGE Stage 3 — Implementation
 
@@ -122,6 +131,19 @@ jobs:
         run: |
           python -m core.agents.workflow_glue resolve-request-id --issue-number "$ISSUE_NUMBER"
 
+      - name: Depth check — confirm Pipeline Depth permits Implementation (Item #43)
+        # Stage 3/4/5 share one tier ("implementation") -- see FORGE-Item43-
+        # PipelineDepth-Spec-v3.md §3. Runs on design_present alone (not
+        # proceed) so its configured_depth output is available for the cost
+        # estimate step below even before cost-approved lands.
+        id: depth
+        if: steps.guard.outputs.design_present == 'true'
+        run: |
+          python -m core.agents.workflow_glue check-pipeline-depth \
+            --issue-number "$ISSUE_NUMBER" \
+            --request-id "${{ steps.request.outputs.request_id }}" \
+            --stage implementation
+
       - name: Determine Enhancement status and existing service (Item #23)
         id: enhancement_decide
         if: steps.guard.outputs.design_present == 'true'
@@ -172,11 +194,12 @@ jobs:
             --estimate-only \
             --issue-number "$ISSUE_NUMBER" \
             --request-id "${{ steps.request.outputs.request_id }}" \
-            --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}"
+            --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}" \
+            --configured-depth "${{ steps.depth.outputs.configured_depth }}"
 
       - name: Run Implementation Coordinator
         id: run_agent
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         run: |
           python -m core.agents.implementation_coordinator \
             --issue-number "$ISSUE_NUMBER" \
@@ -184,7 +207,7 @@ jobs:
             --existing-service "${{ steps.enhancement_decide.outputs.existing_service }}"
 
       - name: Clear design-approved and cost-approved labels
-        if: steps.guard.outputs.proceed == 'true'
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         run: |
           python - <<'PY'
           import os
@@ -194,7 +217,9 @@ jobs:
           PY
 
       - name: Post failure comment for a pre-agent step failure
-        if: always() && steps.guard.outputs.proceed == 'true' && steps.run_agent.outcome == 'skipped'
+        if: >
+          always() && steps.guard.outputs.proceed == 'true' &&
+          steps.depth.outputs.proceed == 'true' && steps.run_agent.outcome == 'skipped'
         run: |
           python - <<'PY'
           import os
