@@ -29,6 +29,10 @@ The Intake section's "Option B — Repository path" was removed from the two-opt
 framing — a codebase check found no such logic implemented anywhere; only issue
 attachment exists in code today.
 
+**Post-review addition (Item #43, Configurable Pipeline Depth):** added the "Pipeline
+Depth — Limiting How Far a Request Goes" section, the `pipeline-complete-at-depth`
+Label Reference row, and the `pipeline-config.json` File Reference row.
+
 ---
 
 ## Purpose
@@ -245,6 +249,23 @@ The Excel intake spreadsheet's Overview tab has a Request Type field: **Greenfie
 
 For a BA filling out the intake spreadsheet, the only difference is one field (Request Type, plus naming the existing service being enhanced). Everything downstream of that field is handled automatically — there is nothing extra for you to configure per-request, but it's worth knowing this distinction exists so an Enhancement's PRs landing under an existing `services/` folder (rather than a new one) doesn't look like a mistake when you're reviewing a gate.
 
+### Pipeline Depth — Limiting How Far a Request Goes
+
+By default a request runs all the way to Deploy once every gate label is applied. The Excel intake spreadsheet's Overview tab has a second Section B field, **Pipeline Depth**, that lets the BA declare a firm stopping point up front — "I just want the requirements written down," or "stop after Design, I'm not ready to build this yet." Four values, each a **prefix**, not a subset — choosing a tier always runs every stage before it too, in the existing locked order:
+
+| Pipeline Depth value | Runs through | Stops before |
+|---|---|---|
+| `Just Requirements` | Stage 1 — Requirements (ADO items are still created — see Gate 1) | Design |
+| `Up to Design` | Stage 2 — Design (+ the Gate 2.5 cost estimate) | Implementation |
+| `Up to Implementation` | Stage 3 — Implementation, and Stage 4/5 — QA + Security (these three share one tier — QA/Security fire automatically off the implementation PR, not a gate you apply) | Deploy |
+| `Up to Deployment` *(default — leave blank)* | Stage 6 — Deploy | — nothing, full run |
+
+This is enforced by the pipeline itself, not by you remembering not to apply the next label. If a gate label is applied beyond the configured depth (a misclick, the wrong person, simple forgetfulness), the workflow refuses to invoke that stage: it posts a comment on the tracking issue naming the configured depth and applies `pipeline-complete-at-depth` (see Label Reference), and the job exits clean (no red X — this is expected behavior, not a failure).
+
+The configured depth is captured as soon as the Requirements Agent runs (`docs/<request-id>/pipeline-config.json` on `pipeline-state`) — the earliest point with a durable, downstream-readable location — and every later stage's guard clause reads it before invoking its real agent. A blank or unrecognized value defaults to `Up to Deployment` (full pipeline), so older intake spreadsheets and requests submitted before this field existed behave exactly as before.
+
+**Changing your mind mid-flight:** there is no override label. If you decide a request that stopped at `Up to Design` should actually continue, edit `pipeline-config.json` on the `pipeline-state` branch directly (bump `pipeline_depth` to the tier you want) and re-apply the relevant gate label.
+
 ### What Happens at Each Gate
 
 Once the pipeline is running, your job at each gate is to read what the agent produced and decide whether to approve it.
@@ -429,6 +450,7 @@ The following labels are used in the FORGE tracking issue to drive pipeline stat
 | `qa-approved` | QA Agent (applied automatically on a clean pass) | Clears QA gate; combined with `security-approved` **and a confirmed merge of the feature PR** to enable deploy |
 | `security-approved` | Security Agent (applied automatically on a clean pass, no Critical findings) | Clears security gate; combined with `qa-approved` **and a confirmed merge of the feature PR** to enable deploy |
 | `qc-retry-limit-reached` | QA Agent | Halts pipeline; requires Orchestration Manager triage |
+| `pipeline-complete-at-depth` | Any stage-2-through-6 workflow's depth-check step | Marks that the request reached its configured Pipeline Depth and stopped there on purpose — see "Pipeline Depth" above. Not applied again if already present (avoids a duplicate stop comment on a repeat trigger). |
 
 PR events (open, merge) and GitHub Environment approvals handle the remaining state transitions — these are not label-driven. Note that `qa-approved` and `security-approved` alone do not fire Deploy — a real merge of the feature PR to `main` is also required (see Gate 6).
 
@@ -450,6 +472,7 @@ PR events (open, merge) and GitHub Environment approvals handle the remaining st
 |---|---|---|
 | `docs/<request-id>/existing-architecture-summary.md` | Existing-service architecture summary (Enhancement requests only) | Codebase Ingestion Agent (Stage 0a) |
 | `docs/<request-id>/requirements.md` | Approved requirements | Requirements Agent |
+| `docs/<request-id>/pipeline-config.json` | Configured Pipeline Depth (`{"pipeline_depth": ...}`) — read by every later stage's depth-check guard clause | Requirements Agent |
 | `docs/<request-id>/design.md` | Architecture and API design | Design Agent |
 | `docs/<request-id>/openapi.yaml` | API contract | Design Agent |
 | `docs/<request-id>/tasks.md` | Implementation task breakdown | Design Agent |

@@ -9,6 +9,10 @@
 
 **v4 changelog (Phase 8, 8.2 review):** corrected two stale "Claude Agent SDK" references — six of the seven stages use the base `anthropic` client directly (ADR-0011), Managed Agents only for Stage 3 (ADR-0010); added the Cost Estimator's `cost-approved` two-label AND-gate (Item #34); added the Enhancement-target-resolution behavior (Items #24/#25/#28/#32) as a locked Pipeline & Orchestration item; added the post-deploy crash-loop health check (Item #1) and the confirmed-merge requirement on the Deploy trigger (Item #26) to the Containerization & Deployment table.
 
+**Post-review addition (Item #43, Configurable Pipeline Depth):** added the Pipeline
+Depth existence-and-tier-list row to the Pipeline & Orchestration table — Locked
+shape, per Design Fork #6.
+
 ---
 
 ## How to Read This Document
@@ -32,6 +36,7 @@ If a row has a note, read it — the note defines the boundary exactly.
 | Agent invocation model (stateless per-stage agent calls) | **Locked** | Agents do not persist memory across stages. Context passes forward as committed files only. Six of the seven stages call the base `anthropic` client directly, single-turn, no tool-use loop (see ADR-0011). Exception: Stage 3 uses a Managed Agents coordinator session (see ADR-0010) — the coordinator maintains state across its subagents *within* the stage window, which clarifies rather than violates this rule. |
 | Pipeline stage sequence and names | **Locked** | Stages 0a–6 execute in order. No stages may be reordered, skipped (except Stage 0a, which is only triggered for enhancements), or merged. |
 | Stage 3 cost-approval gate (`cost-approved` label) | **Locked** | Required alongside `design-approved` before the Implementation Coordinator's Managed Agents session starts — same two-label AND-gate shape as the Deploy trigger. No threshold exists; a coarse pre-flight estimate is posted for the Technical Approver to read, and the decision is purely human judgment (Item #34). |
+| Pipeline Depth existence and tier list (`Just Requirements` / `Up to Design` / `Up to Implementation` / `Up to Deployment`) | **Locked** | Every FORGE instance gets this field and exactly these four tiers — a contiguous prefix selector matching the fixed stage sequence above, not a team-configurable stage picker. Teams cannot define their own tier boundaries or add a partial-stage tier (e.g. "Implementation but not QA/Security" is not offered — see Item #43 for why those three stages share one tier). |
 | Enhancement-target resolution (Implementation, QA, Security, Deploy, ADO item creation) | **Locked** | For an Enhancement request, every downstream stage resolves the real existing `services/<existing-service>/` folder and existing ADO Epic, rather than assuming a new `services/<request-id>/` folder or a new Epic. Not team-configurable — this is core pipeline behavior, not a team preference. |
 | Human gate at every stage | **Locked** | Every stage transition requires a human approval action. Gates cannot be bypassed or automated away. |
 | No-self-merge rule (agents open PRs; humans merge) | **Locked** | An agent may never merge its own PR. Enforced by branch protection. |
