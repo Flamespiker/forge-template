@@ -95,6 +95,12 @@ Organized by pipeline stage, matching the stage table in the context document.
 - **State tracking:** deterministic orchestration keeps a record of what stage a request is in and what gate it's waiting on, independent of any single agent run.
 - **Template repo distribution:** teams clone FORGE as a GitHub template, and can pull core-layer updates over time without losing team-layer customizations.
 - **Two-layer configuration:** a clear, documented split between what's locked (core) and what's adaptable (team) — detailed fully in the Customization Reference (Document 7).
+- **Configurable pipeline depth:** a requester can declare, at intake, how
+  far a run should go (Just Requirements / Up to Design / Up to
+  Implementation / Up to Deployment) — a contiguous prefix of the fixed
+  stage sequence, not an arbitrary stage picker. Every later stage checks
+  this before running, so an accidentally-applied gate label can't push a
+  run further than intended (Item #43).
 
 ---
 
