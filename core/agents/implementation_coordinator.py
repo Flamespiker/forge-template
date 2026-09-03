@@ -287,7 +287,7 @@ def _estimate_implementation_cost(
     }
 
 
-def _build_cost_estimate_comment(request_id: str, estimate: dict) -> str:
+def _build_cost_estimate_comment(request_id: str, estimate: dict, configured_depth: str = "full") -> str:
     """
     Item #34 §2.2.A.4/§2.4: the tracking-issue comment posted when
     design-approved lands, before the real coordinator session is created.
@@ -303,6 +303,12 @@ def _build_cost_estimate_comment(request_id: str, estimate: dict) -> str:
     share state today (see that function's docstring for why this is the
     first place in the codebase parsing structured data out of a marker,
     not just checking presence/counting occurrences).
+
+    configured_depth (Item #43, Fork #4): when shallower than 'implementation',
+    this estimate is purely informational -- 03-implementation.yml's own depth
+    check will refuse the real coordinator run regardless of cost-approved.
+    Noted here so the Technical Approver doesn't read this estimate assuming
+    Implementation will actually happen.
     """
     bucket_label = (
         f"{estimate['unit_count']}-unit "
@@ -321,6 +327,13 @@ def _build_cost_estimate_comment(request_id: str, estimate: dict) -> str:
         "historical average — treat it with extra skepticism."
         if estimate["low_confidence"] else ""
     )
+    depth_note = (
+        f"\n\n🛑 **Pipeline Depth is set to `{configured_depth}`** — Implementation "
+        "will not actually run even if you apply `cost-approved`, unless an "
+        "Orchestration Manager first raises the configured depth (Item #43). This "
+        "estimate is informational only in that case."
+        if configured_depth != "full" and configured_depth != "implementation" else ""
+    )
     marker = (
         f"<!-- forge:agent-comment stage=implementation-estimate request_id={request_id} "
         f"low={estimate['low']} high={estimate['high']} "
@@ -333,7 +346,8 @@ def _build_cost_estimate_comment(request_id: str, estimate: dict) -> str:
         f"Estimated Stage 3 (Implementation) cost for `{request_id}`: "
         f"**${estimate['low']:.2f}–${estimate['high']:.2f}** (bucket: {bucket_label})."
         f"{enhancement_note}"
-        f"{low_confidence_note}\n\n"
+        f"{low_confidence_note}"
+        f"{depth_note}\n\n"
         "This is a coarse, shape-bucketed estimate based on historical Stage 3 "
         "runs — not a hard limit and not a precise prediction. Review and apply "
         "`cost-approved` to proceed, or investigate further if this looks high "
@@ -886,6 +900,7 @@ def run_cost_estimate(
     issue_number: int,
     request_id: str,
     existing_service: str | None = None,
+    configured_depth: str = "full",
 ) -> dict:
     """
     Item #34 §2.2.A: posts a pre-flight cost-estimate comment to the tracking
@@ -939,7 +954,7 @@ def run_cost_estimate(
             )
         raise
 
-    comment_body = _build_cost_estimate_comment(request_id, estimate)
+    comment_body = _build_cost_estimate_comment(request_id, estimate, configured_depth)
     post_comment(issue_number, comment_body)
     logger.info(
         "Cost estimate posted for request %s: $%.2f-$%.2f (bucket=%s)",
@@ -1273,6 +1288,18 @@ def main() -> None:
             "any files, commit, or open a PR. Requires --request-id."
         ),
     )
+    parser.add_argument(
+        "--configured-depth",
+        default="full",
+        help=(
+            "Item #43: the Pipeline Depth already resolved by 03-implementation.yml's "
+            "own depth-check step, passed through so the cost-estimate comment can "
+            "note when a configured depth shallower than 'implementation' means this "
+            "estimate won't actually be spent even if the estimate itself looks fine. "
+            "Purely a display note -- does not affect whether the real coordinator "
+            "run proceeds (that's gated by the calling workflow's own guard)."
+        ),
+    )
     args = parser.parse_args()
 
     if args.estimate_only:
@@ -1283,6 +1310,7 @@ def main() -> None:
                 issue_number=args.issue_number,
                 request_id=args.request_id,
                 existing_service=args.existing_service,
+                configured_depth=args.configured_depth,
             )
         except Exception:
             logger.exception("Cost estimate failed for request %s", args.request_id)
