@@ -2,6 +2,11 @@
 
 **Document 2 of 9 — Agent Topology, Pipeline Mechanics, ADO Integration, GitHub Structure, Container Strategy**
 
+**Post-review addition (Item #43):** Requirements Agent's Outputs column in the
+§3 Agent Topology table now includes `pipeline-config.json`, matching the
+artifact already added to `06_Orchestration_v7.md`'s File Reference table
+during Item #43's build — this table had been missed at the time.
+
 ---
 
 ## 1. Purpose of This Document
@@ -86,7 +91,7 @@ Six of the seven stages — every stage except Implementation — invoke Claude 
 |---|---|---|---|
 | **Codebase Ingestion Agent** *(enhancement only)* | `workflow_dispatch` when a request is flagged as an enhancement | Monorepo, read-only checkout of the relevant `services/<name>/` folder | `existing-architecture-summary.md` (committed to `monorepo:docs/<request-id>/`) |
 | **Intake Agent** | New intake spreadsheet committed/uploaded to the FORGE repo | Completed intake spreadsheet (FORGE repo) | Answered clarifying-question record (posted as FORGE tracking-issue comments) |
-| **Requirements Agent** | Clarification round marked complete | Spreadsheet + Q&A record (+ ingestion summary, if enhancement) | `requirements.md` (committed to `monorepo:docs/<request-id>/`), draft ADO work item payloads (not yet created) |
+| **Requirements Agent** | Clarification round marked complete | Spreadsheet + Q&A record (+ ingestion summary, if enhancement) | `requirements.md`, `pipeline-config.json` (committed to `monorepo:docs/<request-id>/`), draft ADO work item payloads (not yet created) |
 | **Design Agent** | `requirements-approved` label applied (on the FORGE tracking issue) | `requirements.md` (read from monorepo) | `design.md`, `openapi.yaml`, `tasks.md` — committed to `monorepo:docs/<request-id>/` on a `design/<request-id>` branch, PR opened in the monorepo |
 | **Implementation Coordinator** | `design-approved` label applied — GitHub Actions workflow starts a Managed Agents coordinator agent session | `design.md`, `openapi.yaml`, `tasks.md` (monorepo); Managed Agents sandbox filesystem | Complete feature branch implementation committed to `feature/<request-id>`; draft PR opened in monorepo |
 | **Backend Agent** *(subagent)* | Implementation Coordinator (Managed Agents delegation) | `design.md`, `openapi.yaml`, `tasks.md` on shared sandbox filesystem | .NET backend implementation written to sandbox filesystem |
