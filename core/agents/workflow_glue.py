@@ -51,11 +51,30 @@ Four subcommands:
       "Related FORGE tracking issue: <owner>/<repo>#N" line. Needed by
       04-qa.yml/05-security.yml, which only ever learn about a PR number/SHA/
       branch from the dispatch payload -- never the tracking issue number.
+
+  check-pipeline-depth --issue-number N --request-id ID --stage {design,implementation,full}
+      Configurable Pipeline Depth (Item #43). Reads docs/<request-id>/
+      pipeline-config.json from pipeline-state (written by requirements_agent.py
+      at Stage 1) and compares the configured depth against --stage's fixed
+      tier. Writes two outputs: "proceed" (true/false) and "configured_depth"
+      (the resolved value, always emitted even when proceed=false, so a caller
+      like 03-implementation.yml's pre-flight cost estimate can still note it).
+      A missing pipeline-config.json (404 -- predates this feature, or Stage 1
+      hasn't run) defaults to "full", same graceful-degradation posture as
+      every other optional pipeline-state artifact. When the current stage
+      exceeds the configured depth, posts a terminal-stop comment and applies
+      the `pipeline-complete-at-depth` label to the tracking issue (unless
+      that label is already present, to avoid re-posting a duplicate stop
+      comment on a repeat trigger of the same guarded workflow) and returns
+      False -- never raises for this expected case; the calling workflow step
+      exits 0 either way. Every stage-2-through-6 workflow ANDs its real
+      agent-invoking steps' `if:` on this step's "proceed" output.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import re
@@ -65,14 +84,30 @@ import requests
 
 from core.agents.utils.github_helper import (
     _github_token_headers,
+    add_label,
+    get_file_contents,
     get_issue,
     get_issue_comments,
     get_pr,
     list_open_prs,
     list_open_prs_by_head,
+    post_comment,
 )
 
 logger = logging.getLogger(__name__)
+
+# Configurable Pipeline Depth (Item #43) -- fixed tier each stage occupies,
+# and the total order depth values are compared against. "requirements" is
+# the floor tier (Stage 1 always runs once Intake completes, so no stage ever
+# calls check_pipeline_depth() with this value) but is listed for completeness
+# of the ordering.
+_PIPELINE_DEPTH_TIER_ORDER = {
+    "requirements": 1,
+    "design": 2,
+    "implementation": 3,
+    "full": 4,
+}
+_PIPELINE_COMPLETE_LABEL = "pipeline-complete-at-depth"
 
 _ATTACHMENT_URL_RE = re.compile(
     r"https://github\.com/(?:[^/\s]+/[^/\s]+/files|user-attachments/files)/\d+/[^\s)\]]+"
@@ -233,6 +268,90 @@ def resolve_feature_pr(issue_number: int) -> tuple[int, str]:
     )
 
 
+def _resolve_configured_pipeline_depth(request_id: str) -> str:
+    """
+    Reads docs/<request_id>/pipeline-config.json from pipeline-state. A 404
+    (predates Item #43, or Stage 1 hasn't run yet) and a malformed/missing
+    "pipeline_depth" key both default to "full" -- same graceful-degradation
+    posture as every other optional pipeline-state artifact (see
+    requirements_agent.py's _fetch_existing_architecture_summary()). An
+    unrecognized value (a hand-edit typo, e.g. during a Fork #2 manual
+    override) also defaults to "full" rather than crashing every later stage.
+    """
+    try:
+        raw = get_file_contents(f"docs/{request_id}/pipeline-config.json", branch="pipeline-state")
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            logger.info(
+                "No pipeline-config.json found for request %s -- defaulting Pipeline "
+                "Depth to 'full'.",
+                request_id,
+            )
+            return "full"
+        raise
+
+    try:
+        depth = json.loads(raw).get("pipeline_depth")
+    except (ValueError, AttributeError):
+        depth = None
+
+    if depth not in _PIPELINE_DEPTH_TIER_ORDER:
+        logger.warning(
+            "pipeline-config.json for request %s has an unrecognized pipeline_depth "
+            "%r -- defaulting to 'full'.",
+            request_id,
+            depth,
+        )
+        return "full"
+    return depth
+
+
+def check_pipeline_depth(issue_number: int, request_id: str, stage_tier: str) -> tuple[bool, str]:
+    """
+    Configurable Pipeline Depth (Item #43). Returns (proceed, configured_depth).
+
+    proceed is False when the configured depth is shallower than stage_tier --
+    the calling workflow must not invoke its real stage agent this run. On the
+    first time this is detected, posts a terminal-stop comment and applies
+    `pipeline-complete-at-depth` to the tracking issue; a repeat trigger of the
+    same guarded workflow (e.g. a human re-applying a blocked gate label) finds
+    the label already present and skips reposting the comment, but still
+    returns proceed=False.
+    """
+    if stage_tier not in _PIPELINE_DEPTH_TIER_ORDER:
+        raise ValueError(
+            f"Unknown stage_tier {stage_tier!r} -- expected one of "
+            f"{sorted(_PIPELINE_DEPTH_TIER_ORDER)}"
+        )
+
+    configured_depth = _resolve_configured_pipeline_depth(request_id)
+    proceed = _PIPELINE_DEPTH_TIER_ORDER[configured_depth] >= _PIPELINE_DEPTH_TIER_ORDER[stage_tier]
+    if proceed:
+        return True, configured_depth
+
+    logger.info(
+        "Pipeline Depth for %s is configured to '%s' -- stopping before the '%s' stage.",
+        request_id,
+        configured_depth,
+        stage_tier,
+    )
+    issue = get_issue(issue_number)
+    already_stopped = any(l["name"] == _PIPELINE_COMPLETE_LABEL for l in issue["labels"])
+    if not already_stopped:
+        post_comment(
+            issue_number,
+            f"<!-- forge:agent-comment stage=pipeline-depth request_id={request_id} -->\n"
+            "🛑 **FORGE Pipeline stopped at configured depth.**\n\n"
+            f"Pipeline Depth was set to `{configured_depth}` at intake — stopping here. "
+            f"The `{stage_tier}` stage was not run.\n\n"
+            "This is expected behavior, not a failure. To let the pipeline continue "
+            "further, an Orchestration Manager can edit `pipeline-config.json` on the "
+            "`pipeline-state` branch and re-apply the relevant gate label.",
+        )
+        add_label(issue_number, _PIPELINE_COMPLETE_LABEL)
+    return False, configured_depth
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     logging.basicConfig(level=logging.INFO)
@@ -253,6 +372,11 @@ def main() -> None:
     p_issue = subparsers.add_parser("resolve-tracking-issue")
     p_issue.add_argument("--pr-number", required=True, type=int)
 
+    p_depth = subparsers.add_parser("check-pipeline-depth")
+    p_depth.add_argument("--issue-number", required=True, type=int)
+    p_depth.add_argument("--request-id", required=True)
+    p_depth.add_argument("--stage", required=True, choices=sorted(_PIPELINE_DEPTH_TIER_ORDER))
+
     args = parser.parse_args()
 
     try:
@@ -266,6 +390,12 @@ def main() -> None:
             _write_output("head_sha", head_sha)
         elif args.action == "resolve-tracking-issue":
             _write_output("issue_number", str(resolve_tracking_issue(args.pr_number)))
+        elif args.action == "check-pipeline-depth":
+            proceed, configured_depth = check_pipeline_depth(
+                args.issue_number, args.request_id, args.stage
+            )
+            _write_output("proceed", "true" if proceed else "false")
+            _write_output("configured_depth", configured_depth)
     except Exception:
         logger.exception("workflow_glue action '%s' failed", args.action)
         sys.exit(1)
