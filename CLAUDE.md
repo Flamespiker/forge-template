@@ -1971,6 +1971,17 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     scoped as a real fix, not a config bump, if a much larger intake
     actually shows up. Open (as a scaling question; today's real intake is
     fixed).
+
+    **Recurred same day on the same request, Design stage:**
+    `design_agent.py`'s `_MAX_TOKENS = 20000` also truncated (used all
+    20000 tokens, cost $0.319032, 288s) generating `design.md` +
+    `openapi.yaml` + `tasks.md` for REQ-2026-01's 6 Features / 17 User
+    Stories. Raised to `32000` (same config-bump pattern, same Mike
+    go-ahead) — two occurrences in one request is real evidence the
+    fixed-ceiling approach doesn't hold for anything past a small intake;
+    the next stage agent to hit this (or another oversized request) should
+    be the trigger to actually build the scaling fix above rather than
+    bumping a third constant.
 47. **A blank "Request ID" field on the intake spreadsheet silently
     resolves to `request_id="unknown"` with no warning anywhere** —
     confirmed live 2026-09-04, same `REQ-2026-01` request (`forge-template#17`,
