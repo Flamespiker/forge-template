@@ -12,9 +12,10 @@ intake spreadsheets through a full pipeline (requirements → design → impleme
 security → deploy) with human approval gates at each stage.
 
 - **FORGE repo:** `forge-template` (GitHub: `Flamespiker`) — orchestration machinery only
-- **Target repo:** `forge-demo-apps` (GitHub: `Flamespiker`, private) — stand-in for LAA's
-  application monorepo during the build/demo phase
-- **ADO org:** `https://dev.azure.com/spike99` — project `FORGE-Build`
+- **Target repo:** `mike-digital-platform` (GitHub: `Flamespiker`, private) — stand-in for LAA's
+  application monorepo during the build/demo phase. **Swapped from `forge-demo-apps`
+  2026-09-04** — see "Platform swap: forge-demo-apps → Mike Digital Platform (mdp)" below.
+- **ADO org:** `https://dev.azure.com/spike99` — project `Mike Digital Platform`
 - **Full project context:** the newest `docs/FORGE-context_v*.md` — read this for
   architecture decisions, agent roster, pipeline stages, and session history
 - **This file's history:** trimmed 2026-08-18 to stay lean (it's loaded into every
@@ -50,6 +51,19 @@ genuinely short resolutions stay inline from the start.
 
 
 ## Current Build Phase
+
+**Platform swap completed 2026-09-04 — target platform is now `mike-digital-platform`
+("mdp"), not `forge-demo-apps`.** Full decommission-and-reprovision cycle following
+`docs/FORGE-platform-swap-runbook.md`: old `forge-build-rg` (5 live Container Apps,
+Postgres, Key Vault, ACR), the `FORGE-DemoApps-SSO` app registration, `forge-demo-apps`,
+and ADO project `FORGE-Build` all confirmed deleted; new `mdp-rg`/`mdp-con-stage`/
+`mdp-con-prod`/`mdpacr`/`mdp-kv`/`mike-digital-platform`/ADO project "Mike Digital
+Platform" provisioned and wired in (commit `f17d307` to `team/config.yaml`,
+`FORGE_TARGET_REPO`/`ACR_*` secrets rotated, GitHub App installation extended, the
+`forge-deploy-staging` SP kept and re-scoped rather than recreated). Live-verified via
+a real `verify-setup.yml` run (`33829563278`, fully green) against the new target — not
+just resource-existence checks. Full step-by-step narrative, every command, and every
+live-verification result: `docs/CLAUDE-archive-2026-09-platform-swap-mdp.md`.
 
 **Phase 8 (Handoff Readiness) is fully complete (8.1-8.5, 2026-09-01).** Tagged
 `v1.0.0` — annotated tag on commit `97aa752` (`main` HEAD at the time), pushed to
@@ -1925,3 +1939,5 @@ Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
   every resolved Open Item (all except #7/#11, which remain open in this file), moved
   here 2026-08-31 to keep this file lean.
 - `docs/FORGE-pipeline-cost-log.md` — token/Managed Agents/ACR cost tracking.
+- `docs/CLAUDE-archive-2026-09-platform-swap-mdp.md` — full platform-swap narrative
+  (forge-demo-apps → Mike Digital Platform), verbatim.
