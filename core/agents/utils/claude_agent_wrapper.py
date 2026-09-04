@@ -321,8 +321,14 @@ def invoke_agent(
         ]
         create_kwargs["tool_choice"] = {"type": "tool", "name": _STRUCTURED_OUTPUT_TOOL_NAME}
 
+    # Streaming unconditionally, not just above some max_tokens threshold -- the
+    # Anthropic SDK proactively raises ValueError on a non-streaming call it estimates
+    # will exceed ~10 minutes (confirmed live: design_agent.py's _MAX_TOKENS=32000 hit
+    # this before the request even reached the API). get_final_message() returns the
+    # same Message shape create() does, so nothing downstream of this needs to change.
     start = time.monotonic()
-    response = client.messages.create(**create_kwargs)
+    with client.messages.stream(**create_kwargs) as stream:
+        response = stream.get_final_message()
     elapsed = time.monotonic() - start
 
     # Extract text from all TextBlock content blocks in the response.

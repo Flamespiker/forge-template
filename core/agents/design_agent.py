@@ -80,7 +80,7 @@ from core.agents.utils.github_helper import (
 logger = logging.getLogger(__name__)
 
 _STAGE_NAME = "design"
-_MAX_TOKENS = 32000
+_MAX_TOKENS = 64000
 _DEFAULT_STACK_PREFS_PATH = "team/stack-preferences.yaml"
 
 _SYSTEM_PROMPT = """You are the FORGE Design Agent for Legal Aid Alberta's software \

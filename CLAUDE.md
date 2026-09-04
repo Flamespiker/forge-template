@@ -1972,16 +1972,36 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     actually shows up. Open (as a scaling question; today's real intake is
     fixed).
 
-    **Recurred same day on the same request, Design stage:**
-    `design_agent.py`'s `_MAX_TOKENS = 20000` also truncated (used all
-    20000 tokens, cost $0.319032, 288s) generating `design.md` +
-    `openapi.yaml` + `tasks.md` for REQ-2026-01's 6 Features / 17 User
-    Stories. Raised to `32000` (same config-bump pattern, same Mike
-    go-ahead) — two occurrences in one request is real evidence the
-    fixed-ceiling approach doesn't hold for anything past a small intake;
-    the next stage agent to hit this (or another oversized request) should
-    be the trigger to actually build the scaling fix above rather than
-    bumping a third constant.
+    **Recurred same day on the same request, Design stage — and this was the
+    trigger to actually fix it, per the note above.** `design_agent.py`'s
+    `_MAX_TOKENS = 20000` first truncated (used all 20000 tokens, cost
+    $0.319032, 288s) generating `design.md` + `openapi.yaml` + `tasks.md`
+    for REQ-2026-01's 6 Features / 17 User Stories — bumped to `32000`, but
+    that config-bump attempt never even reached the API: `client.messages
+    .create()` raised `ValueError: Streaming is required for operations
+    that may take longer than 10 minutes` before sending anything. This is
+    a proactive SDK-side guard keyed off `max_tokens`, not a request that
+    actually ran long — so no further constant bump could ever have
+    unblocked it. **Fixed at the root 2026-09-04:** `invoke_agent()` in
+    `claude_agent_wrapper.py` now always calls `client.messages.stream(...)`
+    + `stream.get_final_message()` instead of `client.messages.create()` —
+    unconditionally, not just above some `max_tokens` threshold, since
+    streaming has no downside at small `max_tokens` either and this removes
+    the whole class of guard permanently for all 5 (now 6, still Stage-3-
+    exempt) agents that share this wrapper. `get_final_message()` returns
+    the identical `Message` shape `create()` did, so nothing downstream of
+    that one call site changed — no ripple into token/cost logging or
+    `output_schema` extraction. Live-verified against the real API on both
+    paths this wrapper supports: plain text (existing
+    `smoke_claude_agent.py`, unchanged, still 5/5) and forced tool-use
+    structured output (a one-off script — `output_schema` produced the
+    exact expected dict under streaming, `stop_reason: "tool_use"`). With
+    the guard gone, `design_agent.py`'s `_MAX_TOKENS` was raised again, to
+    `64000` — generous headroom now that generation time is no longer a
+    proactive-block risk, only a real one (Sonnet's actual 128K output
+    ceiling). Dynamic per-request-size sizing (mentioned above) is still
+    not built — a static generous ceiling was sufficient once the real
+    blocker (the non-streaming guard) was removed.
 47. **A blank "Request ID" field on the intake spreadsheet silently
     resolves to `request_id="unknown"` with no warning anywhere** —
     confirmed live 2026-09-04, same `REQ-2026-01` request (`forge-template#17`,
