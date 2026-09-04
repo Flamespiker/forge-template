@@ -176,9 +176,10 @@ Check the Actions tab — all steps should pass. If anything fails, the output w
 ## Running your first pipeline
 
 1. Your BA fills out the Excel intake template (`docs/Intake Template.xlsx`) and uploads it as an attachment to a new GitHub Issue in the FORGE repository
-2. The Intake Agent reads the spreadsheet and posts clarifying questions in the issue comments
-3. The BA answers the questions and applies the label **`clarification-complete`** to the issue
-4. The pipeline runs from here automatically, pausing at each gate for your approval
+2. Apply the label **`intake-ready`** to the issue — this is what triggers Stage 0 and starts the pipeline; nothing happens on issue creation alone
+3. The Intake Agent reads the spreadsheet and posts clarifying questions in the issue comments
+4. The BA answers the questions and applies the label **`clarification-complete`** to the issue
+5. The pipeline runs from here automatically, pausing at each gate for your approval
 
 Each gate is a GitHub label applied to the tracking issue or a required PR review — no separate dashboard to learn.
 
