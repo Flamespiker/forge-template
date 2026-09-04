@@ -2,6 +2,11 @@
 
 **Full-SDLC Orchestration with Review Gates for Engineers**
 
+**v8 changelog:** added a note at Gate 2 (Design approval) warning that a
+manual edit to `design.md` before merge isn't automatically checked against
+`openapi.yaml`/`tasks.md` — a mismatch across the three surfaces becomes
+Stage 3's problem silently, rather than being caught.
+
 **v7 changelog (Phase 8, 8.1 review):** added the "Enhancement vs.
 Greenfield Requests" section and Enhancement-specific notes at Gate 6 and
 in the File Reference table (Stage 0a, `existing_service` targeting,
@@ -275,6 +280,8 @@ The Requirements Agent has produced `requirements.md` (and `ado-work-items.json`
 
 **Gate 2 — Design approval:**
 The Design Agent reads `requirements.md` from `pipeline-state` and has opened a **draft** PR against `design/<request-id>` containing `design.md`, `openapi.yaml`, and `tasks.md`. Review the PR. The Technical Approver reviews the architecture and API contracts. Click **Ready for review** (draft PRs cannot be merged directly), then merge the PR. After merging, apply the label `design-approved` to the tracking issue — this is the actual trigger for Stage 3 (Implementation); merging the PR alone does not start it.
+
+If you edit `design.md` directly on the branch before merging, check that `openapi.yaml` and `tasks.md` still agree with your changes — there's no automated consistency check across the three files. Stage 3 reads all three together; a mismatch (e.g., `tasks.md` describing stale work, or `openapi.yaml` missing a contract your edit now implies) becomes the Implementation Coordinator's problem silently, not a caught error.
 
 **Gate 2.5 — Cost approval:**
 Before the Implementation Coordinator's real Managed Agents session starts, a coarse, shape-bucketed cost estimate is posted as a tracking-issue comment (based on unit count from `tasks.md`, plus seed-file count for an Enhancement, scaled against historical baselines). There is no hard threshold — this is purely informative. Read the estimate, then apply `cost-approved` to the tracking issue. Stage 3 requires **both** `design-approved` and `cost-approved` before it starts, the same two-label AND-gate shape as the Deploy trigger in Gate 6. Once Stage 3 completes, the same comment is updated with the actual cost for comparison against the estimate.
