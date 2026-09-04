@@ -14,8 +14,8 @@
 
 ado:
   org_url: "https://dev.azure.com/spike99"
-  project: "FORGE-Build"
-  area_path: "FORGE-Build"          # default area path — using project root for now, refine later if you add team areas
+  project: "Mike Digital Platform"
+  area_path: "Mike Digital Platform"          # default area path — using project root for now, refine later if you add team areas
   default_tags:
     - "forge-managed"
 
@@ -23,9 +23,9 @@ ado:
 container_apps:
   staging:
     # The name of the Azure Container Apps environment for staging
-    environment: forge-staging
+    environment: mdp-con-stage
     # The Azure resource group containing the staging Container Apps environment
-    resource_group: forge-build-rg
+    resource_group: mdp-rg
     # Maximum number of replicas; limits cost during low-traffic periods
     max_replicas: 2
     # Minimum replicas set to 0 to allow scale-to-zero when idle
