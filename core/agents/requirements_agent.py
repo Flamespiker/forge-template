@@ -72,7 +72,7 @@ from core.agents.utils.github_helper import get_file_contents, get_issue_comment
 logger = logging.getLogger(__name__)
 
 _STAGE_NAME = "requirements"
-_MAX_TOKENS = 8000
+_MAX_TOKENS = 16000
 _AGENT_COMMENT_PREFIX = "<!-- forge:agent-comment"
 
 _SYSTEM_PROMPT = """You are the FORGE Requirements Agent for Legal Aid Alberta's \
