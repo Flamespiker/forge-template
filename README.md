@@ -64,9 +64,22 @@ git clone https://github.com/your-org/your-forge-instance.git
 cd your-forge-instance
 ```
 
-### 2. Create the GitHub App (10 min)
+### 2. Create (and seed) your target monorepo, then the GitHub App (10 min)
 
 FORGE authenticates into your target monorepo through a GitHub App — never a personal token.
+
+> **If your target monorepo doesn't exist yet, create it now — and push at least one
+> commit to `main` before going further.** FORGE writes files via the GitHub Git Data API
+> (`commit_files()`), which builds each commit on top of an existing base tree — it fails
+> outright against a genuinely empty repo (0 commits). You also need a dedicated,
+> permanent `pipeline-state` branch (created once, reused by every request — Requirements/
+> Design/QA/Security all read and write docs there) pointing at that same initial commit:
+> ```bash
+> git init && git commit --allow-empty -m "Initial commit" && git push origin main
+> git push origin main:pipeline-state
+> ```
+> Skipping this surfaces later as a confusing `commit_files()` 404 the first time a real
+> request reaches Stage 1 (Requirements) — not at setup time, when it'd be obvious.
 
 1. Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**
 2. Name it `forge-pipeline`
@@ -184,6 +197,14 @@ Check the Actions tab — all steps should pass. If anything fails, the output w
 Each gate is a GitHub label applied to the tracking issue or a required PR review — no separate dashboard to learn.
 
 > **Intake template:** a copy of the intake template is at `docs/Intake Template.xlsx`. Instructions and examples are on the first tab.
+
+> **Fill in Request ID — don't leave it blank.** If the spreadsheet's "Request ID" field
+> is empty, the pipeline doesn't stop or warn you — it silently proceeds under
+> `request_id="unknown"` for the life of that tracking issue, filing every artifact under
+> `docs/unknown/` in the monorepo. This was only caught once by a human noticing
+> "`docs/unknown/`" in a posted comment; there's no supported way to correct it after the
+> fact short of manually editing bot comments and moving already-committed files. Check
+> the field before applying `intake-ready`.
 
 > **Pipeline depth:** the intake template also has an optional "Pipeline
 > Depth" field — leave it blank for a normal full run, or set it to stop

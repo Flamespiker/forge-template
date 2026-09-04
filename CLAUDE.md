@@ -65,6 +65,13 @@ a real `verify-setup.yml` run (`33829563278`, fully green) against the new targe
 just resource-existence checks. Full step-by-step narrative, every command, and every
 live-verification result: `docs/CLAUDE-archive-2026-09-platform-swap-mdp.md`.
 
+**Correction, 2026-09-04 (same day):** that `verify-setup.yml` run did **not** actually
+prove the target repo was pipeline-ready — `mike-digital-platform` had been created but
+never seeded (0 commits, no `pipeline-state` branch), which `verify-setup.yml`'s
+config/connectivity checks don't exercise. This surfaced as a real Stage 1 failure on the
+first genuine request run against the new target (`REQ-2026-01`). See Open Item #45 for
+the full fix and the runbook update meant to prevent a recurrence.
+
 **Phase 8 (Handoff Readiness) is fully complete (8.1-8.5, 2026-09-01).** Tagged
 `v1.0.0` — annotated tag on commit `97aa752` (`main` HEAD at the time), pushed to
 origin and verified via the GitHub API (`git/ref/tags/v1.0.0` → `object.type: "tag"`,
@@ -1923,6 +1930,69 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     it only bites when that order is skipped, which is why it had never
     surfaced in any real request before. Worked around live via merge-then-
     retry, not fixed at the code level. Open.
+45. **The `mike-digital-platform` swap's B.2 provisioning step created the
+    GitHub repo but never seeded it — real Stage 1 (Requirements) failure,
+    2026-09-04.** `commit_files()` (Git Data API: blob → tree → commit → ref
+    update) requires the target branch to already exist and requires at
+    least one commit to build a base tree from; a genuinely empty repo
+    (`GET .../commits` → `409 Git Repository is empty`, `GET .../branches` →
+    `[]`) has neither. This silently blocked Stage 1 the first time anything
+    tried to write to the new target, on the very first real request run
+    against it (`REQ-2026-01`, `forge-template#17`). **The swap's own
+    "fully green `verify-setup.yml` run" claim (see Current Build Phase
+    above) did not actually exercise this path** — `verify-setup.yml` only
+    checks config/connectivity, not that `commit_files()` can write to the
+    target; the post-swap checklist's "real (not dry-run) pipeline smoke
+    test" bullet was satisfied by that connectivity check rather than an
+    actual Stage 0→1 run, which is the only thing that would have caught
+    this. Fixed live: seeded `main` with an initial commit (Contents API),
+    then created `pipeline-state` pointing at that commit (Git Refs API) —
+    `commit_files()`'s own docstring already says the branch "must already
+    exist", so this was always a provisioning prerequisite, just never
+    written down. `docs/FORGE-platform-swap-runbook.md` B.2 and the
+    post-swap checklist updated 2026-09-04 to seed both proactively on every
+    future swap, and to require a real Stage 1 run (not just
+    `verify-setup.yml`) before signing off. A second failure on the same
+    request, found immediately after fixing this one and also since fixed
+    (a `_MAX_TOKENS` truncation on a 17-requirement intake — see Item #46's
+    sibling note below) — separate root cause, same request.
+46. **`requirements_agent.py`'s `_MAX_TOKENS = 8000` truncated on a
+    17-requirement intake** (`stop_reason: "max_tokens"`, correctly detected
+    and raised by the existing guard) — **found live 2026-09-04 on the same
+    `REQ-2026-01` request as Item #45.** Raised to `16000`; comfortably
+    covers this intake (8388 output tokens used) but remains a fixed
+    ceiling, not a scaling one — a much larger intake (e.g. 50 requirements)
+    could truncate again, and `invoke_agent()`/`claude_agent_wrapper.py` has
+    no streaming support today, so pushing `_MAX_TOKENS` far higher risks
+    the Anthropic SDK's own non-streaming ~10-minute-estimate guard
+    (`ValueError`, raised before the request is even sent) rather than a
+    clean truncation. Deliberately not built here: dynamic sizing off
+    parsed requirement count + streaming support in the shared wrapper —
+    scoped as a real fix, not a config bump, if a much larger intake
+    actually shows up. Open (as a scaling question; today's real intake is
+    fixed).
+47. **A blank "Request ID" field on the intake spreadsheet silently
+    resolves to `request_id="unknown"` with no warning anywhere** —
+    confirmed live 2026-09-04, same `REQ-2026-01` request (`forge-template#17`,
+    caught only because a human noticed "`docs/unknown/`" in the Requirements
+    Agent's posted comment). `intake_agent.py`'s existing fallback-to-
+    `"unknown"` behavior (documented, intentional, per its own `--request-id`
+    docstring) means the pipeline runs to completion under a placeholder ID
+    with zero surfaced error — and because `resolve_request_id()` (used by
+    every stage from `01-requirements.yml` onward) returns the *first*
+    `forge:agent-comment` marker found on the tracking issue, there is no
+    supported code path to correct this after the fact: fixing it required
+    manually editing both existing bot comments' markers and moving the
+    already-committed `docs/unknown/*` artifacts to `docs/REQ-2026-01/*` on
+    `pipeline-state` by hand. Fixed for this request only. **Not fixed at
+    the code level** — no change made to `intake_agent.py`'s validation, no
+    visible warning added to its posted comment, no pre-commit check added
+    anywhere in the pipeline. A real fix (proposed, not built): either
+    reject a blank Request ID outright at Stage 0 (posting a comment asking
+    the BA to fill it in before proceeding), or at minimum have the Intake
+    Agent's first comment carry a loud, impossible-to-miss warning banner
+    when it falls back to `"unknown"`, so a human catches it at Stage 0
+    instead of days later. Open.
 
 Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 

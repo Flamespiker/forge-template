@@ -164,6 +164,26 @@ Example prompt:
 > 5. Create ADO project `<NEW_ADO_PROJECT>` in the existing org.
 > 6. Create GitHub repo `<NEW_TARGET_REPO>` (confirm public/private with
 >    the human before creating).
+> 7. **Seed the new repo — do not skip this.** A repo created via the API/UI
+>    with no template and no initial commit has zero commits and zero
+>    branches (`GET .../commits` returns `409 Git Repository is empty`).
+>    FORGE's `commit_files()` (used by the Requirements, Design, QA, and
+>    Security agents) writes via the Git Data API — blob → tree → commit →
+>    ref update — which requires an existing base commit/tree to build on;
+>    against a genuinely empty repo it fails outright the first time any
+>    stage tries to write to it. Confirmed live 2026-09-04 during the
+>    `mike-digital-platform` swap (see `CLAUDE.md` Open Item #45) — this
+>    step didn't exist in the runbook at the time, and the gap wasn't caught
+>    until a real Stage 1 run failed against the new target days later.
+>    Two sub-steps:
+>    a. Push an initial commit to `main` (a README is enough) — e.g. via the
+>       Contents API: `PUT /repos/{owner}/{repo}/contents/README.md` with
+>       `branch: "main"`.
+>    b. Create the `pipeline-state` branch (FORGE's dedicated, permanent,
+>       intentionally-unprotected bookkeeping branch — created once, reused
+>       across every request) pointing at that same initial commit, via the
+>       Git Refs API: `POST /repos/{owner}/{repo}/git/refs` with
+>       `ref: "refs/heads/pipeline-state"` and `sha: <main's HEAD sha>`.
 
 ### B.3 — Repoint the orchestration repo
 
@@ -214,13 +234,27 @@ Example prompt:
       exist via live reads
 - [ ] New ADO project exists
 - [ ] New GitHub repo exists, correct visibility
+- [ ] **New GitHub repo has an initial commit on `main`** (confirm via
+      `GET /repos/{owner}/{repo}/commits` — a `409 Git Repository is empty`
+      means this step was skipped)
+- [ ] **`pipeline-state` branch exists on the new target repo**
+      (`GET /repos/{owner}/{repo}/branches` should list it)
 - [ ] GitHub App installation includes the new target repo
 - [ ] `FORGE_TARGET_REPO` variable updated and confirmed
 - [ ] `team/config.yaml` updated and committed; commit SHA confirmed via
       API as landed on the branch Actions actually runs from
 - [ ] ACR credentials rotated in orchestration repo secrets
-- [ ] A real (not dry-run) pipeline smoke test run against the new target
-      before treating the swap as done
+- [ ] **A real (not dry-run) pipeline smoke test run against the new
+      target, through at least Stage 1 (Requirements), before treating the
+      swap as done.** `verify-setup.yml` alone is *not* sufficient — it
+      checks config/connectivity, not that `commit_files()` can actually
+      write to the target repo. Confirmed live 2026-09-04: a fully-green
+      `verify-setup.yml` run gave false confidence while the target repo
+      was still unseeded (see the two checklist items above and
+      `CLAUDE.md` Open Item #45) — the gap wasn't caught until a real
+      request hit Stage 1 days later. A throwaway tracking issue through
+      Intake → clarification → Requirements is the minimum real test;
+      delete/close it afterward.
 
 ## Ongoing cost note
 
