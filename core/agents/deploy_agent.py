@@ -1224,6 +1224,7 @@ def main() -> None:
             existing_service=args.existing_service,
         )
     except Exception:
+        logger.exception("Deploy Agent failed for request %s", args.request_id)
         sys.exit(1)
 
 

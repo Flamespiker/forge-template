@@ -175,6 +175,7 @@ def main() -> None:
             dry_run=args.dry_run,
         )
     except Exception:
+        logger.exception("Intake Agent failed for issue #%s", args.issue_number)
         sys.exit(1)
 
 

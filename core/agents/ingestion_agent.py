@@ -376,6 +376,7 @@ def main() -> None:
             dry_run=args.dry_run,
         )
     except Exception:
+        logger.exception("Ingestion Agent failed for existing service %s", args.existing_service)
         sys.exit(1)
 
 

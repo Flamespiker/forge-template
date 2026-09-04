@@ -1090,6 +1090,7 @@ def main() -> None:
             existing_service=args.existing_service,
         )
     except Exception:
+        logger.exception("QA Agent failed for request %s", args.request_id)
         sys.exit(1)
 
     # Item #27: expose this run's own real outcome as a job output so

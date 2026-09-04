@@ -429,6 +429,7 @@ def main() -> None:
             dry_run=args.dry_run,
         )
     except Exception:
+        logger.exception("Requirements Agent failed for request %s", args.request_id)
         sys.exit(1)
 
 
