@@ -513,14 +513,46 @@ def _run_npm_audit(service_dir: str) -> ScanResult:
     "not applicable" (no frontend unit in this request), same principle as
     QA's own not_applicable outcome for a missing test suite, not a scan
     failure. ran=False only on a genuine execution problem (npm missing,
-    malformed output) -- never on "zero vulnerabilities for a real, present
-    package.json", which is a legitimate clean result here (unlike
-    Dependabot's ambiguous empty-alerts case, since this reads the manifest
-    directly with no default-branch dependency).
+    malformed output, or npm's own top-level "error" response) -- never on
+    "zero vulnerabilities for a real, present package.json", which is a
+    legitimate clean result here (unlike Dependabot's ambiguous empty-alerts
+    case, since this reads the manifest directly with no default-branch
+    dependency).
+
+    npm audit REQUIRES an existing package-lock.json -- confirmed live (Item
+    #54): without one it exits 1 with a top-level {"error": {"code":
+    "ENOLOCK", ...}} JSON body, which has no "vulnerabilities" key. The
+    original version of this function only ever checked for that key's
+    presence, so a missing lockfile silently produced "ran=True, 0 findings"
+    -- a real false-clean, caught only because Mike asked "how did zero
+    findings come up" and pushed for a from-scratch verification rather than
+    accepting the reported result. Generate one on the fly with
+    `npm install --package-lock-only` (confirmed live: ~37s for a real
+    Next.js app, well under the timeout ceiling) when missing, matching
+    npm's own suggested remedy in the ENOLOCK error text -- this makes scans
+    genuinely possible for requests that never got a lockfile committed
+    (e.g. a Managed Agents subagent that ran `npm install` rather than
+    `npm ci`+commit), rather than perpetually reporting "incomplete."
     """
     frontend_dir = Path(service_dir) / "frontend"
     if not (frontend_dir / "package.json").is_file():
         return ScanResult(tool="npm-audit", ran=True, findings=[])
+
+    if not (frontend_dir / "package-lock.json").is_file():
+        try:
+            lock_result = _run_shell(["npm", "install", "--package-lock-only"], cwd=str(frontend_dir))
+        except subprocess.TimeoutExpired:
+            return ScanResult(tool="npm-audit", ran=False, findings=[],
+                               run_failure_message=f"npm install --package-lock-only timed out after {_TOOL_TIMEOUT_SECONDS}s.")
+        except FileNotFoundError:
+            return ScanResult(tool="npm-audit", ran=False, findings=[],
+                               run_failure_message="npm is not on PATH.")
+        if lock_result.returncode != 0:
+            tail = (lock_result.stdout or "")[-2000:] + (lock_result.stderr or "")[-1000:]
+            return ScanResult(
+                tool="npm-audit", ran=False, findings=[],
+                run_failure_message=f"npm install --package-lock-only failed (no committed lockfile). Tail:\n\n{tail}",
+            )
 
     try:
         result = _run_shell(["npm", "audit", "--json"], cwd=str(frontend_dir))
@@ -541,6 +573,19 @@ def _run_npm_audit(service_dir: str) -> ScanResult:
         return ScanResult(
             tool="npm-audit", ran=False, findings=[],
             run_failure_message=f"npm audit did not produce parseable JSON. Tail of output:\n\n{tail}",
+        )
+
+    # Defense in depth: npm audit can return a top-level {"error": {...}}
+    # JSON body (ENOLOCK and other cases) that parses cleanly but has no
+    # "vulnerabilities" key -- must be checked explicitly, or it silently
+    # reads as "ran cleanly, found nothing" (the exact bug this function
+    # just had). Never treat an error response as a clean scan.
+    if "error" in data:
+        err = data["error"]
+        detail = err.get("summary") or err.get("detail") or json.dumps(err)
+        return ScanResult(
+            tool="npm-audit", ran=False, findings=[],
+            run_failure_message=f"npm audit returned an error: {detail}",
         )
 
     findings: list[Finding] = []
