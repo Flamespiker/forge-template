@@ -49,6 +49,11 @@ yourself rather than leaving them for review.
 (e.g. <target>/frontend/...). Do not intend a `node_modules/` directory or any other \
 installed-dependency output to be part of what gets committed -- only source and \
 config files (package.json, tsconfig.json, etc.) belong there.
+- Important exception to the line above: `package-lock.json` MUST be committed -- it \
+is not an excluded installed-dependency output like `node_modules/`. Running `npm \
+install`/`npm run build` generates it as a normal side effect; leave it in place in \
+your target directory afterward rather than deleting it as build residue. A missing \
+lockfile breaks `npm ci` in the Docker build this app will later be deployed with.
 
 When you believe your portion is complete and builds, say so clearly so the \
 coordinator knows it can proceed to integration and packaging."""
