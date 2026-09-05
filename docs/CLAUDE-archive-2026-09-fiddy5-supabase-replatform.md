@@ -7,7 +7,7 @@ Documentation Ownership section). Fiddy5's own ongoing tracking moves to its
 own Claude project once stood up; this entry is the handoff snapshot, not a
 living doc.
 
-## Addendum, same day — QA's frontend build failure (Item #57)
+## Addendum, same day — QA's frontend build failure (Item #59)
 
 PR #3 (`feature/google-oauth-setup` → `main` on `mike-digital-platform`,
 still open as a draft) triggered a real `04-qa.yml` run against
@@ -41,7 +41,7 @@ successfully. Re-verified live: real `qa-approved` label applied, backend
 `https://github.com/Flamespiker/forge-template/actions/runs/33983338153`).
 
 This is a real, narrow gap in the *shared* QA pipeline, not a Fiddy5-local
-fix — see Item #57 in CLAUDE.md's Open Items for the forward-looking note
+fix — see Item #59 in CLAUDE.md's Open Items for the forward-looking note
 (an app-declared build-time-env-vars manifest, same shape as the
 multi-platform Deploy Agent spec's adapter-declares-requirements pattern, is
 the likely eventual fix — not built here).

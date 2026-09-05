@@ -2503,7 +2503,7 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     mike-digital-platform` (sibling to this repo), on branch
     `feature/google-oauth-setup` — not yet pushed to origin, no PR opened
     yet.
-57. **`04-qa.yml` (the shared, core QA workflow every FORGE app's frontend
+59. **`04-qa.yml` (the shared, core QA workflow every FORGE app's frontend
     build goes through) now has Fiddy5-specific env var names hardcoded into
     it — `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`, both
     literal placeholder strings, added 2026-09-05 (commit `1c79686`) to fix a
