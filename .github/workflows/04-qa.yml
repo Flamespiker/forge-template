@@ -181,7 +181,7 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install frontend dependencies (if a frontend unit exists)
         if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
