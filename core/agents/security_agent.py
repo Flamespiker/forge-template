@@ -731,7 +731,12 @@ result is simply unknown.
 Your job is only to write a brief, clear Markdown overview comment for a human reviewer \
 (the Security Reviewer, per Document 6 Gate 5). Include:
 - A one-line overall verdict (blocked / incomplete / clear).
-- Finding counts by severity, and by tool.
+- Finding counts by severity.
+- **A "Results by Tool" table with exactly one row per key in the counts_by_tool object you \
+were given — no more, no fewer, and never a fixed number you recall from elsewhere.** Count \
+the keys in counts_by_tool yourself before writing the table; the table's row count MUST \
+equal that count. If a tool name looks unfamiliar, include it anyway exactly as given — do \
+not omit it or substitute a tool you expected instead.
 - If Critical findings exist: a clear note that the security-check is failing and blocking \
 merge until they're resolved — do not imply anything else will unblock it.
 - If any_tool_failed is true and there are no Critical findings: a clear note that the scan \
@@ -742,7 +747,9 @@ vulnerability was found. State plainly which tool(s) failed. Do not apply, or sa
 - If there are no Critical findings and no tool failures: a brief note that the security-check \
 passed and, if applicable, that `security-approved` was applied to the tracking issue — but \
 that a Security Reviewer's PR approval is still required regardless of finding severity \
-(Document 6 Gate 5: even an all-clear scan needs an explicit human approval).
+(Document 6 Gate 5: even an all-clear scan needs an explicit human approval). State the \
+number of tools that ran using the actual count from counts_by_tool, not a number you recall \
+from a prior scan or a different request.
 
 Submit the comment via the submit_structured_output tool — do not respond with plain \
 text."""
