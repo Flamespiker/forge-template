@@ -22,6 +22,16 @@ security → deploy) with human approval gates at each stage.
   session). Full pre-trim narrative lives in `docs/CLAUDE-archive-2026-08-*.md` — see
   "Further reading" at the end of this file.
 
+**Standing convention — no Docker Desktop for local dev/verification (decided
+2026-09-05):** for CI/build verification (matching the real Actions environment),
+use a `workflow_dispatch`-triggered GitHub Actions job on `ubuntu-latest`, same
+pattern as `forge-demo-apps`' old `verify-build.yml` (Item #23) — confirmed
+2026-09-05 that `mike-digital-platform` has no such workflow yet (only the three
+cross-repo dispatch workflows from Item #49); create one there before it's needed
+rather than reaching for Docker Desktop. For a local backend-logic sanity check
+with no real CI/build concern, use EF Core's in-memory provider (or the
+equivalent for whatever stack) instead of a throwaway Docker/Postgres container.
+
 ---
 
 ## Documentation Ownership
@@ -2411,6 +2421,57 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
       implementation_coordinator.py` (Part B Layer 2), this CLAUDE.md entry —
       five separate commits, one per logical unit (same convention as
       Item #43).
+56. **Google sign-in was completely non-functional on the deployed Fiddy5
+    app, and investigation surfaced a deeper backend gap than the missing
+    credentials alone.** Found live 2026-09-05: `req-2026-01-frontend` had
+    only `NEXTAUTH_URL` set — `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/
+    `NEXTAUTH_SECRET` were all missing, so no sign-in could ever complete.
+    Fixing that alone would not have been enough — `UserSyncMiddleware.cs`
+    already auto-provisions a `User` row for any authenticated Google
+    account, but `HouseholdController.cs` only ever exposed `ListMembers`/
+    `InviteMember`/`ListInvitations`, all three requiring the caller to
+    **already** belong to a household. There was no endpoint anywhere that
+    let a brand-new user with no pending invitation create their own
+    household — meaning the very first user of this app could never
+    actually get in, regardless of OAuth credentials being correct.
+
+    **Built and locally verified 2026-09-05:** new `POST /api/household` in
+    `HouseholdController.cs` (`mike-digital-platform`, branch
+    `feature/google-oauth-setup`, commit `e90ed8d`) — the caller becomes the
+    new household's admin (`Household.AdminUserId` + `HouseholdMember.
+    IsAdmin=true`), matching the shape every other household-aware endpoint
+    already expects. Verified via a standalone throwaway console program
+    (not part of either repo) that loads the real `HouseholdController`
+    class against EF Core's InMemory provider — not a real Postgres
+    container, per the new Docker Desktop convention above: create-then-
+    create-again for the same user correctly rejects the second call with
+    `400 ALREADY_HAS_HOUSEHOLD` and creates no duplicate row; two different
+    users each get their own independent household with no cross-
+    contamination. 18/18 checks passed. `dotnet build` also confirmed clean
+    beforehand. Also added a repo-wide `.gitignore` to `mike-digital-
+    platform` (commit `a24fb62`) — the repo had none at all, so a first
+    local `dotnet build` left `bin/`/`obj/` showing as untracked.
+
+    **Not yet done:** the Google Cloud Console OAuth client itself (Mike's
+    own action — consent screen, credentials, redirect URI pointed at
+    `req-2026-01-frontend.braveground-19119157.canadacentral.
+    azurecontainerapps.io/api/auth/callback/google`); wiring the resulting
+    `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/a generated `NEXTAUTH_SECRET`
+    into the Container App via the existing `_wire_keyvault_secret()`
+    pattern; a frontend onboarding step so a new user without a household
+    is routed to create one (today's login page still only has a single
+    "Continue with Google" button); and a live end-to-end test through
+    real Google sign-in, since the InMemory check above only covers the
+    backend logic in isolation. Tracked under ad hoc issue
+    `forge-template#18` (opened specifically for this work, separate from
+    REQ-2026-01's original tracking issue `#17`, per Mike's choice) — seeded
+    with a `forge:agent-comment` marker comment so `resolve_request_id()`
+    resolves it to `REQ-2026-01` for QA/Security dispatch once a PR opens;
+    confirmed live via a direct `resolve-request-id` run. Local clone of
+    `mike-digital-platform` now exists at `C:\Users\mikef\projects\
+    mike-digital-platform` (sibling to this repo), on branch
+    `feature/google-oauth-setup` — not yet pushed to origin, no PR opened
+    yet.
 
 Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 
