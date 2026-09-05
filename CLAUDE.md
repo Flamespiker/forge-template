@@ -62,6 +62,16 @@ genuinely short resolutions stay inline from the start.
 
 ## Current Build Phase
 
+**`docs/04_FORGE_Governance-v2.md` gained a new Team Layer subsection, 2026-09-05 —
+"Instance Scope: One FORGE Clone, One Context."** Prompted by Item #59 (a
+Fiddy5-specific env var pair hardcoded into the shared `04-qa.yml`) as a concrete
+example of an account/environment-scoped value with no declared home. States plainly
+that one FORGE clone/`team/config.yaml` is scoped to exactly one identity throughout —
+a personal-use and a work-use instance are two separate clones, not two configurations
+of one. One-line cross-reference added from `06_Orchestration_v11.md`'s Step 3 (Team
+Layer config) pointing back to it. No version bump on either doc — both edited in
+place.
+
 **`mike-digital-platform#3` merged 2026-09-05 via a deliberate Deploy-Agent-bypassed
 path — production is manual (Vercel + Supabase), Fiddy5 has no platform adapter yet.**
 `qa-approved`/`security-approved` both genuinely passed (real re-verification after
@@ -2536,6 +2546,21 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     of assuming, rather than each new app's stack silently growing this list.
     Not built here — flagged only. Full narrative:
     `docs/CLAUDE-archive-2026-09-fiddy5-supabase-replatform.md`.
+60. **`mike-digital-platform`'s `main` has zero branch protection at all** —
+    confirmed twice this session via `404 Branch not protected` (once before
+    PR #3's merge, once during it). Not even a required-status-checks rule,
+    let alone required reviewers. This was low-stakes while the repo had no
+    real automated wiring to anything consequential; it no longer is — Deploy
+    Agent now has real, live wiring to this repo (confirmed working today:
+    disabled/re-enabled around PR #3's merge, guard clause correctly reads
+    real labels off the tracking issue). Worth a protection rule requiring
+    the `qa-approved`/`security-approved` signal before merge — though since
+    those are labels on the FORGE tracking issue, not GitHub status checks on
+    the PR itself, this likely needs a small wiring change (e.g. a status
+    check `06-deploy.yml`'s own guard clause already half-duplicates) before
+    a literal "required status check" rule can point at them directly. Not
+    added here — flagged only, per Mike's explicit call not to add the rule
+    without deciding the mechanism first.
 
 Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 

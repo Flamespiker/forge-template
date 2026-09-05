@@ -47,6 +47,12 @@ The team layer contains what each team adapts for their own context:
 
 Team-layer files live in `team/` in each team's cloned FORGE repo instance. The Orchestration Manager owns and maintains them. No RFC is required to change them.
 
+### Instance Scope: One FORGE Clone, One Context
+
+Each FORGE instance (one repo clone, one `team/config.yaml`) is scoped to exactly one context — one GitHub account/org, one set of cloud accounts, one identity. This isn't a limitation to work around; it's the actual unit of isolation FORGE already relies on. `team/config.yaml`'s `FORGE_GITHUB_OWNER` and `FORGE_TARGET_REPO` already tie an instance to one GitHub identity (the 2026-09-04 platform swap exercised exactly this, moving the same instance to a new target within the same account) — the same logic extends to any other account-scoped resource an adapter needs (cloud provider accounts, deploy platform accounts, package registry credentials — see Item #59 for a concrete example of an account/environment-specific value that had no declared home and ended up hardcoded into a shared file instead).
+
+A personal-use instance and a work-use instance are not two configurations of one FORGE — they're two separate clones, each with its own repo, its own `team/config.yaml`, and its own credentials throughout. Deploy Platform Adapters (see the multi-platform Deploy Agent spec) never need their own logic for "which account" — that's resolved once, at the instance level, not per-app or per-adapter.
+
 ---
 
 ## Decision Authority

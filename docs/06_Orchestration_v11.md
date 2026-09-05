@@ -160,7 +160,9 @@ These secrets/variables are used by every workflow job to generate a short-lived
 
 Open `team/config.yaml` in your FORGE repo. This file is yours to edit. This is the exact
 schema the code reads — confirmed by a full codebase grep, not just a suggested shape —
-so use these key names and this nesting exactly:
+so use these key names and this nesting exactly. See the Governance Model's "Instance
+Scope: One FORGE Clone, One Context" section for why this file — and everything
+account-scoped it points at — is tied to exactly one context, never shared across two.
 
 ```yaml
 ado:
