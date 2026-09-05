@@ -2338,6 +2338,79 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     tool couldn't run at all and defaulted to zero) before trusting a
     result, especially for a scanner that's brand new and has not yet been
     exercised against a real, previously-known-vulnerable target.
+55. **Frontend Lockfile Commit Gap — the same missing-`package-lock.json` root
+    cause behind Items #52/#54 also broke Deploy's own `npm ci` Docker build
+    step (Fiddy5, 2026-09-04), fixed live via a targeted manual unblock at the
+    time (commit lockfile to `main`, replay `pr-merged`) with the systemic
+    fix deferred to this item.** Built and locally verified 2026-09-05, two
+    parts:
+    - **Part A (Deploy Agent safety net):** new `_ensure_frontend_lockfile()`
+      in `deploy_agent.py`, called from the per-unit pre-build loop right
+      alongside `_ensure_frontend_public_dir()` (same established pattern —
+      a filesystem-level fixup applied to every frontend unit before
+      `_docker_build()`). No-ops if `package-lock.json` already exists.
+      Otherwise reuses `_run_npm_audit()`'s exact `npm install
+      --package-lock-only` pattern (Item #54) rather than reimplementing it;
+      a failure there raises `RuntimeError`, handled by `run_deploy_agent()`'s
+      existing ADR-0011 try/except — not a new failure mode. The generated
+      lockfile is committed back to `main` (Deploy always builds from an
+      already-merged commit — see `run_deploy_agent()`'s own "Deploys against
+      the feature PR's HEAD commit" note) via a new `commit_files()` call,
+      but only after a **fresh** API read (new `github_helper.
+      get_branch_head_sha()`, added alongside `commit_files()` and reusing
+      its exact `git/ref/heads/{branch}` lookup) confirms `main`'s current
+      tip still equals `commit_sha`. A mismatch, or the commit itself
+      failing for any other reason, is logged and skipped — never blocks the
+      build, which always proceeds against the just-generated local file
+      either way.
+    - **Part B (Implementation-stage source fix) — confirmed real insertion
+      point, investigated rather than assumed:** the Frontend subagent's
+      task instructions live in `core/agents/subagents/frontend_agent.py`'s
+      `SYSTEM_PROMPT`, **not** `tasks.md` generation. But subagents make "no
+      direct commits" (confirmed via both `backend_agent.py`'s and
+      `frontend_agent.py`'s own module docstrings) — the real commit happens
+      later, in Python, when `implementation_coordinator.py` tars the shared
+      sandbox filesystem and `commit_files()`s the archive. So this is
+      genuinely **two** insertion points, not one — flagged per the original
+      spec's own instruction to report back if the structure turned out to
+      differ from a single clean location — matching this codebase's
+      existing Item #8 "Layer 1 prevention + Layer 2 backstop" shape rather
+      than inventing a new pattern:
+      - Layer 1 (`frontend_agent.py` `SYSTEM_PROMPT`): the existing "only
+        source and config files... belong there" line was ambiguous enough
+        to plausibly read `package-lock.json` as excluded
+        installed-dependency output like `node_modules/` — added an explicit
+        exception clarifying it must be committed, generated as a normal
+        `npm install`/`npm run build` side effect.
+      - Layer 2 (`implementation_coordinator.py`'s `_COORDINATOR_SYSTEM_PROMPT`,
+        step 5 "Critical packaging rules"): added an explicit pre-archive
+        check — confirm `package-lock.json` exists in `frontend/` for any
+        Node-based unit, generating one itself via `npm install
+        --package-lock-only` if Frontend didn't leave one behind, before
+        `tar`-ing the archive.
+    - **Test results:** all four scenarios from the original spec were run.
+      Tests 1/3/4 (self-heal-and-commit on a ref match; no-op when a
+      lockfile already exists; self-heal-locally-but-skip-the-commit on a
+      ref mismatch) were run as real local functional tests against
+      `_ensure_frontend_lockfile()` — a real `npm install --package-lock-only`
+      genuinely executes and produces a real lockfile in all three;
+      `commit_files()`/`get_branch_head_sha()` were monkeypatched only to
+      avoid a real GitHub write, not to fake the core logic under test — all
+      three passed, including confirming zero npm/API calls fire at all when
+      a lockfile is already present (test 3). **Test 2 (confirm Part B's
+      prompt change actually prevents the gap in a real Stage 3 run) was
+      deliberately deferred, not run** — verifying a prompt-only change
+      requires a real Managed Agents session (real cost, 35-55+ min per this
+      file's own "Implementation completion detection" section), and unlike
+      Parts A/1/3/4 there's no cheaper local proxy for LLM prompt-following
+      behavior; same cost/time deferral precedent as Item #6's live
+      Stage 3 re-test. Flagged here rather than silently claimed as verified.
+    - Commits: `core/agents/utils/github_helper.py` (`get_branch_head_sha()`),
+      `core/agents/deploy_agent.py` (Part A), `core/agents/subagents/
+      frontend_agent.py` (Part B Layer 1), `core/agents/
+      implementation_coordinator.py` (Part B Layer 2), this CLAUDE.md entry —
+      five separate commits, one per logical unit (same convention as
+      Item #43).
 
 Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 
