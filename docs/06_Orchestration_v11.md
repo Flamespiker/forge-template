@@ -2,6 +2,12 @@
 
 **Full-SDLC Orchestration with Review Gates for Engineers**
 
+**v11 changelog:** added "Claude.ai Project Structure for Multi-App Builds"
+under Part 3 (Customizing Your Instance) — guidance on when to build an app
+inside FORGE's own Claude.ai project versus spinning up a dedicated project
+for it, since the two have different lifecycles and Claude.ai projects don't
+share memory with each other.
+
 **v10 changelog:** added a "Recommended: Keep a Local Clone of Your Target
 Monorepo" note under Failure Handling — not required by the pipeline, but a
 cheap safety net (2026-09-04's missing-workflow-files recovery only worked
@@ -393,6 +399,36 @@ Core layer is locked because these items affect security, compliance, interopera
 - The agent prompts in `core/agents/`
 
 If you have a legitimate reason to change something in `core/`, open an RFC in the FORGE template repo. See the Governance Model document for the RFC process.
+
+### Claude.ai Project Structure for Multi-App Builds
+
+FORGE's own orchestration work (this repo, forge-template) and each app it builds
+(mike-digital-platform, one service per app) have different lifecycles — keep them in
+different Claude.ai projects, not folded into one.
+
+Rule of thumb: build each app's Greenfield request (Intake -> Design -> Implementation ->
+Deploy) inside FORGE's own Claude.ai project. Intake spec authorship, Design review, and any
+pipeline bugs a build surfaces are genuinely engine-level work, and belong in the same
+conversation as everything else about how FORGE operates -- splitting to a separate project
+from day one would just mean shuttling engine-level findings straight back the first time a
+build surfaces a real Deploy Agent or Design Agent gap.
+
+Once an app reaches a stable first Deploy and moves into ongoing life (feature requests,
+Enhancement requests, its own backlog), spin up a dedicated Claude.ai project for it. From
+that point on, most of what happens is genuinely about that app, not about FORGE's engine,
+and folding it into FORGE's own project just accumulates one app's product narrative on top
+of another's, indefinitely.
+
+What moves to the new project: the app's own context doc / backlog going forward, its
+product-specific open items, its deploy-instance details.
+What stays in FORGE's project regardless: anything in core/, platform-adapter behavior,
+architecture decisions -- the stuff true for every app FORGE builds.
+
+The one bridge that doesn't exist automatically: Claude.ai projects don't share memory. If a
+build inside an app's own project surfaces a genuine engine-level gap, that finding has to be
+carried back to FORGE's own project by hand. Seed a new app's project with a short context doc
+up front (product spec, chosen platform adapter, initial open items) the same way FORGE's own
+project leans on FORGE-context_v*.md, so its first session doesn't start cold.
 
 ---
 

@@ -62,6 +62,16 @@ genuinely short resolutions stay inline from the start.
 
 ## Current Build Phase
 
+**`docs/06_Orchestration_v10.md` → `v11`, 2026-09-05.** Added "Claude.ai
+Project Structure for Multi-App Builds" under Part 3 (Customizing Your
+Instance) — when to build an app inside FORGE's own Claude.ai project versus
+spinning up a dedicated one for it, since the two have different lifecycles
+and Claude.ai projects don't share memory with each other. Prompted by this
+session's own Fiddy5 work spanning two repos/projects in practice. README's
+doc reference table and failure-handling link both updated to point at v11;
+old v10 removed per this doc series' existing single-current-version
+convention.
+
 **Fiddy5 replatformed to Vercel + Supabase, 2026-09-05 — supersedes Items
 #55/#56 below (and #57/#58, tracked in the newest `docs/FORGE-context_v*.md`,
 not yet backfilled into this file's numbered Open Items).** Built from
