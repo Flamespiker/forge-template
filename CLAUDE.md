@@ -2162,6 +2162,102 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
        commit once the QA fix lands, which does it automatically) to get a
        real Security verdict.
 
+    **Resolved 2026-09-05** — both manual steps done (Dependabot alerts
+    enabled on the repo; the App's `vulnerability_alerts` permission turned
+    out to already be granted at the App level, not per-repo, so nothing
+    further was needed there). `GET .../vulnerability-alerts` confirmed
+    `204`, and `get_dependabot_alerts()` succeeded for real (`0` alerts —
+    at the time, correctly, since nothing had been scanned yet). **This
+    fully fixed the 403 itself, but immediately surfaced a second, deeper,
+    previously-unknown problem — see Item #52**: the resulting "0 findings"
+    was not a real clean result either, for a structural reason unrelated
+    to permissions.
+51. **`create_ado_items.py` has zero idempotency protection — every
+    re-trigger of `02-design.yml` creates a brand-new, complete, duplicate
+    ADO Epic→Features→User-Stories hierarchy from scratch.** Found live
+    2026-09-05 on `REQ-2026-01`: three separate, identically-titled Epics
+    (#198, #222, #246) existed in ADO, each with its own full 24-item tree
+    (1 Epic + 6 Features + 17 User Stories), confirmed via direct ADO
+    queries — not a WIQL/display artifact. Root cause: `create_ado_items.py`
+    runs as step 1 of `02-design.yml`, **before** `design_agent.py`'s own
+    Claude call, and has no check for whether real ADO items already exist
+    for this request — so it re-created a full tree on all three
+    `requirements-approved`-triggered runs of `02-design.yml` for this
+    request (19:09, 19:43, 20:02 on 2026-09-04), including the first two,
+    which both later failed downstream (the `_MAX_TOKENS` truncation fixed
+    earlier the same day) — the ADO side effect had already committed real,
+    billable-nowhere-but-messy work items before that later failure
+    occurred. Cleaned up live: the two orphaned trees (#198, #222 — 48 items
+    total) confirmed via full parent-child traversal and soft-deleted via
+    the ADO REST API (recoverable, not permanent); the real bugs filed
+    during QA retries (`#270`, `#272`) were independently confirmed still
+    correctly linked to Story `#248` in the surviving tree (`#246`), so
+    nothing real was lost. **Not fixed at the code level** — no idempotency
+    check was added to `create_ado_items.py`. A real fix would need it to
+    check `docs/<request-id>/ado-work-items.json` for already-populated
+    real ADO IDs (written back by a prior successful run) and skip
+    re-creation, or a query against ADO itself for an existing Epic with a
+    matching title/tag. Open.
+52. **Security Agent's Dependabot check produces a false-clean result on a
+    Greenfield request's first-ever Implementation PR — a structural gap,
+    not a permissions issue.** Found live 2026-09-05, immediately after
+    Item #50's fix: with the 403 resolved, Security passed with "0 findings"
+    across all three tools — but direct inspection of
+    `mike-digital-platform`'s dependency-graph SBOM showed only **2**
+    entries total (the repo itself and one GitHub Action dependency from
+    the workflow files) — zero npm or NuGet packages. `main` was confirmed
+    to have **no application code at all** (only `.github/`, `README.md`,
+    `docs/` — the real `package.json`/`.csproj` files exist only on the
+    unmerged `feature/REQ-2026-01` branch). This is not a "wait for the
+    dependency graph to catch up" timing issue: GitHub's dependency graph
+    only scans the **default branch**, and QA/Security gate **before**
+    merge by design (Document 6) — so there is structurally nothing for
+    Dependabot to ever find on a brand-new repo's first Implementation PR,
+    no matter how long it waits. `security_agent.py`'s existing safeguard
+    (`get_dependency_graph_package_count() == 0` → treat as a scan failure,
+    not a clean pass — see Item #50's own code excerpt) exists for exactly
+    this situation, but only fires on a package count of **exactly 0**; a
+    partially-populated graph (our real count: 2) slips through as if fully
+    populated. Likely always a latent gap in the original design — never
+    surfaced before because every prior live validation of this scanner
+    happened against `forge-demo-apps`, whose `main` already had substantial
+    real application history merged from earlier requests by the time it
+    was tested (confirmed 1512 real SBOM packages there). This is the first
+    time the scanner was ever exercised against a repo's true first-ever
+    Implementation PR. `security-approved` is currently sitting on
+    `REQ-2026-01` (`forge-template#17`) as a false-clean — the real
+    dependency vulnerability status of Fiddy5's actual packages (including
+    `next@14.2.5`, a version with a documented history of real CVEs per
+    Item #19/#20's Dependabot triage) is genuinely unknown. Not fixed at the
+    code level — no change made to `security_agent.py`'s threshold. A real
+    fix needs a smarter signal than a bare package count (e.g., confirming
+    the scanned manifests' own dependency counts look plausible relative to
+    what's actually in the repo, or explicitly flagging "target branch has
+    no matching service directory yet" as its own distinct, named failure
+    mode). Open.
+53. **QA's retry-limit guard doesn't actually block a 4th attempt — the
+    label it checks for is never applied at the boundary where the report
+    text says it is.** Found live 2026-09-05 on `REQ-2026-01`: QA's
+    attempt-3 report explicitly said "Retry Limit Reached... Manual triage
+    required... No further automated retries will occur," but the label
+    actually applied was `qa-loop-back` — not `qc-retry-limit-reached`,
+    which is what `run_qa_agent()`'s own pre-run guard checks for (per this
+    file's qa_agent.py section: "checks for an existing `qc-retry-limit-
+    reached` label before running any test suite and skips entirely if
+    present"). Confirmed live: pushing a fix after attempt 3 triggered a
+    real attempt 4 (which passed), proving the guard never engaged. Likely
+    an off-by-one between the message-text threshold (`attempt >= 3`,
+    "no more retries" wording) and the actual label-application threshold
+    (`attempt > 3`, per this file's existing qa_agent.py docs: "`qa-loop-
+    back` (failures, attempts ≤ 3), or `qc-retry-limit-reached` (failures,
+    attempts > 3)") — attempt 3 is `≤ 3`, so `qa-loop-back` was correctly
+    applied *by that rule*, while the human-facing message text was written
+    as if attempt 3 were already the final, blocked attempt. Not fixed at
+    the code level — needs either the message softened to match the real
+    (`attempt > 3`) blocking threshold, or the threshold itself changed to
+    match the message's stated intent (block starting at attempt 3, not 4).
+    Open.
+
 Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 
 ## Further reading
