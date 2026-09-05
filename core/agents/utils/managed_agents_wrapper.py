@@ -550,7 +550,7 @@ def _files_headers() -> dict[str, str]:
     }
 
 
-def list_session_output_files(session_id: str, limit: int = 100) -> list[dict]:
+def list_session_output_files(session_id: str, limit: int = 1000) -> list[dict]:
     """
     List files persisted from a Managed Agents session's sandbox filesystem.
 
@@ -558,6 +558,17 @@ def list_session_output_files(session_id: str, limit: int = 100) -> list[dict]:
     persisted and appear here. Anything written elsewhere in the container (scratch
     files, intermediate build output) is invisible to this call and is discarded
     when the session's environment is archived.
+
+    Default limit raised 100 -> 1000 (the API's actual per-page ceiling) after a
+    real recovery on REQ-2026-01 failed to find a genuine implementation.tar.gz:
+    the session had accumulated 991 output files total (Backend/Frontend/Test
+    Writer subagents apparently wrote real build/dependency artifacts here over a
+    52-minute run, not just the final archive), and the old limit=100 call
+    silently returned only the first page -- which didn't include the archive.
+    This function has no pagination beyond one page; 1000 is the API's own max
+    for a single request, not an arbitrary bump -- a session with more than 1000
+    output files would need real pagination, not attempted here since it hasn't
+    been observed yet.
 
     Args:
         session_id: The session ID whose output files to list.

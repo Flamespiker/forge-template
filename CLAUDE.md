@@ -2024,6 +2024,47 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     Agent's first comment carry a loud, impossible-to-miss warning banner
     when it falls back to `"unknown"`, so a human catches it at Stage 0
     instead of days later. Open.
+48. **`implementation_coordinator.py`'s coordinator ended its own final turn
+    without ever running the packaging step it was explicitly instructed to
+    — real, expensive incident on REQ-2026-01, 2026-09-04.** After a real
+    ~52-minute, ~$14.22 (`list_cost.amount` is cents, per Item #34) Stage 3
+    run in which Backend, Frontend, and Test Writer subagents all genuinely
+    completed (confirmed by the coordinator's own messages: "Backend and
+    Frontend are both verified and complete" / Test Writer finished), the
+    coordinator's last turn ended with `stop_reason: end_turn` — no tool
+    call, no message — right where it should have run the `tar` packaging
+    command into `implementation.tar.gz`. No `session.error`, no budget
+    exhaustion, nothing pointing to a systemic cause; this reads as a
+    one-off model lapse, not a reproducible bug, so nothing was changed in
+    the coordinator's own prompt/instructions. **Recovered without
+    redoing any of the paid-for work**: since the session was left idle but
+    *not archived* (per Item #6/#8's existing safety check — exactly the
+    scenario it was built for), a single follow-up `user.message` was sent
+    to the live session asking it to run the exact packaging command from
+    its own original instructions. It complied immediately, verified 117
+    source files / 0 build artifacts / 278KB, and confirmed "IMPLEMENTATION
+    COMPLETE." `--recover-session` then found the archive and completed the
+    normal commit/PR/comment path (`mike-digital-platform#2`, 117 files,
+    16458 additions) — for a small fraction of a full retry's cost.
+    **This surfaced a second, real, previously-unobserved bug along the
+    way, which WAS fixed at the code level:**
+    `managed_agents_wrapper.py`'s `list_session_output_files()` defaulted
+    to `limit=100` with no pagination — this session had accumulated **991**
+    output files (Backend/Frontend/Test Writer apparently wrote real
+    build/dependency artifacts into `/mnt/session/outputs/` over the
+    52-minute run, not just the final archive), so the first recovery
+    attempt genuinely failed to find `implementation.tar.gz` even though it
+    existed (confirmed directly via the Files API with a raised limit).
+    Fixed by raising the default to `1000` — the API's actual per-page
+    ceiling, not an arbitrary guess — since this function has no
+    pagination beyond one page; a session exceeding 1000 output files
+    would need real pagination, not yet built since it hasn't been
+    observed. Standing takeaway for any future stuck/failed Stage 3
+    session: **don't assume a missing archive means the work is gone** —
+    check whether the session is still alive (idle, not archived) before
+    considering a costly full retry; a follow-up message or a
+    `list_session_output_files` limit fix can be far cheaper than redoing
+    real subagent work.
 
 Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 
