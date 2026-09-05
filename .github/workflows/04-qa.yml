@@ -55,6 +55,21 @@ jobs:
       PR_NUMBER: ${{ github.event.client_payload.pr_number }}
       HEAD_SHA: ${{ github.event.client_payload.head_sha }}
       HEAD_REF: ${{ github.event.client_payload.head_ref }}
+      # Placeholders, not real credentials -- QA's `npm run build` never makes
+      # a real network call (this app fetches client-side, after hydration,
+      # not at build time). Without *some* value, @supabase/ssr's
+      # createBrowserClient() throws synchronously the instant a page module
+      # that imports the Supabase client is evaluated during static
+      # prerendering -- confirmed live as the real root cause of the frontend
+      # build failure on REQ-2026-01/forge-template#18 (a Node-version bump
+      # was tried first and did NOT fix this; this is the actual fix).
+      # Matches the same pattern verify-frontend-build.yml already uses.
+      # Fiddy5-specific env var names baked into the shared QA pipeline --
+      # harmless no-op for any app that doesn't reference them, but a real
+      # per-app "what build-time env vars does this app need" discovery gap
+      # if more apps hit this same shape of problem. Not solved generally here.
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder
     steps:
       - uses: actions/checkout@v4
 
