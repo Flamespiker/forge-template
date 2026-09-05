@@ -148,7 +148,7 @@ from dotenv import load_dotenv
 
 from core.agents.utils import file_io
 from core.agents.utils.enhancement_target import resolve_service_root
-from core.agents.utils.github_helper import get_file_contents, post_comment, post_pr_comment
+from core.agents.utils.github_helper import commit_files, get_branch_head_sha, get_file_contents, post_comment, post_pr_comment
 
 load_dotenv()
 
@@ -487,6 +487,115 @@ def _ensure_frontend_public_dir(build_context: Path) -> bool:
         "Dockerfile's public/ COPY step doesn't fail.", public_dir,
     )
     return True
+
+
+def _ensure_frontend_lockfile(unit: DeployUnit, commit_sha: str, resolved_service_dir: str) -> None:
+    """
+    Item #55 Part A: Deploy Agent's own safety net for a frontend unit whose
+    checkout has no package-lock.json -- the generated Dockerfile's `npm ci`
+    step (and, before this fix, the Security Agent's npm-audit scanner --
+    see Item #54) hard-requires one and fails outright without it.
+
+    Ideally this never fires -- Item #55 Part B's fix in
+    core/agents/implementation_coordinator.py/frontend_agent.py should mean a
+    lockfile is already committed by the time Deploy runs. This is the
+    backstop for every case that isn't: an older request built before that
+    fix landed, or a lockfile deleted/never generated for some other reason.
+
+    Reuses security_agent.py's exact `npm install --package-lock-only`
+    pattern (Item #54) rather than reimplementing it -- generates a lockfile
+    from the checked-out package.json without a full `npm install`.
+
+    A failure here (npm not on PATH, install itself fails) is a real,
+    run-ending problem -- raises RuntimeError so the caller's existing
+    ADR-0011 try/except (post a failure comment, re-raise) handles it; this
+    is not a new failure mode; Deploy has no separate contained-failure
+    reporting path for a single pre-build step the way QA/Security's
+    ScanResult does.
+
+    The generated lockfile is committed back to `main` -- Deploy always
+    builds from a commit already merged to main (see run_deploy_agent()'s own
+    "Deploys against the feature PR's HEAD commit" note) -- but ONLY if a
+    fresh API read confirms main's current tip is still exactly commit_sha.
+    If main has moved since (e.g. a different request's commit landed in the
+    meantime), committing here could attach a lockfile generated from a
+    package.json that's no longer main's real, current one -- so the
+    self-heal commit is skipped in that case. Either way, the just-generated
+    local lockfile is left on disk and the build proceeds against it --
+    Deploy must never fail *because* the safety-commit itself couldn't land.
+    """
+    lockfile_path = unit.build_context / "package-lock.json"
+    if lockfile_path.is_file():
+        return
+
+    logger.warning(
+        "%s has no package-lock.json -- generating one now (Item #55 Part A "
+        "safety net; Part B should prevent this in normal operation).",
+        unit.build_context,
+    )
+    try:
+        install_result = _run_shell(
+            ["npm", "install", "--package-lock-only"], cwd=str(unit.build_context),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"npm install --package-lock-only timed out for unit {unit.name} "
+            f"while generating a missing package-lock.json: {exc}"
+        ) from exc
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"npm is not on PATH -- cannot generate a missing package-lock.json "
+            f"for unit {unit.name}: {exc}"
+        ) from exc
+    if install_result.returncode != 0:
+        tail = (install_result.stdout or "")[-2000:] + (install_result.stderr or "")[-1000:]
+        raise RuntimeError(
+            f"npm install --package-lock-only failed for unit {unit.name} while "
+            f"generating a missing package-lock.json. Tail:\n\n{tail}"
+        )
+
+    try:
+        current_main_sha = get_branch_head_sha("main")
+    except Exception:
+        logger.exception(
+            "Could not fetch main's current tip SHA -- skipping the self-heal "
+            "commit for %s's package-lock.json; proceeding with the local "
+            "build using the just-generated file.", unit.name,
+        )
+        return
+
+    if current_main_sha != commit_sha:
+        logger.warning(
+            "main's current tip (%s) no longer matches the commit this Deploy "
+            "run is building (%s) -- skipping the self-heal commit for %s's "
+            "package-lock.json to avoid attaching it to a package.json that "
+            "may no longer be main's real, current one. Proceeding with the "
+            "local build using the just-generated file.",
+            current_main_sha, commit_sha, unit.name,
+        )
+        return
+
+    repo_relative_path = f"{resolved_service_dir}/frontend/package-lock.json"
+    try:
+        commit_files(
+            "main",
+            {repo_relative_path: lockfile_path.read_text(encoding="utf-8")},
+            commit_message=(
+                f"fix(deploy): generate missing package-lock.json for {unit.name} "
+                "(Item #55 Deploy Agent self-heal)"
+            ),
+        )
+        logger.info(
+            "Committed generated package-lock.json for %s to main at %s.",
+            unit.name, repo_relative_path,
+        )
+    except Exception:
+        logger.exception(
+            "Self-heal commit of %s's package-lock.json to main failed -- "
+            "proceeding with the local build using the just-generated file "
+            "regardless; this is a best-effort commit, not a build "
+            "prerequisite.", unit.name,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -926,6 +1035,7 @@ def run_deploy_agent(
             _ensure_dockerignore(unit.build_context, unit.unit_type)
             if unit.unit_type == "frontend":
                 _ensure_frontend_public_dir(unit.build_context)
+                _ensure_frontend_lockfile(unit, commit_sha, resolved_service_dir)
 
         # Real docker build + push for every unit, dry-run or not — same
         # "exercise the real tool, skip only the posting" pattern as
