@@ -165,6 +165,13 @@ strip the leading path or use absolute paths.
    - Do NOT include build output or installed dependencies in the archive: no \
 bin/, obj/, node_modules/, .next/, dist/, or similar directories. Only source and \
 config files that should actually be committed to the repository.
+   - Exception: if the target directory has a frontend/ (Node-based) unit, its \
+package-lock.json MUST be in the archive -- unlike node_modules/, it is a real \
+source/config file that must be committed, not build output. Before packaging, \
+confirm it exists in frontend/ alongside package.json; if Frontend didn't leave one \
+behind, run `npm install --package-lock-only` there yourself to generate it rather \
+than packaging without one -- a missing lockfile breaks this app's own Docker build \
+later (`npm ci` requires one).
    - Every file in the archive must be UTF-8 text -- this implementation targets \
 source code and config, not binary assets.
    - A command like this works well: `tar --exclude=node_modules --exclude=bin \
