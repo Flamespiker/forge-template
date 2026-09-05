@@ -111,28 +111,39 @@ jobs:
           python -m core.agents.workflow_glue download-issue-attachment \
             --issue-number "${{ steps.issue.outputs.issue_number }}" \
             --output intake.xlsx \
-            --extension .xlsx
+            --extension .xlsx \
+            --optional
           python - <<'PY'
           import os
           from core.agents.utils import file_io
 
-          parsed = file_io.read_xlsx("intake.xlsx")
-          request_type_section = parsed["overview"].get("request_type") or {}
-          request_type_value = (request_type_section.get("Request Type") or "").strip()
-          is_enhancement = request_type_value.lower() == "enhancement"
-
           existing_service = ""
-          if is_enhancement:
-              for key, value in request_type_section.items():
-                  if "existing service name" in key.lower():
-                      existing_service = (value or "").strip()
-                      break
-              if not existing_service:
-                  print(
-                      "Request Type is 'Enhancement' but 'Existing Service Name' is "
-                      "blank -- treating as Greenfield for QA (Ingestion Agent's own "
-                      "Stage 0a check should already have flagged this at Intake)."
-                  )
+          request_type_value = ""
+
+          if not os.path.exists("intake.xlsx"):
+              print(
+                  "No intake spreadsheet attached to this tracking issue -- an ad "
+                  "hoc issue, not one created via 00-intake.yml. Treating as "
+                  "Greenfield for QA (nothing to check for an Enhancement's "
+                  "existing service)."
+              )
+          else:
+              parsed = file_io.read_xlsx("intake.xlsx")
+              request_type_section = parsed["overview"].get("request_type") or {}
+              request_type_value = (request_type_section.get("Request Type") or "").strip()
+              is_enhancement = request_type_value.lower() == "enhancement"
+
+              if is_enhancement:
+                  for key, value in request_type_section.items():
+                      if "existing service name" in key.lower():
+                          existing_service = (value or "").strip()
+                          break
+                  if not existing_service:
+                      print(
+                          "Request Type is 'Enhancement' but 'Existing Service Name' is "
+                          "blank -- treating as Greenfield for QA (Ingestion Agent's own "
+                          "Stage 0a check should already have flagged this at Intake)."
+                      )
 
           if not existing_service:
               print(f"Request Type = '{request_type_value or '(blank)'}' -- Greenfield or unrecognized, no --existing-service flag.")

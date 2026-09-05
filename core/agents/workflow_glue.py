@@ -7,14 +7,19 @@ calling workflow step can read `steps.<id>.outputs.<name>`.
 
 Four subcommands:
 
-  download-issue-attachment --issue-number N --output PATH [--extension .xlsx]
+  download-issue-attachment --issue-number N --output PATH [--extension .xlsx] [--optional]
       Finds the first attachment link matching --extension in a tracking
       issue's body (checked first) or comments (checked in order if the body
       has none), downloads it, writes it to --output. Handles both GitHub
       attachment URL shapes: the classic "github.com/<owner>/<repo>/files/.."
       and the newer "github.com/user-attachments/files/..". Needed by
       00-intake.yml (the BA's original upload) and 01-requirements.yml (same
-      spreadsheet, re-read for the Requirements Agent).
+      spreadsheet, re-read for the Requirements Agent). --optional exits 0
+      with no output file instead of raising when nothing matches -- used by
+      the Enhancement-detection steps in 03-implementation.yml/04-qa.yml/
+      05-security.yml, which re-download the spreadsheet only as an optional
+      signal and must not hard-fail on an ad hoc tracking issue that was never
+      created through 00-intake.yml and so has no spreadsheet at all.
 
   resolve-request-id --issue-number N
       Scans every comment on the tracking issue for the
@@ -123,7 +128,9 @@ def _write_output(name: str, value: str) -> None:
             f.write(f"{name}={value}\n")
 
 
-def download_issue_attachment(issue_number: int, output_path: str, extension: str) -> str:
+def download_issue_attachment(
+    issue_number: int, output_path: str, extension: str, optional: bool = False
+) -> str | None:
     issue = get_issue(issue_number)
     candidates = [issue.get("body") or ""]
     candidates.extend(c["body"] for c in get_issue_comments(issue_number))
@@ -138,6 +145,22 @@ def download_issue_attachment(issue_number: int, output_path: str, extension: st
             break
 
     if url is None:
+        if optional:
+            # Ad hoc tracking issues (opened directly, not via 00-intake.yml)
+            # legitimately have no intake spreadsheet at all -- e.g. the
+            # Enhancement-detection steps in 03-implementation.yml/
+            # 04-qa.yml/05-security.yml, which only want the spreadsheet as an
+            # optional signal, not something they themselves require. Callers
+            # that genuinely need the spreadsheet (00-intake.yml,
+            # 01-requirements.yml) must not pass optional=True -- a missing
+            # attachment there is still a real bug worth failing loud on.
+            logger.warning(
+                "No attachment matching '%s' found in issue #%s's body or "
+                "comments -- optional=True, treating as absent rather than failing.",
+                extension,
+                issue_number,
+            )
+            return None
         raise ValueError(
             f"No attachment matching '{extension}' found in issue #{issue_number}'s "
             "body or comments. The BA must attach the intake spreadsheet directly "
@@ -362,6 +385,13 @@ def main() -> None:
     p_attach.add_argument("--issue-number", required=True, type=int)
     p_attach.add_argument("--output", required=True)
     p_attach.add_argument("--extension", default=".xlsx")
+    p_attach.add_argument(
+        "--optional",
+        action="store_true",
+        help="Exit 0 with no output file instead of raising if no matching "
+        "attachment is found (for callers that treat the spreadsheet as an "
+        "optional signal, not a requirement).",
+    )
 
     p_reqid = subparsers.add_parser("resolve-request-id")
     p_reqid.add_argument("--issue-number", required=True, type=int)
@@ -381,7 +411,9 @@ def main() -> None:
 
     try:
         if args.action == "download-issue-attachment":
-            download_issue_attachment(args.issue_number, args.output, args.extension)
+            download_issue_attachment(
+                args.issue_number, args.output, args.extension, optional=args.optional
+            )
         elif args.action == "resolve-request-id":
             _write_output("request_id", resolve_request_id(args.issue_number))
         elif args.action == "resolve-feature-pr":
