@@ -2261,7 +2261,13 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     correctly found 8 real npm findings and 25 real NuGet findings on an
     un-patched historical checkout, and correctly returned a clean
     `ran=True, 0 findings` (not a false failure) when no frontend/backend
-    directory exists at all. **Immediate app-level fix, same commit cycle:**
+    directory exists at all. **Caveat found minutes later (see Item #54):**
+    that historical checkout happened to already have a real committed
+    `package-lock.json` from months of actual dev work — the untested case
+    was a real request's frontend with no lockfile at all, which is exactly
+    what Fiddy5 turned out to have, and it silently broke `npm audit` in a
+    different way than any case this test suite covered. **Immediate
+    app-level fix, same commit cycle:**
     bumped Fiddy5's `next` 14.2.5 → 14.2.35 (the exact fix already validated
     for `REQ-2026-03`) and, going one step further than that historical fix
     did, also bumped the paired `eslint-config-next` to the same version
@@ -2296,6 +2302,42 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     (`attempt > 3`) blocking threshold, or the threshold itself changed to
     match the message's stated intent (block starting at attempt 3, not 4).
     Open.
+54. **`_run_npm_audit()` (added the same day, Item #52's own fix) silently
+    treated its own tool-level error as a clean scan — a false-clean bug in
+    a fix for a false-clean bug.** Found live 2026-09-05, minutes after
+    declaring Item #52 fixed and verified, only because Mike asked "I still
+    don't understand how zero findings came up" instead of accepting the
+    reported all-clear at face value. Root cause: Fiddy5's real
+    `frontend/` has no committed `package-lock.json`, and `npm audit`
+    hard-requires one — without it, it exits 1 with a top-level `{"error":
+    {"code": "ENOLOCK", ...}}` JSON body that has no `"vulnerabilities"`
+    key at all. The parser only ever checked for that key's presence, so
+    the missing lockfile silently produced `ran=True, 0 findings` instead
+    of a scan failure — confirmed by reproducing the exact subprocess call
+    locally (`shutil.which("npm")`-resolved, matching `_run_shell()`
+    exactly) and inspecting the real stdout byte-for-byte. Fixed two ways:
+    generate a lockfile on the fly with `npm install --package-lock-only`
+    when one's missing (npm's own suggested remedy in the ENOLOCK message;
+    confirmed live at ~37s for a real Next.js app, well under the 600s
+    ceiling) — turning "can't scan" into "scans for real" rather than
+    perpetually reporting incomplete — plus an explicit top-level `"error"`
+    key check as defense in depth against any other error shape npm audit
+    might return. **Re-verified locally before pushing, this time against
+    the real generated lockfile, not just the error path:** 5 real HIGH
+    findings surface for Fiddy5, including `next` itself — 21 CVEs with no
+    14.x backport (vulnerable range `9.3.4-canary.0 - 16.3.0-preview.10`,
+    published after 14.2.35 shipped), the exact same already-known,
+    already-accepted-risk category this file's Item #11 already documents
+    for other requests on the 14.x line — plus 4 dev/build-tooling-only
+    findings (`glob`, `postcss`, `eslint-config-next`,
+    `@next/eslint-plugin-next`) not shipped to the deployed runtime app.
+    **Standing lesson, worth restating given this is the second false-clean
+    found in one afternoon (the first being Item #52 itself):** a
+    deterministic scanner returning "0 findings" is not self-verifying —
+    always check what a zero actually means (tool genuinely ran clean vs.
+    tool couldn't run at all and defaulted to zero) before trusting a
+    result, especially for a scanner that's brand new and has not yet been
+    exercised against a real, previously-known-vulnerable target.
 
 Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 
