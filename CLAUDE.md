@@ -62,6 +62,27 @@ genuinely short resolutions stay inline from the start.
 
 ## Current Build Phase
 
+**Fiddy5 replatformed to Vercel + Supabase, 2026-09-05 — supersedes Items
+#55/#56 below (and #57/#58, tracked in the newest `docs/FORGE-context_v*.md`,
+not yet backfilled into this file's numbered Open Items).** Built from
+`docs/Fiddy5-Vercel-Supabase-Deploy-Spec-v1.md` (Claude.ai): Postgres schema +
+RLS for all 14 real entities, `create-household`/`fetch-holding-prices` Edge
+Functions, `@supabase/ssr` auth replacing NextAuth, and `lib/apiClient.ts`
+rewritten on `supabase-js` with every exported function signature preserved
+(zero changes needed to `hooks/*.ts` or any page). The .NET backend and its
+Azure Container Apps are being retired by this change, not fixed — the
+REST-API-mismatch (#57) and no-database (#58) bugs are moot once there's no
+.NET backend left to have them. **Not yet done: Supabase project
+provisioning, Google OAuth re-wiring, and the real end-to-end smoke test —
+all Mike's action items — so the two live Azure Container Apps
+(`req-2026-01-frontend`/`-backend`) have deliberately NOT been decommissioned
+yet**, per the same gate the spec itself sets (verify live, then
+decommission). Full narrative, every spec correction made during
+investigation, and local build-verification status:
+`docs/CLAUDE-archive-2026-09-fiddy5-supabase-replatform.md`. Fiddy5's own
+ongoing tracking moves to its own Claude project once stood up — this file
+won't carry deeper Fiddy5 narrative going forward.
+
 **Platform swap completed 2026-09-04 — target platform is now `mike-digital-platform`
 ("mdp"), not `forge-demo-apps`.** Full decommission-and-reprovision cycle following
 `docs/FORGE-platform-swap-runbook.md`: old `forge-build-rg` (5 live Container Apps,
