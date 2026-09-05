@@ -2503,6 +2503,29 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     mike-digital-platform` (sibling to this repo), on branch
     `feature/google-oauth-setup` — not yet pushed to origin, no PR opened
     yet.
+57. **`04-qa.yml` (the shared, core QA workflow every FORGE app's frontend
+    build goes through) now has Fiddy5-specific env var names hardcoded into
+    it — `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`, both
+    literal placeholder strings, added 2026-09-05 (commit `1c79686`) to fix a
+    real QA build failure: `@supabase/ssr`'s `createBrowserClient()` throws
+    synchronously when called with `undefined` args, and `lib/apiClient.ts`
+    calls it at module top level — meaning any page that imports it crashes
+    during Next's static prerendering unless *some* value is present, real or
+    not (this app's build never makes a real network call, so a placeholder
+    is correct and sufficient). Confirmed live: two prior attempts at this
+    fix (a Node 20→22 bump) did not work — re-verified against a real QA
+    re-run before landing this one, which did. This is a real, narrow gap in
+    the shared pipeline, not a Fiddy5-local file — any future app using a
+    different frontend stack (or a different Supabase project, or no
+    Supabase at all) has no way to tell `04-qa.yml` what *its* build-time env
+    vars are; today it only happens to work for Fiddy5 because these two
+    names match. The likely eventual fix has the same shape as the
+    multi-platform Deploy Agent spec's adapter-declares-requirements pattern
+    (`docs/Specs/Deploy-Agent-Multi-Platform-Spec-v2.md`) — an app-declared
+    manifest of required build-time env vars that `04-qa.yml` reads instead
+    of assuming, rather than each new app's stack silently growing this list.
+    Not built here — flagged only. Full narrative:
+    `docs/CLAUDE-archive-2026-09-fiddy5-supabase-replatform.md`.
 
 Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 

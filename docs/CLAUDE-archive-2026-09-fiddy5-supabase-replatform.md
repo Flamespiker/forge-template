@@ -7,6 +7,45 @@ Documentation Ownership section). Fiddy5's own ongoing tracking moves to its
 own Claude project once stood up; this entry is the handoff snapshot, not a
 living doc.
 
+## Addendum, same day — QA's frontend build failure (Item #57)
+
+PR #3 (`feature/google-oauth-setup` → `main` on `mike-digital-platform`,
+still open as a draft) triggered a real `04-qa.yml` run against
+`forge-template#18`, which genuinely failed — the frontend production build
+crashed on 9 routes (everything importing `lib/apiClient.ts`) with `Cannot
+read properties of null (reading 'useContext')` during Next's static
+prerendering.
+
+First hypothesis, tried and disproven live: `@supabase/supabase-js@2.115.0`
+declares `engines.node: >=22.0.0`, and `04-qa.yml`/`05-security.yml` both
+pinned Node 20 — bumped both to 22 (commits `76b53bf`, `ffc74bf`), re-ran QA
+for real, **still failed identically**. Not the cause.
+
+Real root cause, found by reproducing the exact call directly (`node -e`
+against the installed `@supabase/ssr` package): `createBrowserClient()`
+throws synchronously — `"Your project's URL and API key are required..."` —
+when called with `undefined` args. `lib/apiClient.ts` calls it at module top
+level (`const supabase = createClient();`), which executes during Next's
+static prerendering for every route that imports it — exactly the 9 routes
+that failed. Confirmed via plain `grep`, not inference, that neither
+`04-qa.yml`'s job env nor `qa_agent.py`'s `_run_shell()` (no `env=` override,
+inherits the job's environment as-is) ever set
+`NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY` anywhere. Fixed
+(commit `1c79686`) by adding both as literal placeholder strings
+(`https://placeholder.supabase.co` / `placeholder`) to `04-qa.yml`'s job-level
+`env:` block — invented values, not read from any credentials file or other
+source (no real Supabase credentials existed anywhere in this session at any
+point) — matching the pattern `verify-frontend-build.yml` already used
+successfully. Re-verified live: real `qa-approved` label applied, backend
+91/91, frontend build clean (run
+`https://github.com/Flamespiker/forge-template/actions/runs/33983338153`).
+
+This is a real, narrow gap in the *shared* QA pipeline, not a Fiddy5-local
+fix — see Item #57 in CLAUDE.md's Open Items for the forward-looking note
+(an app-declared build-time-env-vars manifest, same shape as the
+multi-platform Deploy Agent spec's adapter-declares-requirements pattern, is
+the likely eventual fix — not built here).
+
 ## Source
 
 `docs/Fiddy5-Vercel-Supabase-Deploy-Spec-v1.md` (Claude.ai, 2026-09-05),
