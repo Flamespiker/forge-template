@@ -2228,13 +2228,52 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     `REQ-2026-01` (`forge-template#17`) as a false-clean — the real
     dependency vulnerability status of Fiddy5's actual packages (including
     `next@14.2.5`, a version with a documented history of real CVEs per
-    Item #19/#20's Dependabot triage) is genuinely unknown. Not fixed at the
-    code level — no change made to `security_agent.py`'s threshold. A real
-    fix needs a smarter signal than a bare package count (e.g., confirming
-    the scanned manifests' own dependency counts look plausible relative to
-    what's actually in the repo, or explicitly flagging "target branch has
-    no matching service directory yet" as its own distinct, named failure
-    mode). Open.
+    Item #19/#20's Dependabot triage) is genuinely unknown.
+
+    **Resolved 2026-09-05, at the code level.** Investigated GitHub's actual
+    first-party answer to "scan a PR's real dependencies before merge" —
+    the Dependency Review API (`dependency-graph/compare/{basehead}`) — and
+    confirmed live it returns `403` on `mike-digital-platform` specifically
+    because it requires paid **GitHub Advanced Security** on private repos
+    (confirmed via GitHub's own docs, not assumed). Not available on this
+    instance's current plan. Built the free substitute instead: two new
+    scanners in `security_agent.py`, `_run_npm_audit()` and
+    `_run_dotnet_audit()`, using `npm audit --json` and `dotnet list package
+    --vulnerable --include-transitive --format json` — both read the real
+    manifests on the actual PR checkout directly, with no dependence on any
+    other branch's state, the same way Semgrep/Gitleaks already do. Kept
+    alongside Dependabot (still the right tool for continuous, repo-wide,
+    post-merge monitoring) rather than replacing it. Confirmed live against
+    a real historical checkout: `npm audit` needs only `package.json`/
+    `package-lock.json` (works with `node_modules` absent — verified by
+    removing it and re-running, identical result); `dotnet list package
+    --vulnerable` requires `dotnet restore` first (errors clearly otherwise)
+    — both scanners handle this. Backend unit discovery reuses
+    `deploy_agent.py`'s own convention (`rglob("*.csproj")`, skip any path
+    segment containing "test") so this scans the same real units Deploy
+    will later build. `05-security.yml` gained explicit `actions/setup-
+    dotnet@v4`/`actions/setup-node@v4` steps (matching `04-qa.yml`'s pinned
+    versions, `8.0.x`/`20`) since this job previously only needed Python;
+    also removed a stale OWASP Dependency-Check install step left over from
+    before the 2026-08-19 Dependabot swap (never invoked by any code since
+    then — wasted CI time, found while already in this file). Live-tested
+    both new scanners directly against a real checkout before pushing:
+    correctly found 8 real npm findings and 25 real NuGet findings on an
+    un-patched historical checkout, and correctly returned a clean
+    `ran=True, 0 findings` (not a false failure) when no frontend/backend
+    directory exists at all. **Immediate app-level fix, same commit cycle:**
+    bumped Fiddy5's `next` 14.2.5 → 14.2.35 (the exact fix already validated
+    for `REQ-2026-03`) and, going one step further than that historical fix
+    did, also bumped the paired `eslint-config-next` to the same version
+    (a devDependency, lower real risk, but a one-line fix that fully closes
+    this finding class rather than leaving the known partial gap the
+    original fix left behind). **Forward-looking note, per Mike:** this
+    instance will likely move to a GitHub plan with Advanced Security
+    included at some point — `security_agent.py`'s own comment block now
+    flags this explicitly: prefer switching to the Dependency Review API
+    when that happens (richer data — "was this vulnerability newly
+    introduced by this PR," not just "does it exist at all") rather than
+    treating npm audit/dotnet list package as the permanent answer.
 53. **QA's retry-limit guard doesn't actually block a 4th attempt — the
     label it checks for is never applied at the boundary where the report
     text says it is.** Found live 2026-09-05 on `REQ-2026-01`: QA's

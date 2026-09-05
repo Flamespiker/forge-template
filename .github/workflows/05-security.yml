@@ -19,9 +19,12 @@
 # to post to (that step is what resolves the only issue number we have) --
 # the Actions run failing loudly is the fallback signal for that specific case.
 #
-# Gitleaks and OWASP Dependency-Check are standalone binaries, not pip
-# packages (see CLAUDE.md's Python Environment section) -- installed fresh on
-# every run below. Semgrep is in requirements.txt already.
+# Gitleaks is a standalone binary, not a pip package (see CLAUDE.md's Python
+# Environment section) -- installed fresh on every run below. Semgrep is in
+# requirements.txt already. dotnet/node are set up explicitly (matching
+# 04-qa.yml's own pinned versions) for npm audit / dotnet list package
+# --vulnerable (Item #52, added 2026-09-05) -- previously this job only
+# needed Python.
 #
 # "Determine Enhancement status and existing service" (Item #25 §2.1) mirrors
 # 03-implementation.yml's own Item #24 step exactly -- re-downloads the intake
@@ -51,7 +54,6 @@ jobs:
       FORGE_TARGET_REPO: ${{ vars.FORGE_TARGET_REPO }}
       FORGE_SOURCE_REPO: forge-template
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
       PR_NUMBER: ${{ github.event.client_payload.pr_number }}
       HEAD_SHA: ${{ github.event.client_payload.head_sha }}
       HEAD_REF: ${{ github.event.client_payload.head_ref }}
@@ -175,14 +177,15 @@ jobs:
             | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
 
-      - name: Install OWASP Dependency-Check
+      - uses: actions/setup-dotnet@v4
         if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
-        run: |
-          curl -sSfL -o dependency-check.zip \
-            https://github.com/jeremylong/DependencyCheck/releases/download/v12.1.0/dependency-check-12.1.0-release.zip
-          unzip -q dependency-check.zip -d "$HOME/dependency-check-dist"
-          chmod +x "$HOME/dependency-check-dist/dependency-check/bin/dependency-check.sh"
-          echo "$HOME/dependency-check-dist/dependency-check/bin" >> "$GITHUB_PATH"
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.proceed == 'true' && steps.depth.outputs.proceed == 'true'
+        with:
+          node-version: '20'
 
       - name: Run Security Agent
         id: run_agent

@@ -1,9 +1,14 @@
 """
 FORGE Security Agent — Stage 5 (Security).
 
-Runs three security scanners (via shell) against a checked-out copy of the
-feature branch — Semgrep (SAST), Gitleaks (secrets detection), and GitHub
-Dependabot alerts (dependency vulnerability scanning, via API) — parses their output,
+Runs five security scanners (via shell, or the GitHub API for Dependabot)
+against a checked-out copy of the feature branch — Semgrep (SAST), Gitleaks
+(secrets detection), GitHub Dependabot alerts (repo-wide, default-branch
+dependency vulnerability scanning, via API), and npm audit / dotnet list
+package --vulnerable (per-PR dependency vulnerability scanning, against the
+real manifests on THIS checkout — added 2026-09-05, Item #52, see the
+dedicated section below for why Dependabot alone isn't sufficient here) —
+parses their output,
 maps every finding to FORGE's locked Critical/High/Medium/Low schema
 (Document 7) using a fixed, deterministic table per tool (never an LLM
 judgment call), and:
@@ -60,6 +65,10 @@ across SAST, secrets, and dependency scanning outputs"):
     kind of documented best-effort limitation as QA's assertion-vs-crash
     heuristic (Semgrep community rules don't expose a clean CVSS-equivalent
     score to threshold against).
+  - npm audit / dotnet list package --vulnerable: same critical/high/medium/
+    low vocabulary as Dependabot, mapped 1:1 (npm's lowercase "moderate" ->
+    Medium, its "info" tier -> Low, no equivalent in this fixed schema
+    otherwise). See the dedicated section below for the full rationale.
 
 Like qa_agent.py, this script needs the actual repository contents on disk —
 it assumes a local checkout of the monorepo at the feature branch already
@@ -70,7 +79,10 @@ script does not clone anything itself.
 PREREQUISITE: semgrep and gitleaks must be on PATH wherever this script
 runs. Unlike QA's dotnet/npm (already required for local app development),
 these are tooling dependencies specific to the Security stage. See
-CLAUDE.md for install notes.
+CLAUDE.md for install notes. npm audit / dotnet list package --vulnerable
+(added 2026-09-05) reuse the same dotnet/npm CLIs QA already requires --
+no new tooling dependency, but this script's own CI job must have them on
+PATH too (previously only needed for QA's job).
 
 DEPENDENCY SCANNING (swapped from OWASP Dependency-Check to GitHub
 Dependabot alerts, 2026-08-19 -- see docs/FORGE-DependencyScanner-Dependabot-
@@ -177,7 +189,7 @@ _SEV_LOW = "Low"
 
 @dataclass
 class Finding:
-    tool: str            # "semgrep" | "gitleaks" | "dependabot"
+    tool: str            # "semgrep" | "gitleaks" | "dependabot" | "npm-audit" | "dotnet-audit"
     severity: str         # Critical | High | Medium | Low
     path: str | None      # repo-relative file path, if applicable
     line: int | None      # 1-indexed line, if applicable
@@ -432,6 +444,211 @@ def _run_dependabot_check(repo_full_name: str, service_root: str) -> ScanResult:
 
 
 # ---------------------------------------------------------------------------
+# npm audit / dotnet list package --vulnerable (dependency scanning, per-PR)
+#
+# Added 2026-09-05 (Item #52): Dependabot alerts (above) are computed from
+# GitHub's dependency graph, which is anchored to the repo's DEFAULT branch --
+# confirmed live via a real SBOM showing only 2 entries (no app packages) on
+# a Greenfield request's first-ever Implementation PR, whose real manifests
+# exist only on the unmerged feature branch. GitHub's actual per-PR answer to
+# this (Dependency Review, dependency-graph/compare/{basehead}) returns 403
+# for private repos without paid GitHub Advanced Security -- confirmed live
+# against mike-digital-platform. npm audit / dotnet list package --vulnerable
+# are the free alternative: both read the real manifests on THIS checkout
+# directly (no dependence on any other branch's state), the same way
+# Semgrep/Gitleaks already do. Kept alongside Dependabot, not replacing it --
+# Dependabot is still the right tool for continuous post-merge monitoring
+# across the whole repo; these two are what actually gate a fresh PR.
+#
+# Confirmed live (a real historical checkout with next@14.2.5, since patched):
+# npm audit needs only package.json/package-lock.json -- works with
+# node_modules absent, so no `npm install` step is required first (verified
+# by removing node_modules and re-running: identical result). dotnet list
+# package --vulnerable, by contrast, requires `dotnet restore` to have run
+# first (errors with "No assets file was found... run restore" otherwise) --
+# confirmed live the same way.
+#
+# FUTURE NOTE: if this FORGE instance ever moves to a GitHub plan/tier with
+# GitHub Advanced Security included, prefer switching to the Dependency
+# Review API (dependency-graph/compare/{basehead}) instead of (or as well
+# as) these two -- it's GitHub's own first-party per-PR dependency diff, with
+# richer data than a bare CLI audit (e.g. "was this vulnerability newly
+# introduced by this PR" rather than "does this vulnerability exist at all").
+# npm audit / dotnet list package --vulnerable are the free-tier substitute,
+# not assumed to be the permanent answer.
+# ---------------------------------------------------------------------------
+
+def _classify_dependency_audit_severity(raw_severity: str | None) -> str:
+    """
+    Shared by both npm audit and dotnet list package --vulnerable. npm's
+    severities are lowercase (info/low/moderate/high/critical, confirmed live
+    via a real `npm audit --json` run); dotnet's are capitalized
+    (Low/Moderate/High/Critical, confirmed live via a real `dotnet list
+    package --vulnerable --format json` run). npm's "info" tier has no
+    equivalent in FORGE's fixed four-level schema -- mapped to Low, the same
+    spirit as Dependabot's missing-severity default one tier below unknown.
+    """
+    mapping = {
+        "critical": _SEV_CRITICAL,
+        "high": _SEV_HIGH,
+        "moderate": _SEV_MEDIUM,
+        "medium": _SEV_MEDIUM,
+        "low": _SEV_LOW,
+        "info": _SEV_LOW,
+    }
+    severity = mapping.get((raw_severity or "").lower())
+    if severity is None:
+        logger.warning(
+            "Dependency audit finding has an unrecognized/missing severity %r -- "
+            "defaulting to Medium.",
+            raw_severity,
+        )
+        return _SEV_MEDIUM
+    return severity
+
+
+def _run_npm_audit(service_dir: str) -> ScanResult:
+    """
+    ran=True with zero findings when there's no frontend/package.json at all --
+    "not applicable" (no frontend unit in this request), same principle as
+    QA's own not_applicable outcome for a missing test suite, not a scan
+    failure. ran=False only on a genuine execution problem (npm missing,
+    malformed output) -- never on "zero vulnerabilities for a real, present
+    package.json", which is a legitimate clean result here (unlike
+    Dependabot's ambiguous empty-alerts case, since this reads the manifest
+    directly with no default-branch dependency).
+    """
+    frontend_dir = Path(service_dir) / "frontend"
+    if not (frontend_dir / "package.json").is_file():
+        return ScanResult(tool="npm-audit", ran=True, findings=[])
+
+    try:
+        result = _run_shell(["npm", "audit", "--json"], cwd=str(frontend_dir))
+    except subprocess.TimeoutExpired:
+        return ScanResult(tool="npm-audit", ran=False, findings=[],
+                           run_failure_message=f"npm audit timed out after {_TOOL_TIMEOUT_SECONDS}s.")
+    except FileNotFoundError:
+        return ScanResult(tool="npm-audit", ran=False, findings=[],
+                           run_failure_message="npm is not on PATH.")
+
+    # npm audit exits 1 (not 0) the moment it finds any vulnerability -- same
+    # non-zero-on-findings behavior as gitleaks/dotnet below. Parse stdout
+    # regardless of exit code; only a genuinely unparseable body is a failure.
+    try:
+        data = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        tail = (result.stdout or "")[-3000:] + (result.stderr or "")[-1000:]
+        return ScanResult(
+            tool="npm-audit", ran=False, findings=[],
+            run_failure_message=f"npm audit did not produce parseable JSON. Tail of output:\n\n{tail}",
+        )
+
+    findings: list[Finding] = []
+    for pkg_name, vuln in (data.get("vulnerabilities") or {}).items():
+        severity = _classify_dependency_audit_severity(vuln.get("severity"))
+        via = vuln.get("via") or []
+        titles = [v.get("title") for v in via if isinstance(v, dict) and v.get("title")]
+        urls = [v.get("url") for v in via if isinstance(v, dict) and v.get("url")]
+        message = "; ".join(titles) if titles else f"Vulnerable range: {vuln.get('range', 'unknown')}"
+        if urls:
+            message = f"{message} ({urls[0]})"
+        findings.append(Finding(
+            tool="npm-audit",
+            severity=severity,
+            path="frontend/package.json",
+            line=None,
+            rule_id=pkg_name,
+            message=message[:1000],
+        ))
+    return ScanResult(tool="npm-audit", ran=True, findings=findings)
+
+
+def _run_dotnet_audit(service_dir: str) -> ScanResult:
+    """
+    Iterates every non-test backend unit under service_dir/backend/, using the
+    exact same discovery convention as deploy_agent.py's own unit detection
+    (rglob for *.csproj, skip any path segment containing "test" case-
+    insensitively) -- so this scans the same real units Deploy will later
+    build, not an independently-guessed set.
+
+    ran=True with zero findings when there's no backend/ at all or it has no
+    matching .csproj (not applicable, mirroring _run_npm_audit() above).
+    ran=False if restore or list fails for any *one* unit -- a partial
+    dependency scan is treated the same as a failed one (Document 7's
+    established "unknown status blocks" precedent), not silently reported as
+    clean for the units that did succeed.
+    """
+    backend_dir = Path(service_dir) / "backend"
+    if not backend_dir.is_dir():
+        return ScanResult(tool="dotnet-audit", ran=True, findings=[])
+
+    csproj_paths = [
+        p for p in sorted(backend_dir.rglob("*.csproj"))
+        if not any("test" in part.lower() for part in p.relative_to(backend_dir).parts)
+    ]
+    if not csproj_paths:
+        return ScanResult(tool="dotnet-audit", ran=True, findings=[])
+
+    findings: list[Finding] = []
+    for csproj_path in csproj_paths:
+        try:
+            restore_result = _run_shell(["dotnet", "restore", str(csproj_path)], cwd=service_dir)
+        except subprocess.TimeoutExpired:
+            return ScanResult(tool="dotnet-audit", ran=False, findings=[],
+                               run_failure_message=f"dotnet restore timed out for {csproj_path.name}.")
+        except FileNotFoundError:
+            return ScanResult(tool="dotnet-audit", ran=False, findings=[],
+                               run_failure_message="dotnet is not on PATH.")
+        if restore_result.returncode != 0:
+            tail = (restore_result.stdout or "")[-2000:] + (restore_result.stderr or "")[-1000:]
+            return ScanResult(
+                tool="dotnet-audit", ran=False, findings=[],
+                run_failure_message=f"dotnet restore failed for {csproj_path.name}. Tail:\n\n{tail}",
+            )
+
+        try:
+            list_result = _run_shell(
+                ["dotnet", "list", str(csproj_path), "package", "--vulnerable",
+                 "--include-transitive", "--format", "json"],
+                cwd=service_dir,
+            )
+        except subprocess.TimeoutExpired:
+            return ScanResult(tool="dotnet-audit", ran=False, findings=[],
+                               run_failure_message=f"dotnet list package timed out for {csproj_path.name}.")
+
+        try:
+            data = json.loads(list_result.stdout or "{}")
+        except json.JSONDecodeError:
+            tail = (list_result.stdout or "")[-3000:] + (list_result.stderr or "")[-1000:]
+            return ScanResult(
+                tool="dotnet-audit", ran=False, findings=[],
+                run_failure_message=f"dotnet list package did not produce parseable JSON for {csproj_path.name}. Tail:\n\n{tail}",
+            )
+        if data.get("problems"):
+            problem_text = "; ".join(p.get("text", "") for p in data["problems"])
+            return ScanResult(
+                tool="dotnet-audit", ran=False, findings=[],
+                run_failure_message=f"dotnet list package reported problems for {csproj_path.name}: {problem_text}",
+            )
+
+        rel_csproj = csproj_path.relative_to(service_dir)
+        for project in data.get("projects", []):
+            for framework in project.get("frameworks", []):
+                for key in ("topLevelPackages", "transitivePackages"):
+                    for pkg in framework.get(key) or []:
+                        for vuln in pkg.get("vulnerabilities") or []:
+                            findings.append(Finding(
+                                tool="dotnet-audit",
+                                severity=_classify_dependency_audit_severity(vuln.get("severity")),
+                                path=str(rel_csproj).replace("\\", "/"),
+                                line=None,
+                                rule_id=f"{pkg['id']} {pkg.get('resolvedVersion', '')}".strip(),
+                                message=f"Advisory: {vuln.get('advisoryurl', 'unknown')}"[:1000],
+                            ))
+    return ScanResult(tool="dotnet-audit", ran=True, findings=findings)
+
+
+# ---------------------------------------------------------------------------
 # Shared: comment building, posting, orchestration
 # ---------------------------------------------------------------------------
 
@@ -648,8 +865,13 @@ def run_security_agent(
         semgrep_result = _run_semgrep(service_dir)
         gitleaks_result = _run_gitleaks(service_dir)
         dependabot_result = _run_dependabot_check(repo_full_name, resolved_target)
+        npm_audit_result = _run_npm_audit(service_dir)
+        dotnet_audit_result = _run_dotnet_audit(service_dir)
 
-        all_results = [semgrep_result, gitleaks_result, dependabot_result]
+        all_results = [
+            semgrep_result, gitleaks_result, dependabot_result,
+            npm_audit_result, dotnet_audit_result,
+        ]
         any_tool_failed = any(not r.ran for r in all_results)
         all_findings = [f for r in all_results for f in r.findings]
 
