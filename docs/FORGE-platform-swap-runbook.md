@@ -272,6 +272,13 @@ Example prompt:
 - [ ] **New GitHub repo has its own `FORGE_APP_CLIENT_ID` variable and
       `FORGE_APP_PRIVATE_KEY` secret** — these don't cross repos from the
       orchestration repo and must be set separately here
+- [ ] **Dependabot alerts + Dependency graph enabled on the new target repo,
+      and the `forge-pipeline` App granted `vulnerability_alerts`
+      (Read-only) on it** — confirmed live 2026-09-04 (`CLAUDE.md` Open
+      Item #50) that this repo-specific prerequisite from the *old* target
+      doesn't carry over: Security Agent's Dependabot check `403`'d on the
+      new repo until this was redone. Confirm via `GET /repos/{owner}/
+      {repo}/vulnerability-alerts` returning `204`, not `404`.
 - [ ] **`pipeline-state` branch exists on the new target repo**
       (`GET /repos/{owner}/{repo}/branches` should list it)
 - [ ] GitHub App installation includes the new target repo

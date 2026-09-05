@@ -2127,6 +2127,40 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
       requiring a real run through Stage 5, not just Stage 1) all updated so
       a future fresh setup *or* swap has both the instructions and the
       actual files to copy from, not tribal knowledge or luck.
+50. **Security Agent's Dependabot scanner failed (`403`) against
+    `mike-digital-platform` — a documented one-time prerequisite from the
+    old platform was never redone for the new one.** Found live 2026-09-04,
+    same `REQ-2026-01` PR (`mike-digital-platform#2`) as Item #49, once
+    Security actually started running for the first time. Verdict:
+    `INCOMPLETE` — Semgrep and Gitleaks both ran clean (0 findings), but
+    Dependabot alerts returned `403`, and `security_agent.py`'s own gating
+    (`any_tool_failed`) correctly withheld `security-approved` rather than
+    passing on partial results. Per this file's own security_agent.py
+    section (written during the original `forge-demo-apps` setup): Security
+    Agent's Dependabot check requires (a) Dependabot alerts + dependency
+    graph enabled on the target repo, and (b) the `forge-pipeline` GitHub
+    App's installation granted the `vulnerability_alerts` permission
+    (Read-only) — both **repo-specific**, so neither carried over when the
+    target repo changed. QA also did not pass on this same PR, for an
+    unrelated real reason (a genuine frontend TypeScript compile error,
+    `session` referenced out of scope in `app/(app)/assets/page.tsx:94` —
+    `qa-loop-back` applied, ADO Bug #270 filed, attempt 1 of 3) — tracked
+    here only for completeness of this PR's state, not as a platform gap.
+    Fix requires Mike's own action (repo-owner + App-owner permissions,
+    neither available to an API token) — open until done:
+    1. Enable **Dependabot alerts** and **Dependency graph** on
+       `mike-digital-platform` (Settings → Code security and analysis).
+    2. Grant the `forge-pipeline` App the **Dependabot alerts: Read-only**
+       permission (App settings → Permissions & events → add "Vulnerability
+       alerts" as Read-only), then approve the resulting pending permission
+       request on the installation (Settings → Applications → Installed
+       GitHub Apps → forge-pipeline → Configure).
+    3. Confirm via `GET /repos/Flamespiker/mike-digital-platform/vulnerability-alerts`
+       returning `204` (not `404`) — same live-confirmation pattern used
+       the first time this was set up for `forge-demo-apps`.
+    4. Re-fire the `feature-pr-opened` dispatch for PR #2 (or push a new
+       commit once the QA fix lands, which does it automatically) to get a
+       real Security verdict.
 
 Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 
