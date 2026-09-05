@@ -707,62 +707,87 @@ def post_findings(pr_number: int, commit_sha: str, findings: list[Finding]) -> d
     return {"posted_inline": posted, "posted_as_summary": len(to_summarize)}
 
 
+_TOOL_DISPLAY_NAMES = {
+    "semgrep": "Semgrep",
+    "gitleaks": "Gitleaks",
+    "dependabot": "GitHub Dependabot",
+    "npm-audit": "npm audit",
+    "dotnet-audit": "dotnet list package --vulnerable",
+}
+
+
+def _build_finding_summary_table(counts_by_severity: dict[str, int]) -> str:
+    """
+    Built in Python, not by the model — same "deterministic code decides
+    facts" principle already used for individual finding bodies
+    (_build_finding_comment()). Added 2026-09-05 after confirming live,
+    twice, that asking the model to transcribe a variable-length tool list
+    into a table is unreliable: invoke_agent() never enables thinking, so a
+    forced single-turn tool call gives the model no room to actually count
+    before answering, and it kept writing a fixed "three tools" table even
+    when five real entries were passed to it, before and after two
+    increasingly explicit prompt rewrites.
+    """
+    total = sum(counts_by_severity.values())
+    lines = ["| Severity | Count |", "|----------|-------|"]
+    for sev, emoji in ((_SEV_CRITICAL, "🔴"), (_SEV_HIGH, "🟠"), (_SEV_MEDIUM, "🟡"), (_SEV_LOW, "🔵")):
+        lines.append(f"| {emoji} {sev} | {counts_by_severity.get(sev, 0)} |")
+    lines.append(f"| **Total** | **{total}** |")
+    return "\n".join(lines)
+
+
+def _build_results_by_tool_table(all_results: list[ScanResult]) -> str:
+    """Same rationale as _build_finding_summary_table() above."""
+    lines = ["| Tool | Findings | Status |", "|------|----------|--------|"]
+    for r in all_results:
+        display_name = _TOOL_DISPLAY_NAMES.get(r.tool, r.tool)
+        status = "✅ Ran successfully" if r.ran else f"❌ Failed — {r.run_failure_message or 'no report produced'}"
+        lines.append(f"| {display_name} | {len(r.findings)} | {status} |")
+    return "\n".join(lines)
+
+
 _SYSTEM_PROMPT = """You are the FORGE Security Agent for Legal Aid Alberta's software delivery \
-pipeline, writing a short human-facing overview comment for a feature PR's security check.
+pipeline, writing two short pieces of text for a feature PR's security check comment.
 
-You will be given already-computed, deterministic scan results: which of the scanners \
-(Semgrep, Gitleaks, GitHub Dependabot, npm audit, dotnet list package --vulnerable) ran \
-successfully — tools_ran and counts_by_tool list exactly which ones actually ran for this \
-request; report every tool present in that data, not a fixed list you recall — finding \
-counts by severity (Critical/High/Medium/Low — already decided by fixed, non-AI-judgment \
-mapping tables), whether any Critical finding exists, and the check run conclusion.
+The Finding Summary table (by severity) and the Results by Tool table are built separately \
+by deterministic code and inserted verbatim — you never see or write them, so there is no \
+tool list or count for you to get wrong. You are given only: whether any Critical finding \
+exists (has_critical), whether any_tool_failed is true (one or more scanners failed to \
+execute at all — crashed, timed out, or never produced a report — a distinct case from \
+"ran cleanly and found nothing"), and the check run conclusion.
 
-Do NOT re-judge severity or re-interpret individual findings — these are already decided \
-by deterministic code and must be reported exactly as given. Do not write the individual \
-finding descriptions; those are posted separately as inline PR comments.
+Write exactly two things:
+1. verdict_line — one short sentence: "blocked" (has_critical), "incomplete" \
+(any_tool_failed and not has_critical), or "clear" (neither). Do not mention specific tools \
+or counts here — those are in the tables above your text.
+2. notes_markdown — one to three short bullet points of human-facing commentary:
+   - If has_critical: state plainly that security-check is failing and blocks merge until \
+resolved — do not imply anything else will unblock it.
+   - If any_tool_failed and not has_critical: state plainly that the scan is INCOMPLETE and \
+the true security status is not yet known — do not imply a vulnerability was found. Do not \
+say `security-approved` was applied.
+   - If neither: note that security-check passed and (if applicable) `security-approved` was \
+applied — but that a Security Reviewer's explicit PR approval is still required regardless \
+of severity (Document 6 Gate 5: even an all-clear scan needs human sign-off).
 
-You will also be told whether any_tool_failed is true — meaning one or more of the \
-scanners that should have run failed to execute at all (crashed, timed out, or never \
-produced its report), as opposed to running cleanly and finding nothing. This is a \
-distinct case from Critical findings and must be worded distinctly: never imply \
-vulnerabilities were found when the real story is that the scan is incomplete and the \
-result is simply unknown.
+Do not re-judge severity, do not re-interpret individual findings (posted separately as \
+inline PR comments), and do not attempt to reproduce either table yourself.
 
-Your job is only to write a brief, clear Markdown overview comment for a human reviewer \
-(the Security Reviewer, per Document 6 Gate 5). Include:
-- A one-line overall verdict (blocked / incomplete / clear).
-- Finding counts by severity.
-- **A "Results by Tool" table with exactly one row per key in the counts_by_tool object you \
-were given — no more, no fewer, and never a fixed number you recall from elsewhere.** Count \
-the keys in counts_by_tool yourself before writing the table; the table's row count MUST \
-equal that count. If a tool name looks unfamiliar, include it anyway exactly as given — do \
-not omit it or substitute a tool you expected instead.
-- If Critical findings exist: a clear note that the security-check is failing and blocking \
-merge until they're resolved — do not imply anything else will unblock it.
-- If any_tool_failed is true and there are no Critical findings: a clear note that the scan \
-is INCOMPLETE — one or more scanners failed to run, so the true security status of this PR \
-is not yet known — and that security-check is failing for that reason, not because a \
-vulnerability was found. State plainly which tool(s) failed. Do not apply, or say was applied, \
-`security-approved` in this case.
-- If there are no Critical findings and no tool failures: a brief note that the security-check \
-passed and, if applicable, that `security-approved` was applied to the tracking issue — but \
-that a Security Reviewer's PR approval is still required regardless of finding severity \
-(Document 6 Gate 5: even an all-clear scan needs an explicit human approval). State the \
-number of tools that ran using the actual count from counts_by_tool, not a number you recall \
-from a prior scan or a different request.
-
-Submit the comment via the submit_structured_output tool — do not respond with plain \
-text."""
+Submit via the submit_structured_output tool — do not respond with plain text."""
 
 _OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
-        "overview_markdown": {
+        "verdict_line": {
             "type": "string",
-            "description": "The full Markdown overview comment body.",
+            "description": "One short sentence stating the overall verdict (blocked / incomplete / clear).",
+        },
+        "notes_markdown": {
+            "type": "string",
+            "description": "One to three short Markdown bullet points of human-facing commentary — no tables, no tool names/counts.",
         },
     },
-    "required": ["overview_markdown"],
+    "required": ["verdict_line", "notes_markdown"],
     "additionalProperties": False,
 }
 
@@ -930,7 +955,21 @@ def run_security_agent(
                 "increase _MAX_TOKENS in security_agent.py and retry."
             )
         parsed_output = result.structured_output
-        overview_markdown = parsed_output["overview_markdown"]
+        verdict_emoji = "🔴" if has_critical else ("🔶" if any_tool_failed else "🔒")
+        verdict_title = "Blocked" if has_critical else ("Incomplete" if any_tool_failed else "All Clear")
+        overview_markdown = (
+            f"## {verdict_emoji} FORGE Security Scan — {verdict_title}\n\n"
+            f"**Overall verdict:** {parsed_output['verdict_line']}\n\n"
+            "---\n\n"
+            "### Finding Summary\n\n"
+            f"{_build_finding_summary_table(counts_by_severity)}\n\n"
+            "---\n\n"
+            "### Results by Tool\n\n"
+            f"{_build_results_by_tool_table(all_results)}\n\n"
+            "---\n\n"
+            "### Notes\n\n"
+            f"{parsed_output['notes_markdown']}"
+        )
 
     except Exception as exc:
         logger.exception("Security Agent failed for request %s", request_id)
