@@ -558,6 +558,29 @@ def open_pr(
     return pr
 
 
+def get_branch_head_sha(branch_name: str) -> str:
+    """
+    Fresh read of a branch's current tip commit SHA in the monorepo, via the
+    same Git Data API endpoint commit_files() itself uses internally (step 1
+    there) to resolve what to build its new commit on top of. Exposed
+    separately so a caller can compare "what I expect the tip to be" against
+    reality *before* deciding whether to commit at all — e.g. deploy_agent.py's
+    frontend-lockfile safety-commit (Item #55), which must skip committing if
+    the branch has moved since the commit it's deploying.
+
+    Uses the GitHub App installation token (same auth context as commit_files()).
+    """
+    token = get_installation_token()
+    headers = _auth_headers(token)
+    ref_resp = requests.get(
+        f"{_repo_url()}/git/ref/heads/{branch_name}",
+        headers=headers,
+        timeout=15,
+    )
+    ref_resp.raise_for_status()
+    return ref_resp.json()["object"]["sha"]
+
+
 def commit_files(
     branch_name: str,
     files: dict[str, str],
