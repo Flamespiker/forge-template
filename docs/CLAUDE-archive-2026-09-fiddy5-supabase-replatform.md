@@ -46,6 +46,25 @@ fix — see Item #59 in CLAUDE.md's Open Items for the forward-looking note
 multi-platform Deploy Agent spec's adapter-declares-requirements pattern, is
 the likely eventual fix — not built here).
 
+## Addendum, same day — PR merged via a Deploy-Agent-bypassed path
+
+With `qa-approved`/`security-approved` both genuinely passing (see the Item
+#59 addendum above), PR #3 was taken out of draft and merged into
+`mike-digital-platform`'s `main` (merge commit `e922260`). Branch protection
+on that repo's `main` was confirmed still off (`404 Branch not protected`),
+so no self-approval workaround was needed. `06-deploy.yml` was disabled
+(`gh workflow disable`, confirmed via a fresh API read of `state:
+disabled_manually`) before merging, and re-enabled (`state: active`,
+re-confirmed) immediately after. Live-verified that the merge's own
+`pr-merged` dispatch (`notify-forge.yml`'s `notify-pr-merged` job, fired for
+real) reached forge-template but produced zero `06-deploy.yml` runs while
+disabled — the only run around this window was an earlier, expected no-op
+from the moment `qa-approved` first landed (correctly self-skipped by its
+own guard clause: labels present, no confirmed merge yet). A traceability
+comment was posted on `forge-template#18` recording that production
+deployment is manual (Vercel + Supabase), not through Deploy Agent, since no
+platform adapter exists for it yet.
+
 ## Source
 
 `docs/Fiddy5-Vercel-Supabase-Deploy-Spec-v1.md` (Claude.ai, 2026-09-05),

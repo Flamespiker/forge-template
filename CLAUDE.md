@@ -62,6 +62,16 @@ genuinely short resolutions stay inline from the start.
 
 ## Current Build Phase
 
+**`mike-digital-platform#3` merged 2026-09-05 via a deliberate Deploy-Agent-bypassed
+path — production is manual (Vercel + Supabase), Fiddy5 has no platform adapter yet.**
+`qa-approved`/`security-approved` both genuinely passed (real re-verification after
+fixing Item #59's env-var gap, not a stale label) before merge; `06-deploy.yml` was
+disabled for the merge itself and re-enabled immediately after — confirmed live that
+the merge's own `pr-merged` dispatch reached forge-template but produced zero Deploy
+runs while disabled. Traceability comment posted on `forge-template#18` standing in
+for the deployment-record link the pipeline would normally produce. Full narrative:
+`docs/CLAUDE-archive-2026-09-fiddy5-supabase-replatform.md`.
+
 **`docs/06_Orchestration_v10.md` → `v11`, 2026-09-05.** Added "Claude.ai
 Project Structure for Multi-App Builds" under Part 3 (Customizing Your
 Instance) — when to build an app inside FORGE's own Claude.ai project versus
