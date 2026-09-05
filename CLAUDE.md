@@ -2561,6 +2561,38 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     a literal "required status check" rule can point at them directly. Not
     added here — flagged only, per Mike's explicit call not to add the rule
     without deciding the mechanism first.
+61. **Ad hoc tracking issues (opened directly, not via `00-intake.yml`) hard-failed
+    `02-design.yml`/`03-implementation.yml`/`04-qa.yml`/`05-security.yml`/`06-deploy.yml`'s
+    "Determine Enhancement status" step**, found live on `forge-template#18`
+    (`mike-digital-platform#3`) — the step unconditionally re-downloads the
+    intake spreadsheet to resolve `--existing-service`, and an ad hoc issue
+    has no spreadsheet at all. **Fixed for real, live-verified 3x, in
+    `03-implementation.yml`/`04-qa.yml`/`05-security.yml`** (commit `8a04a8a`):
+    `download_issue_attachment()` gained an `--optional` flag that exits
+    clean with no output file instead of raising when nothing matches;
+    00-intake.yml/01-requirements.yml don't pass it, so a genuinely missing
+    spreadsheet there still fails loud, as it should. Re-firing QA/Security
+    against the same issue confirmed the fix works exactly as designed —
+    the missing-attachment warning logs, "treating as Greenfield" prints,
+    and the real scan proceeds.
+    **`02-design.yml` (commit `7d80397`) and `06-deploy.yml` (commit
+    `6295b4a`) got the identical fix, applied and verified by syntax check +
+    line-for-line diff against the already-proven pattern — but neither has
+    been live-fired.** `06-deploy.yml`: deliberately not tested, since it
+    fires on real merge events and PR #3 was already merged by the time this
+    landed — dispatching it against a repo with no real deploy target risked
+    a genuine Azure deploy attempt. `02-design.yml`: **deliberately deferred,
+    not run** — its very next step after Enhancement-detection is real ADO
+    Epic/Feature/User-Story creation (`create_ado_items.py`, which per Item
+    #51 has zero idempotency protection), so live-firing it against
+    `forge-template#18` would either recreate Item #51's exact
+    duplicate-hierarchy problem or require a real, costed Design Agent run
+    generating a full design doc for an app that's already built and
+    manually deployed — disproportionate cost for confirming a pattern
+    already proven identical three times over. Same shape as Item #55's
+    deferred Test 2. Deferred to the next real request that naturally
+    reaches Design, whichever comes first — flagged here rather than
+    silently claimed as verified.
 
 Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 
