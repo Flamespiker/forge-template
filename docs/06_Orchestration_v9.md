@@ -2,6 +2,16 @@
 
 **Full-SDLC Orchestration with Review Gates for Engineers**
 
+**v9 changelog:** added new Step 5 (Wire Up Your Target Monorepo's Cross-Repo
+Dispatch Workflows) — `notify-forge.yml`/`design-pr-security-noop.yml`/
+`ops-pr-security-noop.yml` must be pushed to the target monorepo or QA,
+Security, and Deploy silently never fire for any request, with nothing
+pointing at why. Confirmed live 2026-09-04 on a platform swap whose target
+repo shipped without these; reference copies now live in
+`core/templates/target-repo-workflows/` in `forge-template` itself (they
+previously existed only in the target repo, with no source to recover them
+from if that repo is ever lost). Old Steps 5/6 renumbered to 6/7.
+
 **v8 changelog:** added a note at Gate 2 (Design approval) warning that a
 manual edit to `design.md` before merge isn't automatically checked against
 `openapi.yaml`/`tasks.md` — a mismatch across the three surfaces becomes
@@ -188,7 +198,49 @@ For build phase, a PAT is acceptable for ADO, and ACR admin-user credentials are
 
 **Note on Container Apps deployment credentials:** the secrets above cover both pushing images to the registry and authenticating the Deploy Agent to push new revisions into the Container Apps environments themselves (`AZURE_STAGING_CREDENTIALS`). This principal cannot register new Azure resource providers or create RBAC role assignments — any one-time bootstrap work of that kind (e.g. provisioning a Key Vault, granting a managed identity a role) needs a human with elevated access instead.
 
-### Step 5 — Create the Azure Container Apps Environments
+### Step 5 — Wire Up Your Target Monorepo's Cross-Repo Dispatch Workflows
+
+GitHub Actions can only trigger a workflow off an event in the same repo where it's
+defined. Three of FORGE's stages need to react to events that happen in your target
+monorepo — a feature PR opening, or merging — so three small workflow files must be
+pushed directly to the target monorepo's `.github/workflows/`, not `forge-template`'s.
+**Skipping this step doesn't fail loudly**: QA, Security, and Deploy will simply never
+fire for any request, with nothing anywhere pointing at why — confirmed the hard way
+live 2026-09-04, when a platform swap's own target repo shipped without these and three
+stages silently never ran until the gap was traced back to this exact missing step.
+
+Copy these three files from `core/templates/target-repo-workflows/` in `forge-template`
+to your target monorepo's `.github/workflows/`:
+
+- **`notify-forge.yml`** — forwards a feature PR opening (and merging) to
+  `forge-template` as a `repository_dispatch` event, which `04-qa.yml`/`05-security.yml`/
+  `06-deploy.yml` listen for. Requires two edits: replace the
+  `YOUR_FORGE_OWNER`/`YOUR_FORGE_REPO` placeholders with your actual `forge-template`
+  instance's owner/repo name — the one part that can't be self-referential, since it
+  points at a different, fixed repo.
+- **`design-pr-security-noop.yml`** / **`ops-pr-security-noop.yml`** — your target
+  repo's branch protection requires a `security-check` status on every PR, but
+  design-stage and ops-stage PRs never touch application code, so the real Security
+  Agent scan never runs against them. These create a clearly-labeled no-op pass so
+  those PRs aren't stuck waiting forever for a status that will never arrive. Copy both
+  as-is — fully self-referential via GitHub Actions' own context, no edits needed.
+
+The GitHub App **cannot** push these itself (no `workflows` permission, per Step 2) —
+push them with your own git credentials instead.
+
+`notify-forge.yml` also needs its own copies of two values already set on your FORGE
+repo in Step 4 — repo secrets/variables don't cross repos in GitHub Actions:
+
+| On your **target monorepo** | Value |
+|---|---|
+| `FORGE_APP_CLIENT_ID` (variable) | Same value as your FORGE repo's copy |
+| `FORGE_APP_PRIVATE_KEY` (secret) | Same value as your FORGE repo's copy |
+
+And the GitHub App must be installed on `forge-template` too, not just the target
+monorepo, for the token this workflow generates to have write access to fire the
+dispatch there.
+
+### Step 6 — Create the Azure Container Apps Environments
 
 In your Azure subscription, create two Container Apps environments. Use the names you set in `team/config.yaml`:
 
@@ -204,7 +256,7 @@ Also create two corresponding **GitHub Environments** in your FORGE repo under *
 
 Staging deploys automatically. Production deploys never do.
 
-### Step 6 — Verify the Setup
+### Step 7 — Verify the Setup
 
 Confirm everything is wired up before your first pipeline run:
 

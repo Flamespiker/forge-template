@@ -217,10 +217,37 @@ Example prompt:
 > 4. Pull fresh ACR credentials (`az acr credential show`) and update the
 >    orchestration repo's `ACR_LOGIN_SERVER`/`ACR_USERNAME`/`ACR_PASSWORD`
 >    secrets.
+> 5. **Push the cross-repo dispatch workflows to the new target repo — do not
+>    skip this.** `notify-forge.yml`, `design-pr-security-noop.yml`, and
+>    `ops-pr-security-noop.yml` must exist in `<NEW_TARGET_REPO>`'s own
+>    `.github/workflows/` or QA, Security, and Deploy will never fire for any
+>    request — silently, with nothing anywhere pointing at why. Confirmed
+>    live 2026-09-04: these three files are documented at length in
+>    `CLAUDE.md`/the Orchestration Guide, but until that day they only ever
+>    lived in the *old* target repo, not `forge-template` itself — a platform
+>    swap that deletes the old target repo (Phase A) with no separate backup
+>    would have made them unrecoverable. Reference copies now live in
+>    `core/templates/target-repo-workflows/` in `forge-template`. Steps:
+>    a. Copy all three files from that directory to `<NEW_TARGET_REPO>`'s
+>       `.github/workflows/`. **The GitHub App cannot push these itself**
+>       (no `workflows` permission) — push via your own git credentials
+>       (e.g. the Contents API, `PUT /repos/{owner}/{repo}/contents/
+>       .github/workflows/{name}` with `branch: "main"`), not `commit_files()`.
+>    b. Edit `notify-forge.yml`'s two `YOUR_FORGE_OWNER`/`YOUR_FORGE_REPO`
+>       placeholders to point at `<FORGE_REPO>` — the other two files need no
+>       edits (fully self-referential via GitHub Actions' own context).
+>    c. Set `FORGE_APP_CLIENT_ID` (variable) and `FORGE_APP_PRIVATE_KEY`
+>       (secret) on `<NEW_TARGET_REPO>` itself — repo secrets/variables don't
+>       cross repos, so the orchestration repo's copies aren't visible here.
+>    d. Confirm the GitHub App installation (already extended to
+>       `<NEW_TARGET_REPO>` per step 1 above) covers this repo — the token
+>       these workflows generate needs write access to fire the dispatch.
 >
 > Report back: confirmation each new resource exists, confirmation of the
 > App-installation change (or the manual UI path if API couldn't do it),
-> and the commit SHA for the config change.
+> the commit SHA for the config change, and confirmation (via a real test PR,
+> not just file-existence) that `notify-forge.yml` actually fires a dispatch
+> that `forge-template` receives.
 
 ---
 
@@ -237,6 +264,14 @@ Example prompt:
 - [ ] **New GitHub repo has an initial commit on `main`** (confirm via
       `GET /repos/{owner}/{repo}/commits` — a `409 Git Repository is empty`
       means this step was skipped)
+- [ ] **New GitHub repo has `notify-forge.yml`, `design-pr-security-noop.yml`,
+      and `ops-pr-security-noop.yml` in its own `.github/workflows/`**, with
+      `notify-forge.yml`'s owner/repo placeholders pointed at the real
+      `<FORGE_REPO>` — confirm via `GET /repos/{owner}/{repo}/contents/
+      .github/workflows`, not just that the copy step "ran"
+- [ ] **New GitHub repo has its own `FORGE_APP_CLIENT_ID` variable and
+      `FORGE_APP_PRIVATE_KEY` secret** — these don't cross repos from the
+      orchestration repo and must be set separately here
 - [ ] **`pipeline-state` branch exists on the new target repo**
       (`GET /repos/{owner}/{repo}/branches` should list it)
 - [ ] GitHub App installation includes the new target repo
@@ -245,16 +280,23 @@ Example prompt:
       API as landed on the branch Actions actually runs from
 - [ ] ACR credentials rotated in orchestration repo secrets
 - [ ] **A real (not dry-run) pipeline smoke test run against the new
-      target, through at least Stage 1 (Requirements), before treating the
-      swap as done.** `verify-setup.yml` alone is *not* sufficient — it
-      checks config/connectivity, not that `commit_files()` can actually
-      write to the target repo. Confirmed live 2026-09-04: a fully-green
-      `verify-setup.yml` run gave false confidence while the target repo
-      was still unseeded (see the two checklist items above and
-      `CLAUDE.md` Open Item #45) — the gap wasn't caught until a real
-      request hit Stage 1 days later. A throwaway tracking issue through
-      Intake → clarification → Requirements is the minimum real test;
-      delete/close it afterward.
+      target, through Stage 5 (Security) — not just Stage 1 — before
+      treating the swap as done.** `verify-setup.yml` alone is *not*
+      sufficient — it checks config/connectivity, not that `commit_files()`
+      can write to the target repo, nor that the cross-repo dispatch
+      workflows actually exist and fire. Confirmed live 2026-09-04, twice,
+      on the same swap: a fully-green `verify-setup.yml` run gave false
+      confidence while the target repo was still unseeded (`CLAUDE.md` Open
+      Item #45, caught at Stage 1), *and separately*, after that was fixed,
+      QA/Security silently never fired at all because `notify-forge.yml`
+      and its two companion workflows didn't exist on the new target
+      (`CLAUDE.md` Open Item #49) — a gap that Stage 1 alone can never
+      surface, since it doesn't depend on either workflow. A throwaway
+      tracking issue taken through Intake → clarification → Requirements →
+      Design → merge → Implementation → a real feature PR is the minimum
+      test that exercises both gaps; confirm the feature PR actually shows
+      real `qa-approved`/`security-approved` activity (not just that the
+      job ran) before closing it out.
 
 ## Ongoing cost note
 

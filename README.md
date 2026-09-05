@@ -129,7 +129,46 @@ In your FORGE repository, go to **Settings → Secrets and variables → Actions
 
 **Container Apps deployment credentials:** in addition to the registry secrets above, the Deploy Agent needs its own service principal (`AZURE_STAGING_CREDENTIALS`, in the table above) to authenticate against your Container Apps environment and push new revisions — Contributor on the resource group is sufficient. This principal cannot register new Azure resource providers or create RBAC role assignments; any one-time bootstrap work of that kind (e.g. provisioning a Key Vault, granting a managed identity a role) needs a human with elevated access instead.
 
-### 4. Edit `team/config.yaml` (5 min)
+### 4. Wire up your target monorepo's cross-repo dispatch workflows (10 min)
+
+GitHub Actions can only trigger a workflow off an event in the **same** repo where it's
+defined. Three of FORGE's stages need to react to events that happen in your **target
+monorepo** — a feature PR opening, or merging — so three small workflow files must be
+pushed directly to the target monorepo's `.github/workflows/`, not `forge-template`'s.
+Skipping this step doesn't fail loudly: QA, Security, and Deploy will simply never fire
+for any request, with no error anywhere pointing at why.
+
+Copy these three files from `core/templates/target-repo-workflows/` in this repo to your
+target monorepo's `.github/workflows/`:
+
+- **`notify-forge.yml`** — forwards a feature PR opening (and merging) to `forge-template`
+  as a `repository_dispatch` event, which `04-qa.yml`/`05-security.yml`/`06-deploy.yml`
+  listen for. **Requires two edits** — replace the `YOUR_FORGE_OWNER`/`YOUR_FORGE_REPO`
+  placeholders with your actual `forge-template` instance's owner/repo name (this is the
+  one part that can't be self-referential, since it points at a different, fixed repo).
+- **`design-pr-security-noop.yml`** and **`ops-pr-security-noop.yml`** — your target
+  repo's branch protection requires a `security-check` status on every PR, but design-
+  stage and ops-stage PRs never touch application code, so the real Security Agent scan
+  never runs against them. These create a clearly-labeled no-op pass so those PRs aren't
+  stuck waiting forever for a status that will never arrive. Copy these two as-is — no
+  edits needed, they're fully self-referential via GitHub Actions' own context.
+
+The GitHub App **cannot** push these itself — it has no `workflows` permission (see the
+note in Step 2) — push them with your own git credentials instead.
+
+`notify-forge.yml` also needs its own copies of two values already set on your FORGE
+repo in Step 3 — repo secrets/variables don't cross repos in GitHub Actions:
+
+| On your **target monorepo** | Value |
+|---|---|
+| `FORGE_APP_CLIENT_ID` (variable) | Same value as your FORGE repo's copy |
+| `FORGE_APP_PRIVATE_KEY` (secret) | Same value as your FORGE repo's copy |
+
+And the GitHub App must be installed on `forge-template` too, not just the target
+monorepo, for the token this workflow generates to have write access to fire the
+dispatch there.
+
+### 5. Edit `team/config.yaml` (5 min)
 
 Open `team/config.yaml` and fill in your team's values. This is the exact schema the
 code reads — no other keys are consumed at runtime:
@@ -158,7 +197,7 @@ The target monorepo's owner/name are **not** set here — they're read from the
 `FORGE_TARGET_REPO` / `FORGE_GITHUB_OWNER` repository variables (Settings → Secrets and
 variables → Actions → Variables tab), set in the next step.
 
-### 5. Provision your Azure Container Apps environment (5 min)
+### 6. Provision your Azure Container Apps environment (5 min)
 
 Create the staging environment with the Azure CLI, matching the default `team/config.yaml` expects:
 
@@ -174,7 +213,7 @@ Then size its Container Apps:
 
 Also create a **GitHub Environment** in your FORGE repo (**Settings → Environments**) named plainly `staging` — no required reviewers, so staging deploys run automatically once the pipeline's own label/merge gates are satisfied. This is a different, GitHub-native concept from the Azure Container Apps environment name above (`forge-staging`) — don't conflate the two.
 
-### 6. Verify your setup
+### 7. Verify your setup
 
 Run the verification workflow:
 
@@ -288,7 +327,7 @@ Your application code lives in your **target monorepo** — not here. FORGE open
 | [Tool & Licensing Inventory](docs/03_FORGE_Tooling_v8.md) | Every tool, license, cost — including security tooling defaults |
 | [Governance Model](docs/04_FORGE_Governance-v2.md) | RFC process, ADRs, decision authority, core vs team layer boundaries |
 | [AI Foundations Guide](docs/05_FORGE_AI_Foundation_v2.md) | How LLMs and agents work — required reading for all developers using FORGE |
-| [Orchestration Manager Guide](docs/06_Orchestration_v8.md) | Full setup, gate-by-gate operations, failure handling |
+| [Orchestration Manager Guide](docs/06_Orchestration_v9.md) | Full setup, gate-by-gate operations, failure handling |
 | [Customization Reference](docs/07_Customization_Ref_v4.md) | ~65 items explicitly marked Locked / Flexible / Fully Open |
 
 ---
@@ -312,6 +351,6 @@ No net-new SaaS contracts are required with the default tool choices.
 ## Getting help
 
 - **Setup issues:** Check the `verify-setup` workflow output first — it identifies the failing component
-- **Pipeline failures:** See the [Orchestration Manager Guide](docs/06_Orchestration_v8.md) failure handling section
+- **Pipeline failures:** See the [Orchestration Manager Guide](docs/06_Orchestration_v9.md) failure handling section
 - **Proposing a core layer change:** Open a GitHub Discussion in this repository under the RFC category
 - **Questions about what you can customize:** See the [Customization Reference](docs/07_Customization_Ref_v4.md)

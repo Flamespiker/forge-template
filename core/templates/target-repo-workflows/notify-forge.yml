@@ -1,0 +1,97 @@
+# FORGE cross-repo trigger notifier — TEMPLATE, requires two edits before use.
+#
+# This file must be pushed to your TARGET MONOREPO's .github/workflows/ (not
+# forge-template's) via your own git credentials — the FORGE GitHub App has no
+# `workflows` permission and cannot write workflow files itself (see README.md
+# Step 2's note on this). Copy this file as-is except for the two
+# YOUR_FORGE_OWNER/YOUR_FORGE_REPO placeholders below, which must point at
+# your actual forge-template instance (a genuinely different, fixed repo from
+# wherever this file lives) — everything else in this file is already
+# self-referential via GitHub Actions' own `github.*` context and needs no
+# per-repo editing.
+#
+# forge-template's 04-qa.yml and 05-security.yml need to run in response to a
+# feature PR opening here, in your target monorepo -- but GitHub Actions can
+# only trigger a workflow off an event in the SAME repo where it's defined.
+# This workflow is the bridge: it runs here (where the real pull_request event
+# happens) and forwards it to forge-template as a repository_dispatch event,
+# which 04-qa.yml/05-security.yml listen for.
+#
+# Only feature/<request-id> branches are forwarded -- design/<request-id> PRs
+# (Stage 2) and ad-hoc fix/* PRs are not FORGE feature-implementation PRs and
+# should not trigger QA/Security.
+#
+# Requires FORGE_APP_CLIENT_ID (variable) and FORGE_APP_PRIVATE_KEY (secret)
+# to be configured on THIS repo (your target monorepo) -- repo secrets/
+# variables do not cross repos in GitHub Actions, so the copies already in
+# forge-template are not visible here; they must be added separately, and the
+# FORGE App must also be installed on forge-template (not just this repo) for
+# the generated token to have write access to fire the dispatch there.
+#
+# Also dispatches "pr-merged" on a real merge of a feature/* PR (Item #26) --
+# 06-deploy.yml requires both qa-approved/security-approved labels AND a
+# confirmed merge before it deploys, and this is the event that supplies the
+# "merge happened" half of that condition. Filtered on
+# github.event.pull_request.merged == true so a closed-without-merge PR
+# (abandoned/rejected) never fires a Deploy dispatch.
+
+name: Notify FORGE of feature PR activity
+
+on:
+  pull_request:
+    types: [opened, synchronize, closed]
+
+jobs:
+  notify-feature-pr-opened:
+    if: github.event.action != 'closed' && startsWith(github.event.pull_request.head.ref, 'feature/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App installation token (scoped to forge-template)
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.FORGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+          owner: YOUR_FORGE_OWNER
+          repositories: YOUR_FORGE_REPO
+
+      - name: Dispatch feature-pr-opened to forge-template
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          jq -n \
+            --arg event_type "feature-pr-opened" \
+            --argjson pr_number "$PR_NUMBER" \
+            --arg head_sha "$HEAD_SHA" \
+            --arg head_ref "$HEAD_REF" \
+            '{event_type: $event_type, client_payload: {pr_number: $pr_number, head_sha: $head_sha, head_ref: $head_ref}}' \
+          | gh api repos/YOUR_FORGE_OWNER/YOUR_FORGE_REPO/dispatches --input -
+
+  notify-pr-merged:
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'feature/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App installation token (scoped to forge-template)
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.FORGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.FORGE_APP_PRIVATE_KEY }}
+          owner: YOUR_FORGE_OWNER
+          repositories: YOUR_FORGE_REPO
+
+      - name: Dispatch pr-merged to forge-template
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          jq -n \
+            --arg event_type "pr-merged" \
+            --argjson pr_number "$PR_NUMBER" \
+            --arg head_sha "$HEAD_SHA" \
+            '{event_type: $event_type, client_payload: {pr_number: $pr_number, head_sha: $head_sha}}' \
+          | gh api repos/YOUR_FORGE_OWNER/YOUR_FORGE_REPO/dispatches --input -

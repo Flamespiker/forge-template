@@ -72,6 +72,15 @@ config/connectivity checks don't exercise. This surfaced as a real Stage 1 failu
 first genuine request run against the new target (`REQ-2026-01`). See Open Item #45 for
 the full fix and the runbook update meant to prevent a recurrence.
 
+**Second correction, same day:** the swap also shipped the new target repo with none of
+`notify-forge.yml`/`design-pr-security-noop.yml`/`ops-pr-security-noop.yml` — meaning
+QA, Security, and (later) Deploy would have silently never fired for any request, a gap
+`verify-setup.yml` and Stage 1 alone can never surface. See Open Item #49 for the full
+fix, including the discovery that these three files had never lived in `forge-template`
+at all until this fix — only ever in the target repo — so a future swap that also
+deleted its old target repo with no separate backup would have had no source to recover
+them from. Reference copies now live in `core/templates/target-repo-workflows/`.
+
 **Phase 8 (Handoff Readiness) is fully complete (8.1-8.5, 2026-09-01).** Tagged
 `v1.0.0` — annotated tag on commit `97aa752` (`main` HEAD at the time), pushed to
 origin and verified via the GitHub API (`git/ref/tags/v1.0.0` → `object.type: "tag"`,
@@ -2065,6 +2074,59 @@ up, the right fix is a small `--force-kill SESSION_ID` CLI mode alongside
     considering a costly full retry; a follow-up message or a
     `list_session_output_files` limit fix can be far cheaper than redoing
     real subagent work.
+49. **The `mike-digital-platform` swap shipped with none of the cross-repo
+    dispatch workflows — QA, Security, and Deploy would have silently never
+    fired for any request.** Found live 2026-09-04, same day and same
+    `REQ-2026-01` request as Items #45/#46/#48, after PR #2 (the recovered
+    Implementation PR) sat with no QA/Security activity at all. Root cause:
+    `notify-forge.yml` (forwards a feature PR's `opened`/`synchronize`/
+    `closed` events to `forge-template` as `repository_dispatch`, which
+    `04-qa.yml`/`05-security.yml`/`06-deploy.yml` all depend on) and its two
+    companion no-op status workflows (`design-pr-security-noop.yml`,
+    `ops-pr-security-noop.yml`) were never pushed to `mike-digital-platform`
+    during the swap — `.github/workflows/` didn't exist on it at all.
+    **Worse, this class of gap had no recovery path built in**:
+    `docs/FORGE-platform-swap-runbook.md`'s B.3 (repoint the orchestration
+    repo) never mentioned these files, and they had **never been committed
+    to `forge-template` itself** — per the File Reference section elsewhere
+    in this doc, they only ever lived in the *target* repo. Since Phase A of
+    a swap deletes the old target repo, a swap with no separate backup of it
+    would have made these files unrecoverable by any means. The only reason
+    this one was recoverable at all: Mike happened to have a stale local
+    clone of the deleted `forge-demo-apps` sitting on disk, predating Items
+    #26/#30 (missing the `pr-merged` dispatch and `ops-pr-security-noop.yml`
+    entirely) — recovered from there, not from anything in `forge-template`.
+
+    **Fixed properly, not just patched for this one repo:**
+    - Reconstructed all three files (extending the recovered `notify-forge.yml`
+      with Item #26's `pr-merged` dispatch, and writing `ops-pr-security-noop.yml`
+      fresh per Item #30's documented behavior) and committed **reference
+      copies into `forge-template` itself**, at
+      `core/templates/target-repo-workflows/` — the two no-op files rewritten
+      to be fully self-referential via GitHub Actions' own `github.*` context
+      (`github.repository_owner`, `github.event.repository.name`,
+      `github.repository`), so copying them to any future target repo needs
+      **zero edits**; only `notify-forge.yml` needs its two
+      `YOUR_FORGE_OWNER`/`YOUR_FORGE_REPO` placeholders filled in, since it
+      must point at a different, fixed repo (the orchestration repo) that
+      can't be inferred from context.
+    - Pushed all three to `mike-digital-platform` via personal git credentials
+      (Contents API) — the App itself cannot write `.github/workflows/*`
+      files (no `workflows` permission), confirmed live via a real 403 from
+      `commit_files()` before switching approaches.
+    - Set `FORGE_APP_CLIENT_ID` (variable) and `FORGE_APP_PRIVATE_KEY`
+      (secret) on `mike-digital-platform` itself — neither existed there;
+      these don't cross repos from the orchestration repo's own copies.
+    - Manually fired the `feature-pr-opened` dispatch for the already-open
+      PR #2 (pushing the workflow file doesn't retroactively trigger an
+      already-open PR) — confirmed live that QA and Security both then
+      started running against it for real.
+    - `README.md` (new Step 4), `docs/06_Orchestration_v9.md` (new Step 5,
+      v8→v9), and `docs/FORGE-platform-swap-runbook.md` (new B.3 §5, plus
+      two new post-swap checklist items and a strengthened smoke-test bullet
+      requiring a real run through Stage 5, not just Stage 1) all updated so
+      a future fresh setup *or* swap has both the instructions and the
+      actual files to copy from, not tribal knowledge or luck.
 
 Full narrative for Items #35-#42: `docs/FORGE-Open-Items-Backlog-v9.md`.
 
