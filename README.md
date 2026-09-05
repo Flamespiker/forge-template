@@ -327,7 +327,7 @@ Your application code lives in your **target monorepo** — not here. FORGE open
 | [Tool & Licensing Inventory](docs/03_FORGE_Tooling_v8.md) | Every tool, license, cost — including security tooling defaults |
 | [Governance Model](docs/04_FORGE_Governance-v2.md) | RFC process, ADRs, decision authority, core vs team layer boundaries |
 | [AI Foundations Guide](docs/05_FORGE_AI_Foundation_v2.md) | How LLMs and agents work — required reading for all developers using FORGE |
-| [Orchestration Manager Guide](docs/06_Orchestration_v9.md) | Full setup, gate-by-gate operations, failure handling |
+| [Orchestration Manager Guide](docs/06_Orchestration_v10.md) | Full setup, gate-by-gate operations, failure handling |
 | [Customization Reference](docs/07_Customization_Ref_v4.md) | ~65 items explicitly marked Locked / Flexible / Fully Open |
 
 ---
@@ -351,6 +351,15 @@ No net-new SaaS contracts are required with the default tool choices.
 ## Getting help
 
 - **Setup issues:** Check the `verify-setup` workflow output first — it identifies the failing component
-- **Pipeline failures:** See the [Orchestration Manager Guide](docs/06_Orchestration_v9.md) failure handling section
+- **Pipeline failures:** See the [Orchestration Manager Guide](docs/06_Orchestration_v10.md) failure handling section
 - **Proposing a core layer change:** Open a GitHub Discussion in this repository under the RFC category
 - **Questions about what you can customize:** See the [Customization Reference](docs/07_Customization_Ref_v4.md)
+
+> **Recommended: keep a local clone of your target monorepo.** FORGE's pipeline itself
+> never needs one — every stage agent reads and writes the target monorepo purely via
+> the GitHub API. But a local clone, pulled occasionally, is a cheap safety net
+> independent of GitHub's own hosting (a platform swap once deleted a repo whose
+> load-bearing workflow files existed nowhere else, and were only recoverable because a
+> stale local clone happened to exist), and it gives you a fast local `npm run build` /
+> `dotnet build` check before pushing an ad hoc fix, instead of waiting on a full CI run
+> to find out whether it compiles.

@@ -2,6 +2,12 @@
 
 **Full-SDLC Orchestration with Review Gates for Engineers**
 
+**v10 changelog:** added a "Recommended: Keep a Local Clone of Your Target
+Monorepo" note under Failure Handling — not required by the pipeline, but a
+cheap safety net (2026-09-04's missing-workflow-files recovery only worked
+because a stale local clone happened to exist) and a faster compile-check
+loop for ad hoc fixes than round-tripping through a full CI run.
+
 **v9 changelog:** added new Step 5 (Wire Up Your Target Monorepo's Cross-Repo
 Dispatch Workflows) — `notify-forge.yml`/`design-pr-security-noop.yml`/
 `ops-pr-security-noop.yml` must be pushed to the target monorepo or QA,
@@ -433,6 +439,32 @@ The `ADO_PAT` may be expired or may have insufficient scope. Regenerate the PAT 
 
 **The Managed Agents API rejected the request (beta access issue).**
 Managed Agents is currently a public beta and requires a specific beta header on API calls. If Stage 3 fails immediately with an authorization or unrecognized-feature error, confirm the beta header is current — Anthropic may change it between beta versions. This is worth checking first if Stage 3 failures start appearing across multiple requests rather than one-off subagent issues, since it points to a platform-level change rather than a single session going wrong. Flag any such breaking change as a candidate for RFC per the open item tracked in the project context.
+
+### Recommended: Keep a Local Clone of Your Target Monorepo
+
+FORGE's pipeline itself never needs one — every stage agent reads and writes the target
+monorepo purely via the GitHub API, and QA/Security's checkouts happen on ephemeral
+GitHub Actions runners, not your machine. But keeping your own local clone around,
+pulled occasionally, is worth doing for two reasons that only surface when something
+goes wrong:
+
+- **A backup independent of GitHub's own hosting.** Confirmed the hard way 2026-09-04:
+  a platform swap deleted the old target repo, and three small-but-load-bearing
+  workflow files (`notify-forge.yml` and its two companions) turned out to have never
+  been committed anywhere except that repo — no copy existed in `forge-template`
+  itself. They were only recoverable because the Orchestration Manager happened to
+  still have a stale local clone on disk. (Reference copies now live in
+  `core/templates/target-repo-workflows/` specifically so this can't recur the same
+  way — but a local clone is still a cheap, independent safety net against losing
+  something else FORGE doesn't yet template.)
+- **A fast local compile-check loop for ad hoc fixes.** When triaging a QA/Security
+  failure by hand (see Agent Failures above), a single-file fix pushed via the GitHub
+  API has no way to confirm it actually builds before pushing — you're stuck waiting
+  on a full CI run (minutes, real Anthropic/Actions cost) to find out. A local clone
+  lets you run `npm run build` / `dotnet build` yourself first, in seconds, for free.
+
+This is a recommendation, not a pipeline requirement — nothing breaks without it, and
+FORGE's own agents will never assume it exists.
 
 ### Escalation
 
